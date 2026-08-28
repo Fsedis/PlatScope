@@ -1,0 +1,52 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/platscope-domain",
+    "crates/platscope-providers",
+    "crates/platscope-pricing",
+    "crates/platscope-trends",
+    "crates/platscope-inventory",
+    "crates/platscope-readonly-scan",
+    "crates/platscope-selling",
+    "crates/platscope-insights",
+    "crates/platscope-account",
+    "crates/platscope-storage",
+    "crates/platscope-core",
+    "apps/desktop/src-tauri",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+rust-version = "1.88"
+authors = ["PlatScope contributors"]
+
+[workspace.dependencies]
+async-trait = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+futures-util = "0.3"
+hex = "0.4"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json", "blocking"] }
+keyring = "4.1"
+rusqlite = { version = "0.37", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tauri = "2"
+tauri-build = "2"
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+tracing = "0.1"
+tracing-appender = "0.2"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+zeroize = "1.8"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+module_name_repetitions = "allow"
+must_use_candidate = "allow"

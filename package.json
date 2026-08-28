@@ -1,0 +1,10 @@
+{
+  "name": "platscope-workspace",
+  "private": true,
+  "packageManager": "pnpm@11.1.2",
+  "scripts": {
+    "check": "pnpm --dir apps/desktop check",
+    "test": "pnpm --dir apps/desktop test",
+    "build": "pnpm --dir apps/desktop build"
+  }
+}

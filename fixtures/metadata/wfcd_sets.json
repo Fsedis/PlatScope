@@ -1,0 +1,45 @@
+[
+  {
+    "uniqueName": "/Lotus/Powersuits/Jade/NyxPrime",
+    "name": "Nyx Prime",
+    "isPrime": true,
+    "masteryReq": 6,
+    "vaulted": true,
+    "components": [
+      {
+        "uniqueName": "/Lotus/Types/Recipes/WarframeRecipes/NyxPrimeBlueprint",
+        "name": "Blueprint",
+        "itemCount": 1,
+        "tradable": true,
+        "ducats": 15
+      },
+      {
+        "uniqueName": "/Lotus/Types/Recipes/WarframeRecipes/NyxPrimeChassisComponent",
+        "name": "Chassis",
+        "itemCount": 1,
+        "tradable": true,
+        "ducats": 65
+      },
+      {
+        "uniqueName": "/Lotus/Types/Recipes/WarframeRecipes/NyxPrimeHelmetComponent",
+        "name": "Neuroptics",
+        "itemCount": 1,
+        "tradable": true,
+        "primeSellingPrice": 100
+      },
+      {
+        "uniqueName": "/Lotus/Types/Recipes/WarframeRecipes/NyxPrimeSystemsComponent",
+        "name": "Systems",
+        "itemCount": 1,
+        "tradable": true,
+        "ducats": 45
+      },
+      {
+        "uniqueName": "/Lotus/Types/Items/MiscItems/OrokinCell",
+        "name": "Orokin Cell",
+        "itemCount": 1,
+        "tradable": false
+      }
+    ]
+  }
+]

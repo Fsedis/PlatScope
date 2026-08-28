@@ -1,0 +1,61 @@
+{
+  "apiVersion": "0.25.0",
+  "data": {
+    "sell": [
+      {
+        "id": "sell-30",
+        "type": "sell",
+        "platinum": 30,
+        "quantity": 2,
+        "perTrade": 1,
+        "visible": true,
+        "rank": 10,
+        "itemId": "item-id",
+        "createdAt": "2026-08-27T00:00:00Z",
+        "updatedAt": "2026-08-27T00:00:00Z",
+        "user": {
+          "status": "ingame",
+          "platform": "pc",
+          "crossplay": true
+        }
+      },
+      {
+        "id": "wrong-rank",
+        "type": "sell",
+        "platinum": 1,
+        "quantity": 1,
+        "perTrade": 1,
+        "visible": true,
+        "rank": 9,
+        "itemId": "item-id",
+        "createdAt": "2026-08-27T00:00:00Z",
+        "updatedAt": "2026-08-27T00:00:00Z",
+        "user": {
+          "status": "online",
+          "platform": "pc",
+          "crossplay": true
+        }
+      }
+    ],
+    "buy": [
+      {
+        "id": "buy-20",
+        "type": "buy",
+        "platinum": 20,
+        "quantity": 3,
+        "perTrade": 1,
+        "visible": true,
+        "rank": 10,
+        "itemId": "item-id",
+        "createdAt": "2026-08-27T00:00:00Z",
+        "updatedAt": "2026-08-27T00:00:00Z",
+        "user": {
+          "status": "online",
+          "platform": "pc",
+          "crossplay": true
+        }
+      }
+    ]
+  },
+  "error": null
+}

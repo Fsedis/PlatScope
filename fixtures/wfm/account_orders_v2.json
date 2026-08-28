@@ -1,0 +1,22 @@
+{
+  "apiVersion": "0.25.0",
+  "data": [
+    {
+      "id": "67a000000000000000000010",
+      "itemId": "54aae292e7798909064f1575",
+      "type": "sell",
+      "platinum": 38,
+      "quantity": 12,
+      "perTrade": 6,
+      "rank": 5,
+      "charges": 3,
+      "subtype": "blueprint",
+      "amberStars": 3,
+      "cyanStars": 3,
+      "visible": true,
+      "createdAt": "2026-08-26T08:00:00Z",
+      "updatedAt": "2026-08-27T08:00:00Z"
+    }
+  ],
+  "error": null
+}

@@ -1,0 +1,30 @@
+[
+  {
+    "uniqueName": "/Lotus/Types/Game/Projections/T4VoidProjectionTestBronze",
+    "name": "Axi T1 Intact",
+    "vaulted": false,
+    "marketInfo": { "urlName": "axi_t1_relic" },
+    "rewards": [
+      { "chance": 25.33, "item": { "uniqueName": "reward-1", "name": "Reward 1", "warframeMarket": { "urlName": "reward_1" } } },
+      { "chance": 25.33, "item": { "uniqueName": "reward-2", "name": "Reward 2", "warframeMarket": { "urlName": "reward_2" } } },
+      { "chance": 25.33, "item": { "uniqueName": "reward-3", "name": "Reward 3", "warframeMarket": { "urlName": "reward_3" } } },
+      { "chance": 11, "item": { "uniqueName": "reward-4", "name": "Reward 4", "warframeMarket": { "urlName": "reward_4" } } },
+      { "chance": 11, "item": { "uniqueName": "reward-5", "name": "Reward 5", "warframeMarket": { "urlName": "reward_5" } } },
+      { "chance": 2, "item": { "uniqueName": "reward-6", "name": "Reward 6", "warframeMarket": { "urlName": "reward_6" } } }
+    ]
+  },
+  {
+    "uniqueName": "/Lotus/Types/Game/Projections/T4VoidProjectionTestGold",
+    "name": "Axi T1 Radiant",
+    "vaulted": true,
+    "marketInfo": { "urlName": "axi_t1_relic" },
+    "rewards": [
+      { "chance": 16.67, "item": { "uniqueName": "reward-1", "name": "Reward 1", "warframeMarket": { "urlName": "reward_1" } } },
+      { "chance": 16.67, "item": { "uniqueName": "reward-2", "name": "Reward 2", "warframeMarket": { "urlName": "reward_2" } } },
+      { "chance": 16.67, "item": { "uniqueName": "reward-3", "name": "Reward 3", "warframeMarket": { "urlName": "reward_3" } } },
+      { "chance": 20, "item": { "uniqueName": "reward-4", "name": "Reward 4", "warframeMarket": { "urlName": "reward_4" } } },
+      { "chance": 20, "item": { "uniqueName": "reward-5", "name": "Reward 5", "warframeMarket": { "urlName": "reward_5" } } },
+      { "chance": 10, "item": { "uniqueName": "reward-6", "name": "Reward 6", "warframeMarket": { "urlName": "reward_6" } } }
+    ]
+  }
+]

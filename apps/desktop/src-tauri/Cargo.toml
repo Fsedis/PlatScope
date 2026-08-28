@@ -1,0 +1,34 @@
+[package]
+name = "platscope-desktop"
+default-run = "platscope"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "PlatScope desktop shell"
+
+[[bin]]
+name = "platscope"
+path = "src/main.rs"
+
+[lib]
+name = "platscope_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build.workspace = true
+
+[dependencies]
+chrono.workspace = true
+platscope-core = { path = "../../../crates/platscope-core" }
+platscope-domain = { path = "../../../crates/platscope-domain" }
+platscope-readonly-scan = { path = "../../../crates/platscope-readonly-scan" }
+platscope-storage = { path = "../../../crates/platscope-storage" }
+serde.workspace = true
+serde_json.workspace = true
+tauri.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true

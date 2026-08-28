@@ -1,0 +1,34 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "PlatScope",
+  "version": "0.1.0",
+  "identifier": "app.platscope.desktop",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "security": {
+      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost https://warframe.market; style-src 'self' 'unsafe-inline'"
+    },
+    "windows": [
+      {
+        "label": "main",
+        "title": "PlatScope",
+        "width": 1180,
+        "height": 760,
+        "minWidth": 360,
+        "minHeight": 480,
+        "resizable": true
+      }
+    ]
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis", "appimage"],
+    "resources": ["resources/THIRD_PARTY_NOTICES.md"],
+    "shortDescription": "Explainable Warframe market and inventory intelligence"
+  }
+}

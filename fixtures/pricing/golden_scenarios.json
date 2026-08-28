@@ -1,0 +1,63 @@
+[
+  {
+    "name": "liquid_prime_part",
+    "kind": "standard",
+    "closed_median": 40.0,
+    "closed_volume": 46.0,
+    "sell_median": 42.0,
+    "sell_volume": 100.0,
+    "asks": [39, 40, 41, 42],
+    "top_buy": 35,
+    "expected_fair": 40.0,
+    "expected_list": 39.0,
+    "expected_quick": 35.0,
+    "expected_confidence": "high"
+  },
+  {
+    "name": "isolated_troll_ask",
+    "kind": "standard",
+    "closed_median": 40.0,
+    "closed_volume": 20.0,
+    "asks": [1, 39, 40, 41, 42],
+    "expected_fair": 40.0,
+    "expected_list": 39.0,
+    "expected_confidence": "high"
+  },
+  {
+    "name": "real_cluster_crash",
+    "kind": "standard",
+    "closed_median": 40.0,
+    "closed_volume": 20.0,
+    "asks": [10, 11, 11, 12, 12],
+    "expected_fair": 40.0,
+    "expected_list": 10.6666666667,
+    "expected_confidence": "low"
+  },
+  {
+    "name": "thin_fantasy_ask",
+    "kind": "standard",
+    "closed_median": 10.0,
+    "closed_volume": 1.0,
+    "asks": [100],
+    "expected_confidence": "unknown"
+  },
+  {
+    "name": "sell_only_standard",
+    "kind": "standard",
+    "sell_median": 25.0,
+    "sell_volume": 30.0,
+    "asks": [],
+    "expected_fair": 25.0,
+    "expected_list": 25.0,
+    "expected_confidence": "low"
+  },
+  {
+    "name": "relic_sell_is_not_fair",
+    "kind": "relic",
+    "subtype": "radiant",
+    "sell_median": 25.0,
+    "sell_volume": 30.0,
+    "asks": [],
+    "expected_confidence": "unknown"
+  }
+]

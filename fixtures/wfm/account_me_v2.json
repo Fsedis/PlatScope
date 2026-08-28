@@ -1,0 +1,28 @@
+{
+  "apiVersion": "0.25.0",
+  "data": {
+    "id": "67a000000000000000000001",
+    "role": "user",
+    "tier": "none",
+    "subscription": false,
+    "ingameName": "FixtureTenno",
+    "slug": "fixture-tenno",
+    "about": "",
+    "aboutRaw": "",
+    "reputation": 3,
+    "masteryRank": 20,
+    "credits": 0,
+    "lastSeen": "2026-08-27T08:00:00Z",
+    "platform": "pc",
+    "crossplay": true,
+    "locale": "ru",
+    "theme": "dark",
+    "syncLocale": true,
+    "syncTheme": true,
+    "verification": true,
+    "checkCode": "fixture-only",
+    "unreadNotifications": 0,
+    "linkedAccounts": {}
+  },
+  "error": null
+}

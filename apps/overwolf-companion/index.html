@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; connect-src 'none'; img-src 'self' data:; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <title>PlatScope Companion</title>
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content" data-copy="skip">Перейти к содержимому</a>
+    <header class="topbar">
+      <div class="brand">
+        <img src="/assets/icon.svg" alt="" width="40" height="40" />
+        <div>
+          <strong translate="no">PlatScope Companion</strong>
+          <span data-copy="brandNote">Локальный снимок Warframe</span>
+        </div>
+      </div>
+      <label class="language-control" for="language">
+        <span data-copy="language">Язык</span>
+        <select id="language" name="language">
+          <option value="ru">Русский</option>
+          <option value="en">English</option>
+        </select>
+      </label>
+    </header>
+
+    <main id="main-content" tabindex="-1">
+      <section class="hero" aria-labelledby="page-heading">
+        <p class="eyebrow" data-copy="eyebrow">Состояние companion</p>
+        <h1 id="page-heading" data-copy="heading">Снимок инвентаря</h1>
+        <p class="lede" data-copy="lede">
+          Companion читает только поддерживаемое событие Overwolf и по вашему согласию сохраняет JSON локально.
+        </p>
+      </section>
+
+      <p id="live-status" class="sr-only" role="status" aria-atomic="true"></p>
+      <p id="error-status" class="notice notice--error" role="alert" aria-atomic="true" hidden></p>
+
+      <section class="status-grid" aria-label="Состояние источника" data-copy-aria="statusRegion">
+        <article class="metric-card">
+          <span class="metric-card__label" data-copy="runtime">Overwolf</span>
+          <strong id="runtime-value">Проверка…</strong>
+          <span id="runtime-note" class="metric-card__note"></span>
+        </article>
+        <article class="metric-card">
+          <span class="metric-card__label" data-copy="warframe">Warframe</span>
+          <strong id="game-value">Проверка…</strong>
+          <span id="game-note" class="metric-card__note"></span>
+        </article>
+        <article class="metric-card">
+          <span class="metric-card__label" data-copy="inventoryEvent">Inventory event</span>
+          <strong id="gep-value">Проверка…</strong>
+          <span id="gep-note" class="metric-card__note"></span>
+        </article>
+        <article class="metric-card">
+          <span class="metric-card__label" data-copy="lastSnapshot">Последний снимок</span>
+          <strong id="snapshot-value">—</strong>
+          <span id="snapshot-note" class="metric-card__note"></span>
+        </article>
+      </section>
+
+      <div class="content-grid">
+        <section class="panel" aria-labelledby="export-heading">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow" data-copy="localExport">Локальный export</p>
+              <h2 id="export-heading" data-copy="exportHeading">Передача в PlatScope</h2>
+            </div>
+            <span id="export-badge" class="badge">Выключено</span>
+          </div>
+
+          <form id="export-form" novalidate>
+            <label class="toggle-row" for="export-enabled">
+              <input id="export-enabled" name="export-enabled" type="checkbox" />
+              <span>
+                <strong data-copy="enableExport">Сохранять coherent snapshot</strong>
+                <small data-copy="enableExportHint">Новые данные записываются только после строгой локальной проверки.</small>
+              </span>
+            </label>
+
+            <div class="field-group">
+              <label for="destination" data-copy="destination">Полный путь к JSON</label>
+              <input
+                id="destination"
+                name="destination"
+                type="text"
+                autocomplete="off"
+                spellcheck="false"
+                maxlength="1024"
+                placeholder="C:\Users\name\AppData\Local\PlatScope Companion\inventory.json"
+                aria-describedby="destination-hint destination-error"
+              />
+              <p id="destination-hint" class="hint" data-copy="destinationHint">Используйте абсолютный Windows-путь с расширением .json.</p>
+              <p id="destination-error" class="field-error"></p>
+            </div>
+
+            <div class="actions">
+              <button id="save-settings" type="submit" data-copy="saveSettings">Сохранить настройки</button>
+              <button id="sync-now" class="button-secondary" type="button" data-copy="syncNow">Синхронизировать сейчас</button>
+            </div>
+          </form>
+
+          <p id="export-result" class="notice" role="status" aria-atomic="true"></p>
+        </section>
+
+        <section class="panel" aria-labelledby="summary-heading">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow" data-copy="coherentData">Проверенные данные</p>
+              <h2 id="summary-heading" data-copy="summaryHeading">Сводка снимка</h2>
+            </div>
+            <span id="row-count" class="count">0</span>
+          </div>
+          <dl class="summary-list">
+            <div><dt data-copy="recognizedRows">Распознанные строки</dt><dd id="recognized-rows">0</dd></div>
+            <div><dt data-copy="distinctItems">Уникальные предметы</dt><dd id="distinct-items">0</dd></div>
+            <div><dt data-copy="totalQuantity">Суммарное количество</dt><dd id="total-quantity">0</dd></div>
+          </dl>
+          <div class="category-block">
+            <h3 data-copy="categories">Категории</h3>
+            <ul id="category-list" class="category-list"></ul>
+            <p id="category-empty" class="empty-state" data-copy="noSnapshot">Запустите Warframe и синхронизируйте данные, чтобы увидеть сводку.</p>
+          </div>
+        </section>
+      </div>
+
+      <section class="privacy-panel" aria-labelledby="privacy-heading">
+        <div>
+          <p class="eyebrow" data-copy="privacyLabel">Privacy</p>
+          <h2 id="privacy-heading" data-copy="privacyHeading">Только локальная обработка</h2>
+        </div>
+        <ul>
+          <li data-copy="privacyLocal">Inventory не отправляется на сервер.</li>
+          <li data-copy="privacyExcluded">Username, chat, account ID, nonce и WFM credentials не читаются и не записываются.</li>
+          <li data-copy="privacyTradeability">Снимок подтверждает владение, но не tradeability; PlatScope не предложит такие вещи к продаже автоматически.</li>
+        </ul>
+      </section>
+    </main>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

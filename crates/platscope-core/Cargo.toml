@@ -1,0 +1,27 @@
+[package]
+name = "platscope-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+chrono.workspace = true
+platscope-account = { path = "../platscope-account" }
+platscope-domain = { path = "../platscope-domain" }
+platscope-inventory = { path = "../platscope-inventory" }
+platscope-insights = { path = "../platscope-insights" }
+platscope-pricing = { path = "../platscope-pricing" }
+platscope-providers = { path = "../platscope-providers" }
+platscope-selling = { path = "../platscope-selling" }
+platscope-storage = { path = "../platscope-storage" }
+platscope-trends = { path = "../platscope-trends" }
+serde.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-appender.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true
