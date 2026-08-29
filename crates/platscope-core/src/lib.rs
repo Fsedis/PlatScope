@@ -204,6 +204,7 @@ pub struct SetComponentInsight {
 pub struct SetInsightRow {
     pub definition: PrimeSetDefinition,
     pub item_id: Option<String>,
+    pub display_name: String,
     pub image_url: Option<String>,
     pub set_recommendation: Option<PriceRecommendation>,
     pub comparison: SetComparison,
@@ -1424,6 +1425,10 @@ fn build_set_insights(
             item_id: catalog_by_slug
                 .get(&definition.set_slug)
                 .map(|(item_id, _, _)| item_id.clone()),
+            display_name: catalog_by_slug.get(&definition.set_slug).map_or_else(
+                || definition.display_name_en.clone(),
+                |(_, display_name, _)| display_name.clone(),
+            ),
             image_url: insight_image_url(&definition.set_slug, inventory, &catalog_by_slug),
             set_recommendation,
             comparison,

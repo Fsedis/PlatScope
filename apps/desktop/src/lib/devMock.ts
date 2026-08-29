@@ -798,6 +798,7 @@ function makeInsightsView(): InsightsView {
     sets: [
       {
         itemId: "demo-nyx_prime_set",
+        displayName: "Никс Прайм: Комплект",
         imageUrl: "https://warframe.market/static/assets/items/images/en/thumbs/nyx_prime_set.fd41c04c9e9bcc7e0e6963914f68f880.128x128.png",
         definition: {
           setSlug: "nyx_prime_set",

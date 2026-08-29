@@ -48,6 +48,7 @@ function setRow(
   const slug = name.toLocaleLowerCase().replaceAll(" ", "_");
   return {
     itemId: `${slug}-id`,
+    displayName: name,
     definition: {
       setSlug: slug,
       setGameRef: `/Lotus/${slug}`,
@@ -127,8 +128,15 @@ describe("insights presentation", () => {
     const easy = setRow("Easy Set", 1);
     const harder = setRow("Hard Set", 2);
     const ready = setRow("Ready Set", 0, 1);
-    expect(filterAndSortSets([harder, ready, easy], "finish").map((row) => row.definition.displayNameEn))
+    expect(filterAndSortSets([harder, ready, easy], "finish").map((row) => row.displayName))
       .toEqual(["Easy Set", "Hard Set"]);
     expect(filterAndSortSets([easy, ready], "ready")).toEqual([ready]);
+  });
+
+  it("searches and shows the localized set name", () => {
+    const localized = setRow("Nyx Prime Set", 1);
+    localized.displayName = "Никс Прайм: Комплект";
+    expect(filterAndSortSets([localized], "all", "никс")).toEqual([localized]);
+    expect(filterAndSortSets([localized], "all", "Nyx")).toEqual([]);
   });
 });

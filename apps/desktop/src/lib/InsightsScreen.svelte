@@ -412,7 +412,7 @@
                   {#if row.imageUrl}<img class="insight-thumb" src={row.imageUrl} alt="" loading="lazy" decoding="async" />{/if}
                   <div>
                     <p class={`vault vault--${row.definition.vaultStatus}`}>{vaultLabel(row.definition.vaultStatus, $locale)}</p>
-                    <h3>{row.definition.displayNameEn}</h3>
+                    <h3>{row.displayName}</h3>
                   </div>
                 </div>
                 <strong class:decision-positive={opportunity.profitableToComplete || opportunity.completeSets > 0} class="set-decision">
@@ -471,7 +471,7 @@
                       <div class="set-order-actions"><button type="submit">{c.reviewOrder}</button><button type="button" class="secondary" onclick={closeListing}>{c.cancel}</button></div>
                     </form>
                   {:else}
-                    <p>{c.confirmSummary(row.definition.displayNameEn, listingQuantity, listingPrice)}</p>
+                    <p>{c.confirmSummary(row.displayName, listingQuantity, listingPrice)}</p>
                     <label class="set-order-visible"><input bind:checked={listingConfirmed} type="checkbox" /> <span>{c.confirmCheck}</span></label>
                     <div class="set-order-actions"><button type="button" disabled={listingBusy || !listingConfirmed} onclick={createSetListing}>{listingBusy ? c.creatingOrder : c.createOrder}</button><button type="button" class="secondary" disabled={listingBusy} onclick={closeListing}>{c.cancel}</button></div>
                   {/if}

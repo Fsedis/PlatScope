@@ -78,6 +78,7 @@ export interface SetComponentInsight {
 export interface SetInsightRow {
   definition: PrimeSetDefinition;
   itemId?: string | null;
+  displayName: string;
   imageUrl?: string | null;
   setRecommendation: PriceRecommendation | null;
   comparison: SetComparison;
@@ -248,7 +249,7 @@ export function filterAndSortSets(
 ): SetInsightRow[] {
   const normalizedQuery = query.trim().toLocaleLowerCase(localeCode(locale));
   return rows
-    .filter((row) => row.definition.displayNameEn.toLocaleLowerCase(localeCode(locale)).includes(normalizedQuery))
+    .filter((row) => row.displayName.toLocaleLowerCase(localeCode(locale)).includes(normalizedQuery))
     .filter((row) => {
       const opportunity = setOpportunity(row);
       if (mode === "finish") return opportunity.profitableToComplete;
@@ -261,13 +262,13 @@ export function filterAndSortSets(
       if (mode === "ready") {
         return rightOpportunity.completeSets - leftOpportunity.completeSets
           || nullableOpportunity(rightOpportunity.setPremiumValue) - nullableOpportunity(leftOpportunity.setPremiumValue)
-          || left.definition.displayNameEn.localeCompare(right.definition.displayNameEn, localeCode(locale));
+          || left.displayName.localeCompare(right.displayName, localeCode(locale));
       }
       return Number(rightOpportunity.profitableToComplete) - Number(leftOpportunity.profitableToComplete)
         || leftOpportunity.missingParts.length - rightOpportunity.missingParts.length
         || leftOpportunity.missingQuantity - rightOpportunity.missingQuantity
         || nullableOpportunity(rightOpportunity.setPremiumValue) - nullableOpportunity(leftOpportunity.setPremiumValue)
-        || left.definition.displayNameEn.localeCompare(right.definition.displayNameEn, localeCode(locale));
+        || left.displayName.localeCompare(right.displayName, localeCode(locale));
     });
 }
 
