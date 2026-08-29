@@ -52,6 +52,10 @@ Read-only scanner в `crates/platscope-readonly-scan` адаптирован и�
 [TennoWorth](https://github.com/tennoworth/tennoworth), commit
 `1b77d0b830f019bae22fb15bbff28cde606aa7b2`.
 
+State machine торговых диалогов `EE.log`, фильтрация служебных строк и удаление
+platform glyphs в `apps/desktop/src-tauri/src/trade_log.rs` адаптированы из того
+же проекта, commit `0e0d12d0c2efade26976561e5f6f341c91673955`.
+
 MIT License
 
 Copyright (c) 2026

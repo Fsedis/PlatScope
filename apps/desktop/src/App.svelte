@@ -9,6 +9,7 @@
   import DiagnosticsScreen from "./lib/DiagnosticsScreen.svelte";
   import HistoryChart from "./lib/HistoryChart.svelte";
   import InsightsScreen from "./lib/InsightsScreen.svelte";
+  import MarketTradingShift from "./lib/MarketTradingShift.svelte";
   import SellNowScreen from "./lib/SellNowScreen.svelte";
   import SettingsScreen from "./lib/SettingsScreen.svelte";
   import { startAutomaticUpdateChecks } from "./lib/appUpdate";
@@ -542,6 +543,11 @@
       <button type="button" onclick={loadStatus}>{shell.checkStorage}</button>
     </div>
   {/if}
+
+  <MarketTradingShift
+    onOpenAccount={() => navigateTo("account")}
+    onOpenInventory={() => navigateTo("inventory")}
+  />
 
   {#if !loading && !status?.marketSnapshot}
     <section class="empty-panel" aria-labelledby="empty-heading">

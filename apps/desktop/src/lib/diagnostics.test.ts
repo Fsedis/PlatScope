@@ -24,7 +24,7 @@ const foundation = {
   appName: "PlatScope",
   appVersion: "0.1.0",
   databasePath: "C:\\PlatScope\\platscope.db",
-  schemaVersion: 9,
+  schemaVersion: 10,
   offlineReady: true,
   marketSnapshot: null,
   catalogItemCount: null,

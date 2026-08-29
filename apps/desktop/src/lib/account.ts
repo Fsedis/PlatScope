@@ -1,5 +1,5 @@
 import type { InventoryViewItem } from "./inventory";
-import type { MarketSearchRow } from "./market";
+import type { MarketItemKind, MarketSearchRow } from "./market";
 import type { UiLocale } from "./i18n";
 
 export type AccountOrderType = "buy" | "sell";
@@ -42,6 +42,7 @@ export interface AccountOrderItem {
   displayName: string;
   displayNameEn: string;
   imageUrl: string | null;
+  itemKind: MarketItemKind;
 }
 
 export function orderEnglishName(item: AccountOrderItem | undefined): string | null {

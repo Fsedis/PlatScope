@@ -192,40 +192,13 @@ internal static class Program
 
     private static int RunRussianSelfTest()
     {
-        using var screenshot = new Bitmap(
-            ReferenceWidth,
-            ReferenceHeight,
-            PixelFormat.Format32bppArgb);
-        using (var graphics = Graphics.FromImage(screenshot))
-        using (var textBrush = new SolidBrush(Color.FromArgb(36, 184, 242)))
-        using (var probeBrush = new SolidBrush(Color.FromArgb(36, 183, 241)))
-        using (var font = new Font("Arial", 15, FontStyle.Bold, GraphicsUnit.Pixel))
+        var labels = new[]
         {
-            graphics.Clear(Color.FromArgb(39, 53, 96));
-            graphics.FillRectangle(probeBrush, 148, 85, 5, 5);
-            var labels = new[]
-            {
-                "Чертёж: Форма",
-                "Никс Прайм: Каркас",
-                "Ивара Прайм: Система",
-                "Локи Прайм: Нейрооптика",
-            };
-            var left = ReferenceWidth / 2 - RewardWidth / 2;
-            var slotWidth = RewardWidth / labels.Length;
-            var top = ReferenceHeight / 2
-                - (RewardYDisplay - RewardHeight + RewardLineHeight)
-                + 10;
-            for (var index = 0; index < labels.Length; index++)
-            {
-                graphics.DrawString(
-                    labels[index],
-                    font,
-                    textBrush,
-                    left + index * slotWidth + 8,
-                    top);
-            }
-        }
-
+            "Чертёж: Форма",
+            "Никс Прайм: Каркас",
+            "Ивара Прайм: Система",
+            "Локи Прайм: Нейрооптика",
+        };
         var catalog = BuildCandidates(new[]
         {
             new CatalogItem("forma", "forma_blueprint", "Чертёж: Форма"),
@@ -243,9 +216,50 @@ internal static class Program
                 "Локи Прайм: Нейрооптика (Чертеж)"),
         });
         using var engine = CreateRussianEngine(ResolveTessdata(null));
-        var result = ScanFrame(screenshot, 1.0, engine, catalog);
-        Console.Out.Write(JsonSerializer.Serialize(result, JsonOptions));
-        return result.Status == "ok" && CountMatched(result) == 4 ? 0 : 3;
+        using var fourPlayerScreenshot = BuildRussianSelfTestScreenshot(labels);
+        using var threePlayerScreenshot = BuildRussianSelfTestScreenshot(labels[..3]);
+        using var twoPlayerScreenshot = BuildRussianSelfTestScreenshot(labels[..2]);
+        var fourPlayerResult = ScanFrame(fourPlayerScreenshot, 1.0, engine, catalog);
+        var threePlayerResult = ScanFrame(threePlayerScreenshot, 1.0, engine, catalog);
+        var twoPlayerResult = ScanFrame(twoPlayerScreenshot, 1.0, engine, catalog);
+        Console.Out.Write(JsonSerializer.Serialize(fourPlayerResult, JsonOptions));
+        var layoutsAreValid = CountMatched(fourPlayerResult) == 4
+            && fourPlayerResult.Rewards.Count == 4
+            && CountMatched(threePlayerResult) == 3
+            && threePlayerResult.Rewards.Count == 3
+            && CountMatched(twoPlayerResult) == 2
+            && twoPlayerResult.Rewards.Count == 2;
+        return layoutsAreValid ? 0 : 3;
+    }
+
+    private static Bitmap BuildRussianSelfTestScreenshot(IReadOnlyList<string> labels)
+    {
+        var screenshot = new Bitmap(
+            ReferenceWidth,
+            ReferenceHeight,
+            PixelFormat.Format32bppArgb);
+        using var graphics = Graphics.FromImage(screenshot);
+        using var textBrush = new SolidBrush(Color.FromArgb(36, 184, 242));
+        using var probeBrush = new SolidBrush(Color.FromArgb(36, 183, 241));
+        using var font = new Font("Arial", 15, FontStyle.Bold, GraphicsUnit.Pixel);
+        graphics.Clear(Color.FromArgb(39, 53, 96));
+        graphics.FillRectangle(probeBrush, 148, 85, 5, 5);
+        var slotWidth = RewardWidth / 4;
+        var activeWidth = slotWidth * labels.Count;
+        var left = ReferenceWidth / 2 - activeWidth / 2;
+        var top = ReferenceHeight / 2
+            - (RewardYDisplay - RewardHeight + RewardLineHeight)
+            + 10;
+        for (var index = 0; index < labels.Count; index++)
+        {
+            graphics.DrawString(
+                labels[index],
+                font,
+                textBrush,
+                left + index * slotWidth + 8,
+                top);
+        }
+        return screenshot;
     }
 
     private static ScanResult ScanFrame(
@@ -266,9 +280,9 @@ internal static class Program
         var uiScale = ResolveUiScale(requestedUiScale);
         using var rewardStrip = CropRewardStrip(screenshot, scale, uiScale);
         var detectedSlotCount = CountPopulatedRewardSections(rewardStrip, theme);
-        var slotLayouts = detectedSlotCount is >= 2 and <= 4
-            ? [detectedSlotCount]
-            : RewardSlotLayouts;
+        var slotLayouts = RewardSlotLayouts
+            .OrderByDescending(slotCount => slotCount == detectedSlotCount)
+            .ToArray();
         ScanResult? best = null;
         foreach (var slotCount in slotLayouts)
         {
@@ -295,7 +309,7 @@ internal static class Program
                 theme.Name,
                 rewards);
             best = ChooseBetterResult(best, candidate);
-            if (matched == slotCount)
+            if (matched == 4)
             {
                 break;
             }
@@ -312,7 +326,7 @@ internal static class Program
 
         if (candidate.Rewards.Count != current.Rewards.Count)
         {
-            return candidate.Rewards.Count > current.Rewards.Count ? candidate : current;
+            return IsBetterLayout(candidate, current) ? candidate : current;
         }
 
         var mergedRewards = current.Rewards
@@ -338,8 +352,34 @@ internal static class Program
 
         return candidate.Rewards.Sum(reward => reward.Confidence)
             > current.Rewards.Sum(reward => reward.Confidence)
-            ? candidate
-            : current;
+                ? candidate
+                : current;
+    }
+
+    private static bool IsBetterLayout(ScanResult candidate, ScanResult current)
+    {
+        var candidateMatched = CountMatched(candidate);
+        var currentMatched = CountMatched(current);
+        var candidateComplete = candidateMatched >= 2
+            && candidateMatched == candidate.Rewards.Count;
+        var currentComplete = currentMatched >= 2
+            && currentMatched == current.Rewards.Count;
+        if (candidateComplete != currentComplete) return candidateComplete;
+        if (candidateMatched != currentMatched) return candidateMatched > currentMatched;
+
+        var candidateRatio = candidate.Rewards.Count == 0
+            ? 0
+            : candidateMatched / (double)candidate.Rewards.Count;
+        var currentRatio = current.Rewards.Count == 0
+            ? 0
+            : currentMatched / (double)current.Rewards.Count;
+        if (Math.Abs(candidateRatio - currentRatio) > 0.001)
+        {
+            return candidateRatio > currentRatio;
+        }
+
+        return candidate.Rewards.Sum(reward => reward.Confidence)
+            > current.Rewards.Sum(reward => reward.Confidence);
     }
 
     private static int CountMatched(ScanResult result) =>

@@ -178,6 +178,7 @@ pub struct AccountOrderItemView {
     pub display_name: String,
     pub display_name_en: String,
     pub image_url: Option<String>,
+    pub item_kind: MarketItemKind,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1264,6 +1265,7 @@ pub fn enrich_account_view(
         .into_iter()
         .filter(|item| wanted.contains(item.item_id.as_str()))
         .map(|item| {
+            let item_kind = market_item_kind_from_slug(&item.tags, &item.slug);
             let display_name_en = item.display_name_en;
             let display_name = match language {
                 Language::Russian => item
@@ -1285,6 +1287,7 @@ pub fn enrich_account_view(
                     slug: item.slug,
                     display_name,
                     display_name_en,
+                    item_kind,
                 },
             )
         })
@@ -1880,9 +1883,13 @@ fn sell_now_summary(rows: &[SellNowRow], inventory_nominal_value: f64) -> SellNo
 }
 
 fn market_item_kind(tags: &[String], key: &MarketVariantKey) -> MarketItemKind {
-    if tags.iter().any(|tag| tag == "riven") || key.slug.contains("_riven_") {
+    market_item_kind_from_slug(tags, &key.slug)
+}
+
+fn market_item_kind_from_slug(tags: &[String], slug: &str) -> MarketItemKind {
+    if tags.iter().any(|tag| tag == "riven") || slug.contains("_riven_") {
         MarketItemKind::Riven
-    } else if tags.iter().any(|tag| tag == "relic") || key.slug.ends_with("_relic") {
+    } else if tags.iter().any(|tag| tag == "relic") || slug.ends_with("_relic") {
         MarketItemKind::Relic
     } else {
         MarketItemKind::Standard

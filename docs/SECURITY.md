@@ -30,6 +30,8 @@
 
 Database: `platscope.db` в системной data directory `PlatScope`. Запись snapshot выполняется через transaction и атомарную promotion. Temporary files создаются в той же filesystem, получают ограниченные права и удаляются после обработки.
 
+Подтверждённые торговые события из `EE.log` хранятся локально: время, имя партнёра, переданные/полученные предметы, платина и статус сверки. Raw log, строки вне торгового диалога и игровые идентификаторы в базу не попадают. Журнал не отправляется внешним сервисам.
+
 WFM token хранится только через OS keychain/credential manager. Если secure storage недоступен, интеграция остаётся выключенной; fallback в plaintext запрещён. Email и password не сохраняются, password очищается после одноразового sign-in. SQLite содержит только несекретный device ID.
 
 ## WFM account
@@ -40,6 +42,7 @@ WFM token хранится только через OS keychain/credential manage
 - `AccountToken` не сериализуется, zeroize-ится и redacted в `Debug`;
 - account body limit — 2 MiB, timeouts — 5/15 секунд, запросы сериализованы с интервалом 350 ms;
 - create/update/delete отклоняются backend-сервисом без отдельного `confirmed: true`;
+- обнаружение успешной сделки никогда само не меняет ордер; точное безопасное совпадение только предлагает изменение, а ранги/subtype/charges/звёзды и несколько совпадений всегда требуют ручной сверки;
 - disconnect всегда удаляет local credential, даже если remote sign-out недоступен.
 
 ## Inventory acquisition

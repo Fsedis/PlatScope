@@ -113,6 +113,12 @@ PlatScope JSON v1 — текущий поддерживаемый acquisition ad
 
 Экспорты helper tools подключаются только отдельными versioned adapters после проверки схемы и лицензии. Строгий [Overwolf companion envelope v1](OVERWOLF_COMPANION.md) принимается отдельным opt-in poller: путь задаётся пользователем, стабильность файла проверяется до импорта, а helper JSON автоматически не принимается. Companion distribution и реальный GEP runtime остаются выключены до Overwolf approval. Read-only process scan не включается без актуальной policy/security проверки и явного opt-in.
 
+## EE.log — подтверждение сделок
+
+PlatScope читает только новые данные локального `%LOCALAPPDATA%\Warframe\EE.log` и не изменяет файл. Начало торгового диалога, блоки `You are offering` / `will receive` и success-маркер игры образуют один bounded event. Незавершённый диалог удаляется через 120 секунд; строка успеха без сохранённого диалога игнорируется.
+
+Источник сообщает английские display names и количество, но не гарантирует точные измерения WFM-варианта. Поэтому журнал может предложить изменение только единственного нерангового ордера с точным английским именем. Он не заменяет inventory source и не применяется как источник цены.
+
 ## Warframe.Market — live provider
 
 Официальная документация: [docs.warframe.market](https://docs.warframe.market/).

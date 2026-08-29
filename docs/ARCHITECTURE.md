@@ -40,6 +40,8 @@ External providers
 16. Диагностический экран читает сохранённые факты и не превращает открытие UI в network health-check.
 17. Рабочие фильтры и сортировка — локальное presentation state: Market и единый экран «Мои предметы» имеют отдельные versioned WebView keys, проходят allowlist-validation и никогда не включают поисковые строки.
 18. «Мои предметы» получает единый DTO со всеми строками инвентаря; режимы полного списка, продажи и проверки являются локальными фильтрами, а не отдельными экранами или повторными provider-запросами.
+19. «Торговая смена» является очередью решений внутри Market, а не дубликатом account orders: исправные ордера сворачиваются, пакет всегда показывает diff, а событие `EE.log` не становится account write без явного подтверждения.
+20. Торговый диалог считается состоявшимся только после success-маркера игры; неоднозначный предмет, ранговый вариант или несовместимый `perTrade` никогда не сопоставляются догадкой.
 
 ## Структура workspace
 
@@ -134,6 +136,8 @@ Composition-independent application services: settings, logging, health, `Market
 
 Tauri создаёт окна, определяет data directory `PlatScope`, открывает `platscope.db`, строит сервисы и выдаёт узкие commands. Svelte показывает локальное состояние сразу; единый экран «Мои предметы» читает `sell_now`, который включает metadata, summary и все строки текущего inventory LKG, `search_market` читает только текущий рыночный LKG, refresh запускается в фоне и возвращает новое command state, а `diagnostics_status` не обращается в сеть и возвращает только безопасные агрегаты SQLite.
 
+Один tailer `EE.log` обслуживает маркеры relic rewards и подтверждённые торговые диалоги. Торговый parser — чистая state machine с 120-секундным timeout; SQLite получает событие только после success-маркера, а UI перечитывает журнал по `trade-detected`. WFM write остаётся отдельной подтверждаемой командой. Подробный контракт: [Торговая смена](TRADING_SHIFT.md).
+
 Отдельный opt-in companion poller принадлежит desktop filesystem boundary. Он читает только явно сохранённый абсолютный путь, требует стабильные size/mtime в двух проходах, memoize-ит попытку для неизменившегося sample и передаёт данные в `InventoryService::import_companion_json`. Core повторно проверяет `InventorySource::OverwolfCompanion` до SQLite promotion; UI получает только событие перечитать локальный LKG.
 
 Язык читается и сохраняется через существующие команды настроек. `i18n.ts` держит типизированную UI-локаль в Svelte context; после её смены presentation повторно читает локальные DTO, чтобы получить нужные display names. Стабильные reason codes и типизированные факторы отделяют локализацию объяснений от расчётов Pricing Engine, Sell Priority и Insights.
@@ -183,6 +187,8 @@ game_metadata_snapshots
 Миграция 7 добавляет отдельный атомарный LKG игровых метаданных: нормализованные Prime set recipes, relic rewards/refinements, ducats и vault status сохраняются одним JSON snapshot с counts и SHA-256. Публикация не связана с price snapshot и откатывается целиком при нарушении инвариантов.
 
 Миграция 8 добавляет Riven disposition count. Миграция 9 добавляет count определений предметов и компактную snapshot-scoped таблицу `game_item_definitions(slug, game_ref, mastery_requirement)`. Она публикуется в той же транзакции, что и metadata LKG, и позволяет Market Browser присоединять MR по exact canonical slug без разбора полного JSON.
+
+Миграция 10 добавляет локальный журнал подтверждённых сделок `trade_events`: dedup fingerprint, время, платина, bounded JSON-списки предметов, статус сверки и снимок применённого изменения для отмены.
 
 Позже отдельной migration добавляется `live_quotes`. Не создаём фиктивные таблицы до появления её репозиторного контракта.
 

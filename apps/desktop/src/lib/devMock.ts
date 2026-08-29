@@ -26,6 +26,7 @@ import type {
 } from "./market";
 import type { LiveSellNowResult, SellNowRow, SellNowView } from "./sellNow";
 import type { RelicRewardScanView } from "./relicRewards";
+import type { TradeEvent } from "./tradeShift";
 
 const sourceDate = "2026-08-26";
 const snapshot = {
@@ -142,6 +143,20 @@ let inventory: InventoryView = {
 
 let account: AccountView = { connected: false, profile: null, orders: [] };
 let nextAccountOrder = 2;
+let tradeEvents: TradeEvent[] = [
+  {
+    id: 1,
+    occurredAt: "2026-08-29T08:42:00Z",
+    partner: "MarketTenno",
+    platinumGiven: 0,
+    platinumReceived: 87,
+    givenItems: [{ name: "Nyx Prime Set", quantity: 1 }],
+    receivedItems: [],
+    status: "pending",
+    matchedOrderId: null,
+    reconciliationJson: null,
+  },
+];
 let nextEventListener = 1;
 let appSettings: AppSettings = { ...DEFAULT_APP_SETTINGS };
 
@@ -238,7 +253,58 @@ function localizeInventoryView(view: InventoryView): InventoryView {
   return { ...view, items: view.items.map(localizeInventoryItem) };
 }
 
+function connectedDemoAccount(): AccountView {
+  return {
+    connected: true,
+    profile: {
+      id: "demo-user-id",
+      ingameName: "DemoTenno",
+      slug: "demo-tenno",
+      platform: "pc",
+      crossplay: true,
+      verification: true,
+    },
+    orders: [
+      {
+        id: "demo-order-1", itemId: "demo-nyx_prime_set", type: "sell", platinum: 92,
+        quantity: 3, perTrade: null, rank: null, charges: null, subtype: null,
+        amberStars: null, cyanStars: null, visible: true,
+        createdAt: "2026-08-26T08:00:00Z", updatedAt: "2026-08-27T06:30:00Z",
+      },
+      {
+        id: "demo-order-2", itemId: "demo-primed_flow", type: "sell", platinum: 55,
+        quantity: 2, perTrade: null, rank: 10, charges: null, subtype: null,
+        amberStars: null, cyanStars: null, visible: true,
+        createdAt: "2026-08-22T08:00:00Z", updatedAt: "2026-08-28T06:30:00Z",
+      },
+      {
+        id: "demo-order-3", itemId: "demo-primary_deadhead", type: "sell", platinum: 2,
+        quantity: 15, perTrade: 1, rank: 0, charges: null, subtype: null,
+        amberStars: null, cyanStars: null, visible: false,
+        createdAt: "2026-08-24T08:00:00Z", updatedAt: "2026-08-29T06:30:00Z",
+      },
+    ],
+    orderItems: {
+      "demo-nyx_prime_set": {
+        slug: "nyx_prime_set", displayName: localizedName("nyx_prime_set", "Никс Прайм: комплект"),
+        displayNameEn: "Nyx Prime Set", imageUrl: rows[0].imageUrl ?? null, itemKind: "standard",
+      },
+      "demo-primed_flow": {
+        slug: "primed_flow", displayName: localizedName("primed_flow", "Поток Прайм"),
+        displayNameEn: "Primed Flow", imageUrl: rows[6].imageUrl ?? null, itemKind: "standard",
+      },
+      "demo-primary_deadhead": {
+        slug: "primary_deadhead", displayName: localizedName("primary_deadhead", "Мистическое Обезглавливание: Основное"),
+        displayNameEn: "Primary Deadhead", imageUrl: rows[7].imageUrl ?? null, itemKind: "standard",
+      },
+    },
+  };
+}
+
 export async function installMarketBrowserMock(): Promise<void> {
+  if (new URLSearchParams(window.location.search).get("mockTradeShift") === "1") {
+    account = connectedDemoAccount();
+  }
   mockIPC((command, args) => {
     if (command === "plugin:event|listen") return nextEventListener++;
     if (command === "plugin:event|unlisten") return null;
@@ -261,7 +327,7 @@ export async function installMarketBrowserMock(): Promise<void> {
         appName: "PlatScope",
         appVersion: "0.1.0",
         databasePath: "C:\\Users\\Demo\\AppData\\Local\\PlatScope\\platscope.db",
-        schemaVersion: 9,
+        schemaVersion: 10,
         offlineReady: true,
         marketSnapshot: snapshot,
         catalogItemCount: 3840,
@@ -280,7 +346,7 @@ export async function installMarketBrowserMock(): Promise<void> {
           appName: "PlatScope",
           appVersion: "0.1.0",
           databasePath: "C:\\Users\\Demo\\AppData\\Local\\PlatScope\\platscope.db",
-          schemaVersion: 9,
+          schemaVersion: 10,
           offlineReady: true,
           marketSnapshot: snapshot,
           catalogItemCount: 3840,
@@ -323,43 +389,7 @@ export async function installMarketBrowserMock(): Promise<void> {
     if (command === "account_connect") {
       const request = args as { email?: string; password?: string };
       if (!request.email || !request.password) throw new Error("WFM rejected empty credentials");
-      account = {
-        connected: true,
-        profile: {
-          id: "demo-user-id",
-          ingameName: "DemoTenno",
-          slug: "demo-tenno",
-          platform: "pc",
-          crossplay: true,
-          verification: true,
-        },
-        orders: [
-          {
-            id: "demo-order-1",
-            itemId: "demo-nyx_prime_set",
-            type: "sell",
-            platinum: 92,
-            quantity: 1,
-            perTrade: null,
-            rank: null,
-            charges: null,
-            subtype: null,
-            amberStars: null,
-            cyanStars: null,
-            visible: true,
-            createdAt: "2026-08-26T08:00:00Z",
-            updatedAt: "2026-08-27T06:30:00Z",
-          },
-        ],
-        orderItems: {
-          "demo-nyx_prime_set": {
-            slug: "nyx_prime_set",
-            displayName: localizedName("nyx_prime_set", "Никс Прайм: комплект"),
-            displayNameEn: "Nyx Prime Set",
-            imageUrl: "https://warframe.market/static/assets/items/images/en/thumbs/nyx_prime_set.fd41c04c9e9bcc7e0e6963914f68f880.128x128.png",
-          },
-        },
-      };
+      account = connectedDemoAccount();
       return account;
     }
     if (command === "account_disconnect") {
@@ -417,6 +447,32 @@ export async function installMarketBrowserMock(): Promise<void> {
       if (!order) throw new Error("order not found");
       account = { ...account, orders: account.orders.filter((candidate) => candidate.id !== request.id) };
       return order;
+    }
+    if (command === "trade_events") return tradeEvents;
+    if (command === "trade_event_reconciled") {
+      const request = args as { id?: number; orderId?: string | null; reconciliationJson?: string | null };
+      tradeEvents = tradeEvents.map((event) => event.id === request.id ? {
+        ...event,
+        status: "reconciled",
+        matchedOrderId: request.orderId ?? null,
+        reconciliationJson: request.reconciliationJson ?? null,
+      } : event);
+      return true;
+    }
+    if (command === "trade_event_ignore") {
+      const id = Number((args as { id?: number })?.id);
+      tradeEvents = tradeEvents.map((event) => event.id === id ? { ...event, status: "ignored" } : event);
+      return true;
+    }
+    if (command === "trade_event_restore") {
+      const id = Number((args as { id?: number })?.id);
+      tradeEvents = tradeEvents.map((event) => event.id === id ? {
+        ...event,
+        status: "pending",
+        matchedOrderId: null,
+        reconciliationJson: null,
+      } : event);
+      return true;
     }
     if (
       command === "scan_relic_rewards"
@@ -515,6 +571,15 @@ export async function installMarketBrowserMock(): Promise<void> {
         },
         failures: [],
       };
+    }
+    if (command === "price_current_variant") {
+      const key = (args as { key?: MarketSearchRow["recommendation"]["key"] })?.key;
+      const row = rows.find((candidate) => candidate.recommendation.key.slug === key?.slug);
+      if (!row) return null;
+      return marketRowForPlatform(
+        row,
+        key?.platform as AppSettings["platform"] ?? appSettings.platform,
+      ).recommendation;
     }
     if (command === "live_price_current_variant") {
       const key = (args as { key?: MarketSearchRow["recommendation"]["key"] })?.key;

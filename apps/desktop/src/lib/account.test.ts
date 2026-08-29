@@ -50,12 +50,14 @@ describe("account listing drafts", () => {
       displayName: "Поток Прайм",
       displayNameEn: "Primed Flow",
       imageUrl: null,
+      itemKind: "standard",
     })).toBe("Primed Flow");
     expect(orderEnglishName({
       slug: "primed_flow",
       displayName: "Primed Flow",
       displayNameEn: "Primed Flow",
       imageUrl: null,
+      itemKind: "standard",
     })).toBeNull();
   });
 

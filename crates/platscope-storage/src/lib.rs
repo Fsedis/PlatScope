@@ -27,6 +27,7 @@ const RIVEN_DISPOSITIONS_MIGRATION: &str =
     include_str!("../../../migrations/0008_riven_dispositions.sql");
 const GAME_ITEM_DEFINITIONS_MIGRATION: &str =
     include_str!("../../../migrations/0009_game_item_definitions.sql");
+const TRADE_SHIFT_MIGRATION: &str = include_str!("../../../migrations/0010_trade_shift.sql");
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -68,6 +69,48 @@ pub struct ProviderHealth {
     pub last_error_message: Option<String>,
     pub latency_ms: Option<u64>,
     pub consecutive_failures: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TradeItem {
+    pub name: String,
+    pub quantity: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TradeEventStatus {
+    Pending,
+    Reconciled,
+    Ignored,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NewTradeEvent {
+    pub fingerprint: String,
+    pub occurred_at: DateTime<Utc>,
+    pub partner: Option<String>,
+    pub platinum_given: u32,
+    pub platinum_received: u32,
+    pub given_items: Vec<TradeItem>,
+    pub received_items: Vec<TradeItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TradeEvent {
+    pub id: i64,
+    pub occurred_at: DateTime<Utc>,
+    pub partner: Option<String>,
+    pub platinum_given: u32,
+    pub platinum_received: u32,
+    pub given_items: Vec<TradeItem>,
+    pub received_items: Vec<TradeItem>,
+    pub status: TradeEventStatus,
+    pub matched_order_id: Option<String>,
+    pub reconciliation_json: Option<String>,
 }
 
 pub struct Database {
@@ -164,6 +207,126 @@ impl Database {
         value
             .map(|json| serde_json::from_str(&json).map_err(StorageError::from))
             .transpose()
+    }
+
+    /// Сохраняет подтверждённую игрой сделку. Повторный маркер из EE.log не создаёт дубль.
+    ///
+    /// # Errors
+    ///
+    /// Возвращает [`StorageError`] при нарушении bounds, ошибке JSON или SQLite.
+    pub fn record_trade_event(&self, event: &NewTradeEvent) -> Result<bool, StorageError> {
+        if event.fingerprint.trim().is_empty() || event.fingerprint.len() > 4_096 {
+            return Err(StorageError::Invariant(
+                "trade event fingerprint is empty or too long".into(),
+            ));
+        }
+        if event.given_items.len() > 32 || event.received_items.len() > 32 {
+            return Err(StorageError::Invariant(
+                "trade event contains too many item rows".into(),
+            ));
+        }
+        let changed = self.connection.execute(
+            "INSERT OR IGNORE INTO trade_events(
+                fingerprint, occurred_at, partner, platinum_given, platinum_received,
+                given_items_json, received_items_json, status, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pending', ?8)",
+            params![
+                event.fingerprint,
+                event.occurred_at.to_rfc3339(),
+                event.partner,
+                i64::from(event.platinum_given),
+                i64::from(event.platinum_received),
+                serde_json::to_string(&event.given_items)?,
+                serde_json::to_string(&event.received_items)?,
+                Utc::now().to_rfc3339(),
+            ],
+        )?;
+        Ok(changed == 1)
+    }
+
+    /// Возвращает последние сделки для сверки с WFM-ордерами.
+    ///
+    /// # Errors
+    ///
+    /// Возвращает [`StorageError`] при ошибке SQLite, даты или сохранённого JSON.
+    pub fn recent_trade_events(&self, limit: usize) -> Result<Vec<TradeEvent>, StorageError> {
+        let limit = limit.clamp(1, 100);
+        let mut statement = self.connection.prepare(
+            "SELECT id, occurred_at, partner, platinum_given, platinum_received,
+                    given_items_json, received_items_json, status, matched_order_id,
+                    reconciliation_json
+             FROM trade_events
+             ORDER BY occurred_at DESC, id DESC
+             LIMIT ?1",
+        )?;
+        let rows = statement.query_map([i64::try_from(limit).unwrap_or(100)], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, String>(7)?,
+                row.get::<_, Option<String>>(8)?,
+                row.get::<_, Option<String>>(9)?,
+            ))
+        })?;
+        let mut events = Vec::new();
+        for row in rows {
+            let (
+                id,
+                occurred_at,
+                partner,
+                platinum_given,
+                platinum_received,
+                given_items_json,
+                received_items_json,
+                status,
+                matched_order_id,
+                reconciliation_json,
+            ) = row?;
+            events.push(TradeEvent {
+                id,
+                occurred_at: DateTime::parse_from_rfc3339(&occurred_at)?.with_timezone(&Utc),
+                partner,
+                platinum_given: u32_from_sql(platinum_given, "trade platinum_given")?,
+                platinum_received: u32_from_sql(platinum_received, "trade platinum_received")?,
+                given_items: serde_json::from_str(&given_items_json)?,
+                received_items: serde_json::from_str(&received_items_json)?,
+                status: trade_event_status(&status)?,
+                matched_order_id,
+                reconciliation_json,
+            });
+        }
+        Ok(events)
+    }
+
+    /// Помечает сделку как обработанную или намеренно пропущенную.
+    ///
+    /// # Errors
+    ///
+    /// Возвращает [`StorageError`] при ошибке SQLite.
+    pub fn set_trade_event_status(
+        &self,
+        id: i64,
+        status: TradeEventStatus,
+        matched_order_id: Option<&str>,
+        reconciliation_json: Option<&str>,
+    ) -> Result<bool, StorageError> {
+        let changed = self.connection.execute(
+            "UPDATE trade_events
+             SET status = ?2, matched_order_id = ?3, reconciliation_json = ?4
+             WHERE id = ?1",
+            params![
+                id,
+                trade_event_status_name(status),
+                matched_order_id,
+                reconciliation_json,
+            ],
+        )?;
+        Ok(changed == 1)
     }
 
     /// Атомарно публикует проверенный каталог и обновляет индекс item identity.
@@ -1111,6 +1274,9 @@ impl Database {
                     self.connection
                         .execute_batch(GAME_ITEM_DEFINITIONS_MIGRATION)?;
                 }
+                if version < 10 {
+                    self.connection.execute_batch(TRADE_SHIFT_MIGRATION)?;
+                }
                 Ok(())
             });
         if let Err(error) = migration_result {
@@ -1225,6 +1391,25 @@ pub enum StorageError {
     DateTime(#[from] chrono::ParseError),
     #[error("storage invariant failed: {0}")]
     Invariant(String),
+}
+
+const fn trade_event_status_name(status: TradeEventStatus) -> &'static str {
+    match status {
+        TradeEventStatus::Pending => "pending",
+        TradeEventStatus::Reconciled => "reconciled",
+        TradeEventStatus::Ignored => "ignored",
+    }
+}
+
+fn trade_event_status(value: &str) -> Result<TradeEventStatus, StorageError> {
+    match value {
+        "pending" => Ok(TradeEventStatus::Pending),
+        "reconciled" => Ok(TradeEventStatus::Reconciled),
+        "ignored" => Ok(TradeEventStatus::Ignored),
+        _ => Err(StorageError::Invariant(format!(
+            "unknown trade event status: {value}"
+        ))),
+    }
 }
 
 fn provider_name(provider: ProviderId) -> &'static str {
@@ -1407,7 +1592,7 @@ mod tests {
     fn foundation_migration_is_idempotent() {
         let database = Database::open_in_memory().expect("database opens");
         database.migrate().expect("migration can run twice");
-        assert_eq!(database.schema_version().expect("version"), 9);
+        assert_eq!(database.schema_version().expect("version"), 10);
     }
 
     #[test]
@@ -1451,7 +1636,7 @@ mod tests {
             .expect("migrated row loads");
         assert_eq!(display_name_ru, None);
         assert_eq!(search_text, "nyx_prime_set nyx prime set");
-        assert_eq!(database.schema_version().expect("version"), 9);
+        assert_eq!(database.schema_version().expect("version"), 10);
     }
 
     #[test]
@@ -1471,6 +1656,47 @@ mod tests {
             .expect("setting exists");
 
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn confirmed_trade_events_are_deduplicated_and_reconciled() {
+        let database = Database::open_in_memory().expect("database opens");
+        let event = NewTradeEvent {
+            fingerprint: "session:123.4:primed-flow".into(),
+            occurred_at: Utc.with_ymd_and_hms(2026, 8, 29, 12, 30, 0).unwrap(),
+            partner: Some("MarketTenno".into()),
+            platinum_given: 0,
+            platinum_received: 130,
+            given_items: vec![TradeItem {
+                name: "Primed Flow".into(),
+                quantity: 1,
+            }],
+            received_items: Vec::new(),
+        };
+        assert!(database.record_trade_event(&event).expect("event inserts"));
+        assert!(
+            !database
+                .record_trade_event(&event)
+                .expect("duplicate ignored")
+        );
+
+        let events = database.recent_trade_events(10).expect("events load");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].status, TradeEventStatus::Pending);
+        assert_eq!(events[0].platinum_received, 130);
+        assert!(
+            database
+                .set_trade_event_status(
+                    events[0].id,
+                    TradeEventStatus::Reconciled,
+                    Some("order-1"),
+                    Some("[]"),
+                )
+                .expect("status updates")
+        );
+        let reconciled = database.recent_trade_events(1).expect("event reloads");
+        assert_eq!(reconciled[0].status, TradeEventStatus::Reconciled);
+        assert_eq!(reconciled[0].matched_order_id.as_deref(), Some("order-1"));
     }
 
     #[test]

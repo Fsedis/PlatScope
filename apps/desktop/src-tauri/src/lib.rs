@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+mod trade_log;
+
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
@@ -26,13 +28,19 @@ use platscope_domain::{
     GameMetadataSnapshot, MarketItemKind, MarketVariantKey, PrimeSetDefinition,
 };
 use platscope_readonly_scan::inventory::InventoryScanner as ReadOnlyInventoryScanner;
-use platscope_storage::{Database, HistoryCoverage, MarketSnapshotSummary, ProviderHealth};
+use platscope_storage::{
+    Database, HistoryCoverage, MarketSnapshotSummary, NewTradeEvent, ProviderHealth, TradeEvent,
+    TradeEventStatus,
+};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, State};
 use tauri_plugin_opener::OpenerExt;
 
 struct AppState {
     database: Mutex<Database>,
+    // OCR наград чувствителен к задержкам: обновление рынка может удерживать основной
+    // mutex БД дольше, чем открыт экран выбора. Отдельное WAL-чтение не блокирует награды.
+    reward_database: Mutex<Database>,
     market_data_service: MarketDataService,
     live_pricing_service: LivePricingService,
     history_service: HistoryService,
@@ -1077,6 +1085,66 @@ async fn account_delete_listing(
 }
 
 #[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // Tauri command extractor owns State.
+fn trade_events(state: State<'_, AppState>) -> Result<Vec<TradeEvent>, String> {
+    state
+        .database
+        .lock()
+        .map_err(|_| "database state is unavailable".to_owned())?
+        .recent_trade_events(30)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // Tauri deserializes command values by ownership.
+fn trade_event_reconciled(
+    id: i64,
+    order_id: Option<String>,
+    reconciliation_json: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<bool, String> {
+    if reconciliation_json
+        .as_ref()
+        .is_some_and(|value| value.len() > 16_384)
+    {
+        return Err("trade reconciliation payload is too long".to_owned());
+    }
+    state
+        .database
+        .lock()
+        .map_err(|_| "database state is unavailable".to_owned())?
+        .set_trade_event_status(
+            id,
+            TradeEventStatus::Reconciled,
+            order_id.as_deref(),
+            reconciliation_json.as_deref(),
+        )
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // Tauri command extractor owns State.
+fn trade_event_ignore(id: i64, state: State<'_, AppState>) -> Result<bool, String> {
+    state
+        .database
+        .lock()
+        .map_err(|_| "database state is unavailable".to_owned())?
+        .set_trade_event_status(id, TradeEventStatus::Ignored, None, None)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // Tauri command extractor owns State.
+fn trade_event_restore(id: i64, state: State<'_, AppState>) -> Result<bool, String> {
+    state
+        .database
+        .lock()
+        .map_err(|_| "database state is unavailable".to_owned())?
+        .set_trade_event_status(id, TradeEventStatus::Pending, None, None)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 #[allow(clippy::needless_pass_by_value)] // Tauri deserializes command values by ownership.
 async fn live_price_current_variant(
     key: MarketVariantKey,
@@ -1205,7 +1273,7 @@ fn preview_reward_overlay(
 ) -> Result<RelicRewardScanView, String> {
     validate_app_settings(&settings).map_err(str::to_owned)?;
     let rect = warframe_window_rect(&app)?;
-    let insights = InsightsService::view(&state.database, &settings)
+    let insights = InsightsService::view(&state.reward_database, &settings)
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "Сначала обновите данные предметов в настройках.".to_owned())?;
     let response = build_reward_preview_response(&insights, &rect)?;
@@ -1293,7 +1361,7 @@ fn reward_scan_inputs(
         .clone();
     let (settings, catalog) = {
         let database = state
-            .database
+            .reward_database
             .lock()
             .map_err(|_| "database state is unavailable".to_owned())?;
         let settings = database
@@ -1571,7 +1639,7 @@ fn build_reward_choice(
 ) -> Result<RelicRewardChoice, String> {
     let mut market = if let (Some(item_id), Some(name)) = (&reward.item_id, &reward.name) {
         MarketBrowserService::search(
-            &state.database,
+            &state.reward_database,
             name,
             12,
             Language::Russian,
@@ -1590,7 +1658,7 @@ fn build_reward_choice(
         .as_deref()
         .map(|slug| {
             reward_set_completion(
-                &state.database,
+                &state.reward_database,
                 settings,
                 metadata,
                 inventory,
@@ -1613,7 +1681,7 @@ fn build_reward_choice(
         .as_deref()
         .map(|slug| {
             reward_set_overview(
-                &state.database,
+                &state.reward_database,
                 settings,
                 metadata,
                 inventory,
@@ -1684,7 +1752,7 @@ fn reward_scan_local_data(
     String,
 > {
     let (metadata, catalog) = state
-        .database
+        .reward_database
         .lock()
         .map_err(|_| "database state is unavailable".to_owned())
         .and_then(|database| {
@@ -1711,8 +1779,8 @@ fn reward_scan_local_data(
                 .collect()
         })
         .unwrap_or_default();
-    let inventory =
-        InventoryService::view(&state.database, settings).map_err(|error| error.to_string())?;
+    let inventory = InventoryService::view(&state.reward_database, settings)
+        .map_err(|error| error.to_string())?;
     Ok((metadata, inventory, catalog))
 }
 
@@ -2579,6 +2647,127 @@ fn spawn_market_refresh_scheduler(app_handle: AppHandle) {
     });
 }
 
+fn handle_trade_log_chunk(
+    app_handle: &AppHandle,
+    machine: &mut trade_log::TradeMachine,
+    line_tail: &mut String,
+    chunk: &str,
+    now_ms: u64,
+    watcher_session: u128,
+) {
+    line_tail.push_str(chunk);
+    let has_partial_line = !line_tail.ends_with('\n');
+    let mut lines: Vec<String> = line_tail
+        .split('\n')
+        .map(|line| line.trim_end_matches('\r').to_owned())
+        .collect();
+    *line_tail = if has_partial_line {
+        lines.pop().unwrap_or_default()
+    } else {
+        String::new()
+    };
+    for line in lines {
+        let Some(trade) = machine.feed(&line, now_ms) else {
+            continue;
+        };
+        let fingerprint = format!(
+            "ee:{watcher_session}:{}:{}:{}:{}:{}:{}",
+            trade.log_stamp.as_deref().unwrap_or("no-stamp"),
+            trade.partner.as_deref().unwrap_or("unknown"),
+            trade.platinum_given,
+            trade.platinum_received,
+            serde_json::to_string(&trade.given_items).unwrap_or_default(),
+            serde_json::to_string(&trade.received_items).unwrap_or_default(),
+        );
+        let event = NewTradeEvent {
+            fingerprint,
+            occurred_at: Utc::now(),
+            partner: trade.partner,
+            platinum_given: trade.platinum_given,
+            platinum_received: trade.platinum_received,
+            given_items: trade.given_items,
+            received_items: trade.received_items,
+        };
+        let inserted = app_handle
+            .state::<AppState>()
+            .database
+            .lock()
+            .ok()
+            .and_then(|database| database.record_trade_event(&event).ok())
+            .unwrap_or(false);
+        if !inserted {
+            continue;
+        }
+        tracing::info!(
+            event = "confirmed_trade_detected",
+            "confirmed trade was recorded from EE.log"
+        );
+        if let Err(error) = app_handle.emit("trade-detected", ()) {
+            tracing::warn!(
+                event = "trade_detected_event_failed",
+                error = %error,
+                "trade was recorded but UI event failed"
+            );
+        }
+    }
+}
+
+fn handle_reward_markers(
+    app_handle: &AppHandle,
+    chunk: &str,
+    tail: &mut String,
+    last_emitted: &mut Option<Instant>,
+    last_projection: &mut Option<Instant>,
+) {
+    let projection_paths = reward_log_projection_paths(chunk);
+    if !projection_paths.is_empty() {
+        if let Ok(mut active_paths) = app_handle.state::<AppState>().reward_relic_paths.lock() {
+            if last_projection.is_none_or(|instant| instant.elapsed() > Duration::from_secs(30)) {
+                active_paths.clear();
+            }
+            active_paths.extend(projection_paths);
+        }
+        *last_projection = Some(Instant::now());
+    }
+    if chunk.contains("ProjectionRewardChoice.lua: Relic reward screen shut down") {
+        if let Ok(mut active_paths) = app_handle.state::<AppState>().reward_relic_paths.lock() {
+            active_paths.clear();
+        }
+        *last_projection = None;
+        hide_reward_overlay(app_handle);
+    }
+    tail.push_str(chunk);
+    if reward_log_contains_reward_screen(tail) {
+        let realtime_active = app_handle
+            .state::<AppState>()
+            .reward_realtime_active
+            .load(Ordering::Acquire);
+        if !realtime_active
+            && last_emitted.is_none_or(|instant| instant.elapsed() >= REWARD_LOG_DEBOUNCE)
+        {
+            if let Err(error) = app_handle.emit("relic-reward-screen", ()) {
+                tracing::warn!(
+                    event = "relic_reward_screen_event_failed",
+                    error = %error,
+                    "reward screen was detected but UI event failed"
+                );
+            }
+            *last_emitted = Some(Instant::now());
+        }
+        // Маркеры от одного экрана приходят несколько раз. Удаляем их даже во время
+        // cooldown, иначе сохранённая строка повторно запустит OCR через восемь секунд.
+        tail.clear();
+    }
+    *tail = tail
+        .chars()
+        .rev()
+        .take(512)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect();
+}
+
 fn spawn_reward_log_watcher(app_handle: AppHandle) {
     tauri::async_runtime::spawn(async move {
         let Some(path) = std::env::var_os("LOCALAPPDATA")
@@ -2593,11 +2782,19 @@ fn spawn_reward_log_watcher(app_handle: AppHandle) {
         let mut tail = String::new();
         let mut last_emitted: Option<Instant> = None;
         let mut last_projection: Option<Instant> = None;
+        let mut trade_machine = trade_log::TradeMachine::default();
+        let mut trade_line_tail = String::new();
+        let watcher_started = Instant::now();
+        let watcher_session = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_nanos());
         loop {
             interval.tick().await;
             let Ok(metadata) = fs::metadata(&path) else {
                 offset = None;
                 tail.clear();
+                trade_machine = trade_log::TradeMachine::default();
+                trade_line_tail.clear();
                 continue;
             };
             let file_len = metadata.len();
@@ -2608,6 +2805,8 @@ fn spawn_reward_log_watcher(app_handle: AppHandle) {
             if file_len < current_offset {
                 offset = Some(0);
                 tail.clear();
+                trade_machine = trade_log::TradeMachine::default();
+                trade_line_tail.clear();
                 continue;
             }
             if file_len == current_offset {
@@ -2622,60 +2821,22 @@ fn spawn_reward_log_watcher(app_handle: AppHandle) {
                 continue;
             };
             offset = Some(new_offset);
-            let projection_paths = reward_log_projection_paths(&chunk);
-            if !projection_paths.is_empty() {
-                if let Ok(mut active_paths) =
-                    app_handle.state::<AppState>().reward_relic_paths.lock()
-                {
-                    if last_projection
-                        .is_none_or(|instant| instant.elapsed() > Duration::from_secs(30))
-                    {
-                        active_paths.clear();
-                    }
-                    active_paths.extend(projection_paths);
-                }
-                last_projection = Some(Instant::now());
-            }
-            if chunk.contains("ProjectionRewardChoice.lua: Relic reward screen shut down") {
-                if let Ok(mut active_paths) =
-                    app_handle.state::<AppState>().reward_relic_paths.lock()
-                {
-                    active_paths.clear();
-                }
-                last_projection = None;
-                hide_reward_overlay(&app_handle);
-            }
-            tail.push_str(&chunk);
-            let reward_screen = reward_log_contains_reward_screen(&tail);
-            if reward_screen {
-                let realtime_active = app_handle
-                    .state::<AppState>()
-                    .reward_realtime_active
-                    .load(Ordering::Acquire);
-                if !realtime_active
-                    && last_emitted.is_none_or(|instant| instant.elapsed() >= REWARD_LOG_DEBOUNCE)
-                {
-                    if let Err(error) = app_handle.emit("relic-reward-screen", ()) {
-                        tracing::warn!(
-                            event = "relic_reward_screen_event_failed",
-                            error = %error,
-                            "reward screen was detected but UI event failed"
-                        );
-                    }
-                    last_emitted = Some(Instant::now());
-                }
-                // Маркеры от одного экрана приходят несколько раз. Удаляем их даже во время
-                // cooldown, иначе сохранённая строка повторно запустит OCR через восемь секунд.
-                tail.clear();
-            }
-            tail = tail
-                .chars()
-                .rev()
-                .take(512)
-                .collect::<String>()
-                .chars()
-                .rev()
-                .collect();
+            let now_ms = u64::try_from(watcher_started.elapsed().as_millis()).unwrap_or(u64::MAX);
+            handle_trade_log_chunk(
+                &app_handle,
+                &mut trade_machine,
+                &mut trade_line_tail,
+                &chunk,
+                now_ms,
+                watcher_session,
+            );
+            handle_reward_markers(
+                &app_handle,
+                &chunk,
+                &mut tail,
+                &mut last_emitted,
+                &mut last_projection,
+            );
         }
     });
 }
@@ -2956,7 +3117,9 @@ pub fn run() {
             let data_directory = app.path().local_data_dir()?.join("PlatScope");
             fs::create_dir_all(&data_directory)?;
             let logging_guard = init_logging(&data_directory.join("logs"))?;
-            let database = Database::open(data_directory.join("platscope.db"))?;
+            let database_path = data_directory.join("platscope.db");
+            let database = Database::open(&database_path)?;
+            let reward_database = Database::open(&database_path)?;
             let market_data_service = MarketDataService::production()?;
             let live_pricing_service = LivePricingService::production()?;
             let history_service = HistoryService::production()?;
@@ -2980,6 +3143,7 @@ pub fn run() {
 
             app.manage(AppState {
                 database: Mutex::new(database),
+                reward_database: Mutex::new(reward_database),
                 market_data_service,
                 live_pricing_service,
                 history_service,
@@ -3017,6 +3181,10 @@ pub fn run() {
             account_create_listing,
             account_update_listing,
             account_delete_listing,
+            trade_events,
+            trade_event_reconciled,
+            trade_event_ignore,
+            trade_event_restore,
             search_market,
             scan_relic_rewards,
             preview_reward_overlay,
@@ -3186,7 +3354,7 @@ mod tests {
                 app_name: "PlatScope",
                 app_version: "0.1.0",
                 database_path: r"C:\Users\SecretName\AppData\Local\PlatScope\platscope.db".into(),
-                schema_version: 9,
+                schema_version: 10,
                 offline_ready: true,
                 market_snapshot: None,
                 catalog_item_count: Some(3_840),
