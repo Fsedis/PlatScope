@@ -1724,7 +1724,8 @@ td {
   border: 1px solid var(--border);
   border-radius: 0.55rem;
   padding: 0.6rem;
-  background: #0c1728;
+  background: var(--surface-2);
+  color: var(--text);
 }
 
 .wfm-order-heading {
@@ -1737,34 +1738,34 @@ td {
 .wfm-order-heading h3,
 .wfm-order-confirmation h3 {
   margin: 0;
-  color: #edf4f7;
+  color: var(--text);
   font-size: 0.9rem;
 }
 
 .wfm-order-heading > span {
   border-radius: 999px;
   padding: 0.2rem 0.5rem;
-  background: #3a2e1d;
-  color: #e8cc94;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
   font-size: 0.7rem;
   font-weight: 700;
 }
 
 .wfm-order-heading > span.published {
-  background: #163b2e;
-  color: #a8e4c8;
+  background: var(--success-soft);
+  color: oklch(0.37 0.08 145);
 }
 
 .wfm-order-panel p {
   margin: 0;
-  color: #9eb0ba;
+  color: var(--text-muted);
   font-size: 0.75rem;
   line-height: 1.45;
 }
 
 .wfm-order-status {
   min-height: 1.1rem;
-  color: #9fdcc7;
+  color: var(--success);
   font-size: 0.75rem;
   font-weight: 650;
 }
@@ -1776,12 +1777,12 @@ td {
 }
 
 .wfm-order-empty strong {
-  color: #e4edf1;
+  color: var(--text);
   font-size: 0.82rem;
 }
 
 .current-order-line {
-  color: #c8d7dd !important;
+  color: var(--text) !important;
   font-weight: 650;
 }
 
@@ -1803,7 +1804,7 @@ td {
   border: 1px solid var(--border-strong);
   border-radius: 0.5rem;
   padding-inline: 0.65rem;
-  background: #0b1323;
+  background: var(--surface-1);
   color: var(--text);
   font-size: 0.875rem;
 }
@@ -1819,7 +1820,7 @@ td {
   min-height: 2.125rem;
   align-items: center;
   gap: 0.6rem;
-  color: #c8d7dd;
+  color: var(--text);
   font-size: 0.78rem;
   font-weight: 650;
   cursor: pointer;
@@ -1848,37 +1849,38 @@ td {
 }
 
 .wfm-order-panel button.danger-secondary {
-  border-color: #815256;
-  color: #efbfc2;
+  border-color: var(--danger);
+  color: var(--danger);
 }
 
 .wfm-order-panel button.danger-primary {
-  border-color: #c56a70;
-  background: #722d34;
-  color: #fff5f5;
+  border-color: var(--danger);
+  background: var(--danger);
+  color: var(--surface-1);
 }
 
 .wfm-order-confirmation {
   display: grid;
   gap: 0.5rem;
-  border: 1px solid #5c8994;
+  border: 1px solid var(--border-strong);
   border-radius: 0.65rem;
   padding: 0.6rem;
-  background: #11232b;
+  background: var(--surface-1);
+  color: var(--text);
 }
 
 .wfm-order-confirmation.destructive {
-  border-color: #a05d62;
-  background: #28171a;
+  border-color: var(--danger);
+  background: var(--danger-soft);
 }
 
 .wfm-order-confirmation h3:focus-visible {
-  outline: 0.1875rem solid #f3c969;
+  outline: 0.1875rem solid var(--gold);
   outline-offset: 0.1875rem;
 }
 
 .wfm-order-panel .inline-error {
-  color: #ffc0ba;
+  color: var(--danger);
 }
 
 .sell-price-grid .price-grid__primary {
