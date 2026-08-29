@@ -4,13 +4,13 @@ import {
   inventoryCategory,
   type InventoryCategoryFilter,
   type InventorySnapshotMetadata,
+  type InventorySummary,
   type InventoryViewItem,
 } from "./inventory";
 import type { MarketSnapshotSummary } from "./foundation";
 import type {
   LiveQuoteState,
   MarketItemKind,
-  PriceConfidence,
   PriceRecommendation,
 } from "./market";
 
@@ -50,6 +50,8 @@ export interface SellNowSummary {
 
 export interface SellNowView {
   inventoryMetadata: InventorySnapshotMetadata;
+  inventorySummary: InventorySummary;
+  keepCopies: number;
   marketSnapshot: MarketSnapshotSummary | null;
   summary: SellNowSummary;
   rows: SellNowRow[];
@@ -64,18 +66,21 @@ export interface LiveSellNowResult {
   warning: string | null;
 }
 
-export type SellNowPreset = "all" | "sell_now" | "high_priority" | "unpriced";
+export type SellNowPreset =
+  | "sellable"
+  | "sell_now"
+  | "hold"
+  | "all"
+  | "duplicates"
+  | "unpriced"
+  | "attention";
 export type SellNowSortKey = "priority" | "name" | "sellable" | "fair" | "volume" | "trend";
-export type SellNowTimingFilter = "all" | "hold" | "neutral" | "sell" | "peak" | "unknown";
-export type SellNowConfidenceFilter = "all" | PriceConfidence;
 export type SellNowSortDirection = "asc" | "desc";
 
 export interface SellNowFilters {
   query: string;
   category: InventoryCategoryFilter;
   preset: SellNowPreset;
-  confidence: SellNowConfidenceFilter;
-  timing: SellNowTimingFilter;
   sortKey: SellNowSortKey;
   sortDirection: SellNowSortDirection;
 }
@@ -89,7 +94,6 @@ export function filterAndSortSellNowRows(
     .filter((row) => {
       const fair = row.recommendation?.fairPrice ?? null;
       const timing = row.trend?.timing ?? null;
-      const confidence = row.recommendation?.confidence ?? "unknown";
       const matchesQuery =
         !query ||
         row.inventory.displayName.toLocaleLowerCase("ru").includes(query) ||
@@ -100,23 +104,19 @@ export function filterAndSortSellNowRows(
         inventoryCategory(row.inventory) === filters.category;
       const matchesPreset =
         filters.preset === "all" ||
+        (filters.preset === "sellable" && row.inventory.sellableQuantity > 0) ||
         (filters.preset === "sell_now" &&
+          row.inventory.sellableQuantity > 0 &&
           fair !== null &&
           (timing === "sell" || timing === "peak")) ||
-        (filters.preset === "high_priority" && row.priority.band === "high") ||
-        (filters.preset === "unpriced" && fair === null);
-      const matchesConfidence =
-        filters.confidence === "all" || confidence === filters.confidence;
-      const matchesTiming =
-        filters.timing === "all" ||
-        (filters.timing === "unknown" ? timing === null : timing === filters.timing);
-      return (
-        matchesQuery &&
-        matchesCategory &&
-        matchesPreset &&
-        matchesConfidence &&
-        matchesTiming
-      );
+        (filters.preset === "hold" &&
+          row.inventory.sellableQuantity > 0 &&
+          timing === "hold") ||
+        (filters.preset === "duplicates" && row.inventory.ownedQuantity > 1) ||
+        (filters.preset === "unpriced" && fair === null) ||
+        (filters.preset === "attention" &&
+          (row.inventory.resolution !== "resolved" || row.inventory.unknownQuantity > 0));
+      return matchesQuery && matchesCategory && matchesPreset;
     })
     .sort((left, right) => {
       const comparison = compareRows(left, right, filters.sortKey);

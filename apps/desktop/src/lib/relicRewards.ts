@@ -52,6 +52,8 @@ export function ownedSetParts(choice: RelicRewardChoice): string {
 export interface RelicRewardScanView {
   status: string;
   message: string | null;
+  recognizedCount: number;
+  scanDurationMs: number;
   captureWidth: number | null;
   captureHeight: number | null;
   overlayScale: number;

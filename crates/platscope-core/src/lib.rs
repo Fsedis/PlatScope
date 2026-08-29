@@ -324,6 +324,8 @@ pub struct SellNowSummary {
 #[serde(rename_all = "camelCase")]
 pub struct SellNowView {
     pub inventory_metadata: InventorySnapshotMetadata,
+    pub inventory_summary: InventorySummary,
+    pub keep_copies: u32,
     pub market_snapshot: Option<MarketSnapshotSummary>,
     pub summary: SellNowSummary,
     pub rows: Vec<SellNowRow>,
@@ -1606,16 +1608,23 @@ impl SellNowService {
         };
         let market_snapshot = lock_database(database)?.current_market_snapshot()?;
         let inventory_metadata = inventory.metadata;
+        let inventory_summary = inventory.summary;
+        let keep_copies = inventory.keep_copies;
         let inventory_nominal_value = inventory_nominal_value(database, &inventory.items)?;
         let mut rows = Vec::new();
-        for item in inventory.items.into_iter().filter(|item| {
-            item.sellable_quantity > 0 && item.resolution == InventoryResolution::Resolved
-        }) {
-            let Some(key) = item.key.clone() else {
-                continue;
+        for item in inventory.items {
+            let (item_kind, recommendation) = if item.resolution == InventoryResolution::Resolved {
+                if let Some(key) = item.key.as_ref() {
+                    let item_kind = market_item_kind(&item.tags, key);
+                    let recommendation =
+                        PricingService::price_current_variant(database, key, item_kind)?;
+                    (item_kind, recommendation)
+                } else {
+                    (MarketItemKind::Standard, None)
+                }
+            } else {
+                (MarketItemKind::Standard, None)
             };
-            let item_kind = market_item_kind(&item.tags, &key);
-            let recommendation = PricingService::price_current_variant(database, &key, item_kind)?;
             rows.push(build_sell_now_row(
                 database,
                 item,
@@ -1638,6 +1647,8 @@ impl SellNowService {
         let summary = sell_now_summary(&rows, inventory_nominal_value);
         Ok(Some(SellNowView {
             inventory_metadata,
+            inventory_summary,
+            keep_copies,
             market_snapshot,
             summary,
             rows,
@@ -1778,17 +1789,28 @@ fn inventory_nominal_value(
 
 fn sell_now_summary(rows: &[SellNowRow], inventory_nominal_value: f64) -> SellNowSummary {
     SellNowSummary {
-        candidate_rows: rows.len(),
+        candidate_rows: rows
+            .iter()
+            .filter(|row| {
+                row.inventory.sellable_quantity > 0
+                    && row.inventory.resolution == InventoryResolution::Resolved
+            })
+            .count(),
         priced_rows: rows
             .iter()
             .filter(|row| {
-                row.recommendation
-                    .as_ref()
-                    .and_then(|recommendation| recommendation.fair_price)
-                    .is_some()
+                row.inventory.sellable_quantity > 0
+                    && row
+                        .recommendation
+                        .as_ref()
+                        .and_then(|recommendation| recommendation.fair_price)
+                        .is_some()
             })
             .count(),
-        high_priority_rows: rows.iter().filter(|row| row.priority.score >= 50).count(),
+        high_priority_rows: rows
+            .iter()
+            .filter(|row| row.inventory.sellable_quantity > 0 && row.priority.score >= 50)
+            .count(),
         inventory_nominal_value,
         nominal_value: rows.iter().filter_map(|row| row.nominal_value).sum(),
     }
@@ -3198,6 +3220,20 @@ mod tests {
         );
         assert_eq!(sell_now.summary.candidate_rows, 2);
         assert_eq!(sell_now.summary.priced_rows, 2);
+        assert_eq!(sell_now.rows.len() as u64, inventory.metadata.item_count);
+        assert_eq!(
+            sell_now.inventory_summary.owned_quantity,
+            inventory.summary.owned_quantity
+        );
+        assert_eq!(
+            sell_now.inventory_summary.sellable_quantity,
+            inventory.summary.sellable_quantity
+        );
+        assert_eq!(
+            sell_now.inventory_summary.attention_rows,
+            inventory.summary.attention_rows
+        );
+        assert_eq!(sell_now.keep_copies, inventory.keep_copies);
         assert!(sell_now.summary.nominal_value > 0.0);
         assert!(
             sell_now

@@ -38,8 +38,8 @@ External providers
 15. Локализация изменяет только presentation: canonical ID, slug и `MarketVariantKey` не зависят от языка.
 15. Каждый account write требует явного confirmation на service boundary независимо от поведения UI.
 16. Диагностический экран читает сохранённые факты и не превращает открытие UI в network health-check.
-17. Рабочие фильтры и сортировка — локальное presentation state: они хранятся раздельно для Market, Inventory и Sell Now в versioned WebView storage, проходят allowlist-validation и никогда не включают поисковые строки.
-17. Dashboard композиционно читает Inventory, Sell Now и Diagnostics DTO; его открытие не добавляет provider-запросов.
+17. Рабочие фильтры и сортировка — локальное presentation state: Market и единый экран «Мои предметы» имеют отдельные versioned WebView keys, проходят allowlist-validation и никогда не включают поисковые строки.
+18. «Мои предметы» получает единый DTO со всеми строками инвентаря; режимы полного списка, продажи и проверки являются локальными фильтрами, а не отдельными экранами или повторными provider-запросами.
 
 ## Структура workspace
 
@@ -132,7 +132,7 @@ Composition-independent application services: settings, logging, health, `Market
 
 ### Desktop shell
 
-Tauri создаёт окна, определяет data directory `PlatScope`, открывает `platscope.db`, строит сервисы и выдаёт узкие commands. Svelte показывает локальное состояние сразу; Dashboard параллельно композиционно читает существующие `sell_now`, `load_inventory` и `diagnostics_status`, `search_market` читает только текущий LKG, refresh запускается в фоне и возвращает новое command state, а `diagnostics_status` не обращается в сеть и возвращает только безопасные агрегаты SQLite.
+Tauri создаёт окна, определяет data directory `PlatScope`, открывает `platscope.db`, строит сервисы и выдаёт узкие commands. Svelte показывает локальное состояние сразу; единый экран «Мои предметы» читает `sell_now`, который включает metadata, summary и все строки текущего inventory LKG, `search_market` читает только текущий рыночный LKG, refresh запускается в фоне и возвращает новое command state, а `diagnostics_status` не обращается в сеть и возвращает только безопасные агрегаты SQLite.
 
 Отдельный opt-in companion poller принадлежит desktop filesystem boundary. Он читает только явно сохранённый абсолютный путь, требует стабильные size/mtime в двух проходах, memoize-ит попытку для неизменившегося sample и передаёт данные в `InventoryService::import_companion_json`. Core повторно проверяет `InventorySource::OverwolfCompanion` до SQLite promotion; UI получает только событие перечитать локальный LKG.
 
@@ -204,4 +204,4 @@ game_metadata_snapshots
 - `serde` DTO на IPC boundary.
 - Rust workspace — единая версия и единый lint policy.
 
-Продуктовый dashboard намеренно не входит в foundation: до рабочего ingestion UI остаётся диагностическим shell.
+Продуктовая навигация не входит в foundation: Market исследует рынок, «Мои предметы» обслуживают инвентарь и продажу, а специализированные расчёты остаются в аналитике.

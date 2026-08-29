@@ -6,11 +6,10 @@
   import AccountScreen from "./lib/AccountScreen.svelte";
   import AppNavIcon from "./lib/AppNavIcon.svelte";
   import AppUpdatePanel from "./lib/AppUpdatePanel.svelte";
-  import DashboardScreen from "./lib/DashboardScreen.svelte";
   import DiagnosticsScreen from "./lib/DiagnosticsScreen.svelte";
   import HistoryChart from "./lib/HistoryChart.svelte";
   import InsightsScreen from "./lib/InsightsScreen.svelte";
-  import InventoryHubScreen from "./lib/InventoryHubScreen.svelte";
+  import SellNowScreen from "./lib/SellNowScreen.svelte";
   import SettingsScreen from "./lib/SettingsScreen.svelte";
   import { startAutomaticUpdateChecks } from "./lib/appUpdate";
 
@@ -60,18 +59,14 @@
     ru: {
       skip: "Перейти к содержимому",
       navLabel: "Разделы приложения",
-      dashboard: "Обзор",
       market: "Рынок",
-      inventory: "Инвентарь",
-      rewards: "Награды",
+      inventory: "Мои предметы",
       insights: "Аналитика",
       account: "Warframe Market",
       diagnostics: "Состояние данных",
       settings: "Настройки",
-      dashboardLede: "Что выгоднее выставить и какие данные стоит обновить.",
-      marketLede: "Цены, сделки и спрос по последним сохранённым данным.",
-      inventoryLede: "Количество, цены и готовность предметов к продаже.",
-      rewardsLede: "Самая выгодная награда разрыва с учётом цены и завершения сета.",
+      marketLede: "Исследование цены, истории и текущих ордеров любого предмета.",
+      inventoryLede: "Торговый инвентарь, момент продажи и ордера Warframe Market в одном месте.",
       insightsLede: "Что выгодно дособрать, продать комплектом или оценить отдельно.",
       accountLede: "Подключение аккаунта и управление выставленными ордерами.",
       diagnosticsLede: "Что загружено, что устарело и где возникла ошибка.",
@@ -89,24 +84,20 @@
       first60: "Показаны первые 60 вариантов. Уточните запрос, чтобы сократить список.", noQuery: (query: string) => `По запросу «${query}» ничего не найдено`, noFilter: "Для этого фильтра ничего не найдено", checkSpelling: "Проверьте название предмета.", choosePriceFilter: "Выберите другой фильтр цены.", clearSearch: "Очистить поиск",
       relic: "Реликвия", riven: "Мод разлома", marketItem: "Предмет рынка", gettingLive: "Получаем текущие цены…", updateLive: "Обновить текущие цены", getLive: "Проверить текущие цены", liveHint: "Покажет активные ордера для выбранного варианта.", dataDate: "Цена рассчитана по данным от", masteryRequirement: "Ранг мастерства", whyPrice: "Как рассчитана цена?",
       marketData: "Данные рынка", dataReady: "Загружены", dataMissing: "Не загружены",
-      fair: "Цена", fairPrice: "Оценка рынка", listPrice: "Цена ордера", closedVolume: "Закрытые сделки", lowestAsk: "Минимальная цена продажи", depthThree: "Средняя цена до 3 шт.", depthPrice: "Средняя цена до 5 шт.", quickSell: "Продать сейчас", sell: "продажа", buy: "покупка", currentOrders: "Активные ордера", side: "Тип", price: "Цена", quantityLot: "Количество · лот", playerStatus: "Статус", sellOrder: "Продажа", buyOrder: "Покупка", noActiveOrders: "Для этого варианта нет активных ордеров.",
+      fair: "Цена", fairPrice: "Оценка рынка", listPrice: "Ориентир размещения", closedVolume: "Закрытые сделки", lowestAsk: "Минимальная цена продажи", depthThree: "Средняя цена до 3 шт.", depthPrice: "Средняя цена до 5 шт.", quickSell: "Лучшая заявка на покупку", sell: "продажа", buy: "покупка", currentOrders: "Активные ордера", side: "Тип", price: "Цена", quantityLot: "Количество · лот", playerStatus: "Статус", sellOrder: "Продажа", buyOrder: "Покупка", noActiveOrders: "Для этого варианта нет активных ордеров.",
       priceHistory: "История цены", historyRange: "Период", dayShort: "д", loadingHistory: "Загружаем историю…", historyCoverage: (points: number, coverage: number) => `${points} дней · доступно ${coverage} дней истории`, selectForHistory: "Выберите строку, чтобы посмотреть историю цены.", median: "Медиана", change: "Изменение", averageVolume: "Средний объём", insufficientChart: "Пока недостаточно данных для графика. История накопится после обновлений рынка.", itemDetails: "Подробности предмета", selectItem: "Выберите предмет в таблице, чтобы увидеть цену и расчёт.",
     },
     en: {
       skip: "Skip to content",
       navLabel: "Application sections",
-      dashboard: "Overview",
       market: "Market",
-      inventory: "Inventory",
-      rewards: "Rewards",
+      inventory: "My items",
       insights: "Insights",
       account: "Warframe Market",
       diagnostics: "Data status",
       settings: "Settings",
-      dashboardLede: "What to list first and which data needs an update.",
-      marketLede: "Search a validated local snapshot without a network request for every row.",
-      inventoryLede: "Items, quantities, prices, and sell readiness in one section.",
-      rewardsLede: "Pick the most valuable fissure reward, including set completion value.",
+      marketLede: "Research price, history, and current orders for any market item.",
+      inventoryLede: "Market inventory, sell timing, and Warframe Market orders in one place.",
       insightsLede: "Finish profitable sets, list complete ones, or inspect specialized market calculations.",
       accountLede: "Connect your account and manage listed orders.",
       diagnosticsLede: "Provider, local cache, and data coverage status without reading terminal logs.",
@@ -140,7 +131,6 @@
   let historyIdentity = "";
   let historyRange: 7 | 30 | 90 = 7;
   type AppScreen =
-    | "dashboard"
     | "market"
     | "inventory"
     | "insights"
@@ -148,10 +138,7 @@
     | "diagnostics"
     | "settings";
 
-  type InventoryMode = "all" | "sell";
-
   let activeScreen: AppScreen = "inventory";
-  let inventoryMode: InventoryMode = "sell";
   let pageHeading: HTMLHeadingElement;
   let selectedIdentity = "";
   let query = "";
@@ -173,8 +160,7 @@
   let historySequence = 0;
   let keyboardNavigation = false;
 
-  function navigateTo(screen: AppScreen, mode?: InventoryMode): void {
-    if (mode) inventoryMode = mode;
+  function navigateTo(screen: AppScreen): void {
     activeScreen = screen;
     void tick().then(() => {
       window.scrollTo({ top: 0, left: 0 });
@@ -380,7 +366,6 @@
 
   function screenTitle(screen: AppScreen, selectedCopy: typeof shell): string {
     return {
-      dashboard: selectedCopy.dashboard,
       market: selectedCopy.market,
       inventory: selectedCopy.inventory,
       insights: selectedCopy.insights,
@@ -392,7 +377,6 @@
 
   function screenLede(screen: AppScreen, selectedCopy: typeof shell): string {
     return {
-      dashboard: selectedCopy.dashboardLede,
       market: selectedCopy.marketLede,
       inventory: selectedCopy.inventoryLede,
       insights: selectedCopy.insightsLede,
@@ -486,12 +470,6 @@
     <nav class="section-tabs" aria-label={shell.navLabel}>
         <button
           type="button"
-          class:active={activeScreen === "dashboard"}
-          aria-current={activeScreen === "dashboard" ? "page" : undefined}
-          onclick={() => navigateTo("dashboard")}
-        ><AppNavIcon screen="dashboard" /><span>{shell.dashboard}</span></button>
-        <button
-          type="button"
           class:active={activeScreen === "market"}
           aria-current={activeScreen === "market" ? "page" : undefined}
           onclick={() => navigateTo("market")}
@@ -547,13 +525,7 @@
   <div class="screen-body">
 
   {#key $locale}
-  {#if activeScreen === "dashboard"}
-    <DashboardScreen
-      onOpenSellNow={() => navigateTo("inventory", "sell")}
-      onOpenInventory={() => navigateTo("inventory", "all")}
-      onOpenDiagnostics={() => navigateTo("diagnostics")}
-    />
-  {:else if activeScreen === "market"}
+  {#if activeScreen === "market"}
   <div class="live-region" role="status" aria-live="polite">
     {#if loading}
       {shell.openingStorage}
@@ -867,9 +839,7 @@
     </div>
   {/if}
   {:else if activeScreen === "inventory"}
-    <InventoryHubScreen
-      mode={inventoryMode}
-      onModeChange={(mode) => (inventoryMode = mode)}
+    <SellNowScreen
       onInventoryChange={() => void loadStatus()}
       onOpenAccount={() => navigateTo("account")}
     />
@@ -879,7 +849,7 @@
       onOpenAccount={() => navigateTo("account")}
     />
   {:else if activeScreen === "account"}
-    <AccountScreen onOpenSellQueue={() => navigateTo("inventory", "sell")} />
+    <AccountScreen onOpenSellQueue={() => navigateTo("inventory")} />
   {:else if activeScreen === "diagnostics"}
     <DiagnosticsScreen />
   {:else if activeScreen === "settings"}

@@ -14,8 +14,6 @@ const filters: SellNowFilters = {
   query: "",
   category: "all",
   preset: "all",
-  confidence: "all",
-  timing: "all",
   sortKey: "priority",
   sortDirection: "desc",
 };
@@ -177,6 +175,28 @@ describe("sell now presentation", () => {
       { ...filters, preset: "sell_now" },
     );
     expect(result.map((item) => item.inventory.canonicalGameId)).toEqual(["sell"]);
+  });
+
+  it("uses one row set for selling and full inventory views", () => {
+    const sellable = row("sellable", 60, 20, "sell");
+    const reserved = row("reserved", 0, 10, "neutral");
+    reserved.inventory.sellableQuantity = 0;
+    const attention = row("attention", 0, null, null);
+    attention.inventory.sellableQuantity = 0;
+    attention.inventory.resolution = "exact_variant_unavailable";
+
+    expect(filterAndSortSellNowRows([sellable, reserved, attention], {
+      ...filters,
+      preset: "sellable",
+    })).toEqual([sellable]);
+    expect(filterAndSortSellNowRows([sellable, reserved, attention], {
+      ...filters,
+      preset: "all",
+    })).toHaveLength(3);
+    expect(filterAndSortSellNowRows([sellable, reserved, attention], {
+      ...filters,
+      preset: "attention",
+    })).toEqual([attention]);
   });
 
   it("filters mutually exclusive item types", () => {

@@ -70,7 +70,11 @@
         <article class:recommended={reward.recommended} class:uncertain={reward.confidence < 0.75}>
           <header class="card-topline">
             <span>Вариант {index + 1}</span>
-            {#if reward.recommended}<strong>Лучший выбор</strong>{/if}
+            {#if !reward.itemId}
+              <strong class="recognition-warning">Не распознано</strong>
+            {:else if reward.recommended}
+              <strong>Лучший выбор</strong>
+            {/if}
           </header>
 
           <div class="reward-main">
@@ -168,6 +172,8 @@
 
   .overlay-grid {
     display: grid;
+    grid-auto-rows: max-content;
+    align-items: start;
     gap: 4px;
     transform-origin: left top;
   }
@@ -175,7 +181,8 @@
   article {
     position: relative;
     display: grid;
-    grid-template-rows: auto auto auto 1fr;
+    grid-template-rows: auto auto auto auto;
+    align-self: start;
     gap: 0.55rem;
     min-width: 0;
     padding: 0.72rem;
@@ -233,6 +240,10 @@
     color: var(--surface-1);
     font-size: 0.7rem;
     letter-spacing: 0.02em;
+  }
+
+  .card-topline strong.recognition-warning {
+    background: var(--danger-strong, oklch(0.49 0.15 28));
   }
 
   .reward-main {
@@ -333,9 +344,9 @@
   .set-card {
     position: relative;
     display: grid;
-    grid-template-rows: auto auto auto 1fr;
+    grid-template-rows: auto auto auto auto;
     gap: 0.38rem;
-    align-self: stretch;
+    align-self: start;
     min-width: 0;
     overflow: hidden;
     border-radius: 0.58rem;
@@ -416,6 +427,10 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
     align-content: start;
     gap: 0.32rem;
+  }
+
+  .set-parts > .part-chip:last-child:nth-child(odd) {
+    grid-column: 1 / -1;
   }
 
   .part-chip {

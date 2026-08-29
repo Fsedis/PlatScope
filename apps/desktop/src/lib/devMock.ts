@@ -435,6 +435,8 @@ export async function installMarketBrowserMock(): Promise<void> {
       return {
         status: "ok",
         message: null,
+        recognizedCount: rewards.length,
+        scanDurationMs: 620,
         captureWidth: 1920,
         captureHeight: 1080,
         overlayScale: Number.isFinite(requestedOverlayScale) ? requestedOverlayScale : 1,
@@ -913,7 +915,6 @@ function makeInsightsView(): InsightsView {
 function makeSellNowView(): SellNowView {
   const scopedInventory = localizeInventoryView(inventory);
   const sellRows = scopedInventory.items
-    .filter((item) => item.resolution === "resolved" && item.sellableQuantity > 0 && item.key)
     .map((item): SellNowRow => {
       const marketRow = rows.find((candidate) => candidate.recommendation.key.slug === item.key?.slug);
       const localizedItem = item;
@@ -922,29 +923,31 @@ function makeSellNowView(): SellNowView {
         : null;
       const isNyx = item.key?.slug === "nyx_prime_set";
       const fair = recommendation?.fairPrice ?? null;
-      const priorityScore = isNyx ? 67 : 61;
+      const priorityScore = item.sellableQuantity > 0 && recommendation ? (isNyx ? 67 : 61) : 0;
       return {
         inventory: localizedItem,
         itemKind: marketRow?.itemKind ?? "standard",
         recommendation,
-        trend: {
-          median7d: isNyx ? 81 : 70,
-          median30d: isNyx ? 76 : 68,
-          median90d: isNyx ? 72 : 65,
-          change7d: isNyx ? 17.6 : 6.2,
-          change30d: isNyx ? 11.5 : 3.4,
-          change90d: isNyx ? 24.5 : -8.7,
-          volumeAvg7d: isNyx ? 11 : 45,
-          volumeAvg30d: isNyx ? 9 : 41,
-          volumeAvg90d: isNyx ? 8 : 37,
-          historicalLow: isNyx ? 70 : 62,
-          historicalHigh: isNyx ? 87 : 75,
-          timing: isNyx ? "peak" : "sell",
-          trustedDays: 90,
-        },
+        trend: recommendation
+          ? {
+              median7d: isNyx ? 81 : 70,
+              median30d: isNyx ? 76 : 68,
+              median90d: isNyx ? 72 : 65,
+              change7d: isNyx ? 17.6 : 6.2,
+              change30d: isNyx ? 11.5 : 3.4,
+              change90d: isNyx ? 24.5 : -8.7,
+              volumeAvg7d: isNyx ? 11 : 45,
+              volumeAvg30d: isNyx ? 9 : 41,
+              volumeAvg90d: isNyx ? 8 : 37,
+              historicalLow: isNyx ? 70 : 62,
+              historicalHigh: isNyx ? 87 : 75,
+              timing: isNyx ? "peak" : "sell",
+              trustedDays: 90,
+            }
+          : null,
         priority: {
           score: priorityScore,
-          band: "high",
+          band: priorityScore >= 50 ? "high" : "none",
           factors: {
             quantity: item.sellableQuantity / 5,
             price: fair === null ? 0 : fair / (fair + 50),
@@ -964,12 +967,23 @@ function makeSellNowView(): SellNowView {
     })
     .sort((left, right) => right.priority.score - left.priority.score);
   return {
-    inventoryMetadata: inventory.metadata,
+    inventoryMetadata: scopedInventory.metadata,
+    inventorySummary: scopedInventory.summary,
+    keepCopies: scopedInventory.keepCopies,
     marketSnapshot: snapshot,
     summary: {
-      candidateRows: sellRows.length,
-      pricedRows: sellRows.filter((row) => row.recommendation?.fairPrice !== null).length,
-      highPriorityRows: sellRows.filter((row) => row.priority.band === "high").length,
+      candidateRows: sellRows.filter(
+        (row) => row.inventory.resolution === "resolved" && row.inventory.sellableQuantity > 0,
+      ).length,
+      pricedRows: sellRows.filter(
+        (row) =>
+          row.inventory.resolution === "resolved" &&
+          row.inventory.sellableQuantity > 0 &&
+          row.recommendation?.fairPrice !== null,
+      ).length,
+      highPriorityRows: sellRows.filter(
+        (row) => row.inventory.sellableQuantity > 0 && row.priority.band === "high",
+      ).length,
       inventoryNominalValue: scopedInventory.items.reduce((sum, item) => {
         const marketRow = rows.find((row) => row.recommendation.key.slug === item.key?.slug);
         const recommendation = marketRow

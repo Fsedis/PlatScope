@@ -208,6 +208,8 @@ struct RelicRewardChoice {
 struct RelicRewardScanView {
     status: String,
     message: Option<String>,
+    recognized_count: usize,
+    scan_duration_ms: u64,
     capture_width: Option<u32>,
     capture_height: Option<u32>,
     overlay_scale: f64,
@@ -1140,10 +1142,19 @@ async fn scan_relic_rewards(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<RelicRewardScanView, String> {
-    state
+    let total_started = Instant::now();
+    if state
         .reward_scan_in_flight
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .map_err(|_| "Распознавание наград уже выполняется.".to_owned())?;
+        .is_err()
+    {
+        tracing::info!(
+            event = "reward_scan_skipped",
+            reason = "already_in_flight",
+            "duplicate reward OCR request skipped"
+        );
+        return Err("Распознавание наград уже выполняется.".to_owned());
+    }
     let _scan_guard = RewardScanGuard(&state.reward_scan_in_flight);
     let executable = find_reward_ocr_executable(&app)?;
     let tessdata_path = executable
@@ -1151,12 +1162,36 @@ async fn scan_relic_rewards(
         .map(|parent| parent.join("tessdata"))
         .filter(|path| path.join("rus.traineddata").is_file())
         .map(|path| path.display().to_string());
-    let (settings, request, insights) = reward_scan_inputs(&state, image_path, tessdata_path)?;
+    let inputs_started = Instant::now();
+    let (settings, request) = reward_scan_inputs(&state, image_path, tessdata_path)?;
+    let inputs_ms = elapsed_millis(inputs_started);
+    let ocr_started = Instant::now();
     let response =
         tauri::async_runtime::spawn_blocking(move || run_reward_ocr_process(&executable, &request))
             .await
             .map_err(|error| format!("OCR process join failed: {error}"))??;
-    let view = build_reward_scan_view(&state, &settings, insights.as_ref(), response)?;
+    let ocr_ms = elapsed_millis(ocr_started);
+    let slots = response.rewards.len();
+    let recognized = response
+        .rewards
+        .iter()
+        .filter(|reward| reward.item_id.is_some())
+        .count();
+    let enrichment_started = Instant::now();
+    let mut view = build_reward_scan_view(&state, &settings, response)?;
+    let enrichment_ms = elapsed_millis(enrichment_started);
+    view.scan_duration_ms = elapsed_millis(total_started);
+    tracing::info!(
+        event = "reward_scan_completed",
+        status = %view.status,
+        recognized,
+        slots,
+        inputs_ms,
+        ocr_ms,
+        enrichment_ms,
+        total_ms = view.scan_duration_ms,
+        "reward OCR and local enrichment completed"
+    );
     publish_reward_scan(&app, &state, &settings, &view)?;
     Ok(view)
 }
@@ -1174,7 +1209,7 @@ fn preview_reward_overlay(
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "Сначала обновите данные предметов в настройках.".to_owned())?;
     let response = build_reward_preview_response(&insights, &rect)?;
-    let view = build_reward_scan_view(&state, &settings, Some(&insights), response)?;
+    let view = build_reward_scan_view(&state, &settings, response)?;
     present_reward_scan(&app, &state, &settings, &view)?;
     Ok(view)
 }
@@ -1210,7 +1245,7 @@ fn present_reward_scan(
 ) -> Result<(), String> {
     app.emit("relic-rewards-updated", view)
         .map_err(|error| error.to_string())?;
-    if view.status != "ok" || view.rewards.len() < 2 {
+    if view.status != "ok" || view.recognized_count < 2 {
         hide_reward_overlay(app);
         return Ok(());
     }
@@ -1249,7 +1284,7 @@ fn reward_scan_inputs(
     state: &AppState,
     image_path: Option<String>,
     tessdata_path: Option<String>,
-) -> Result<(AppSettings, RewardOcrRequest, Option<InsightsView>), String> {
+) -> Result<(AppSettings, RewardOcrRequest), String> {
     let is_live_capture = image_path.as_deref().is_none_or(str::is_empty);
     let active_relic_paths = state
         .reward_relic_paths
@@ -1268,8 +1303,6 @@ fn reward_scan_inputs(
         let catalog = build_reward_ocr_catalog(&database, &active_relic_paths)?;
         (settings, catalog)
     };
-    let insights =
-        InsightsService::view(&state.database, &settings).map_err(|error| error.to_string())?;
     Ok((
         settings,
         RewardOcrRequest {
@@ -1277,11 +1310,10 @@ fn reward_scan_inputs(
             image_path,
             tessdata_path,
             ui_scale: None,
-            max_attempts: if is_live_capture { 10 } else { 1 },
-            retry_interval_ms: if is_live_capture { 450 } else { 0 },
-            initial_delay_ms: if is_live_capture { 500 } else { 0 },
+            max_attempts: if is_live_capture { 6 } else { 1 },
+            retry_interval_ms: if is_live_capture { 250 } else { 0 },
+            initial_delay_ms: if is_live_capture { 300 } else { 0 },
         },
-        insights,
     ))
 }
 
@@ -1308,17 +1340,17 @@ fn build_reward_ocr_catalog(
                 .filter_map(|reward| reward.reward_slug.clone())
         })
         .collect();
-    let restrict_to_active_relics = !active_reward_slugs.is_empty();
     let prime_slugs: HashSet<_> = metadata
         .prime_parts
         .iter()
         .map(|part| part.slug.as_str())
         .collect();
     let mut result = Vec::new();
-    for item in market_catalog.items.into_iter().filter(|item| {
-        prime_slugs.contains(item.slug.as_str())
-            && (!restrict_to_active_relics || active_reward_slugs.contains(&item.slug))
-    }) {
+    for item in market_catalog
+        .items
+        .into_iter()
+        .filter(|item| prime_slugs.contains(item.slug.as_str()))
+    {
         if let Some(name) = russian_reward_ocr_name(item.display_name_ru) {
             result.push(RewardOcrCatalogItem {
                 item_id: item.item_id,
@@ -1327,6 +1359,10 @@ fn build_reward_ocr_catalog(
             });
         }
     }
+    // Relics seen in the log are a useful hint, not a complete party roster: players can join
+    // after the first projections were loaded. Keep every prime reward available to OCR and only
+    // move likely rewards to the front so late joiners' choices cannot become unrecognizable.
+    result.sort_by_key(|item| !active_reward_slugs.contains(&item.slug));
     if result.is_empty() {
         return Err(
             "В данных рынка нет русских названий наград. Обновите данные рынка в настройках."
@@ -1472,88 +1508,26 @@ fn reward_preview_match(slot: usize, component: &SetComponentInsight) -> RewardO
 fn build_reward_scan_view(
     state: &AppState,
     settings: &AppSettings,
-    insights: Option<&InsightsView>,
     response: RewardOcrResponse,
 ) -> Result<RelicRewardScanView, String> {
     let (metadata, inventory, catalog) = reward_scan_local_data(state, settings)?;
     let overlay_scale = reward_scan_overlay_scale(&response, settings);
+    let slot_count = response.rewards.len();
+    let recognized_count = response
+        .rewards
+        .iter()
+        .filter(|reward| reward.item_id.is_some())
+        .count();
     let mut rewards = Vec::with_capacity(response.rewards.len());
     for reward in response.rewards {
-        let mut market = if let (Some(item_id), Some(name)) = (&reward.item_id, &reward.name) {
-            MarketBrowserService::search(
-                &state.database,
-                name,
-                12,
-                Language::Russian,
-                settings.platform,
-            )
-            .map_err(|error| error.to_string())?
-            .rows
-            .into_iter()
-            .find(|row| row.item_id == *item_id)
-        } else {
-            None
-        };
-        override_reward_market_image(&mut market, metadata.as_ref(), reward.slug.as_deref());
-        let completes_set = reward
-            .slug
-            .as_deref()
-            .and_then(|slug| reward_set_completion(insights, slug));
-        let ducats = reward
-            .slug
-            .as_deref()
-            .and_then(|slug| reward_ducats(metadata.as_ref(), slug));
-        let owned_quantity = reward
-            .slug
-            .as_deref()
-            .and_then(|slug| reward_owned_quantity(inventory.as_ref(), slug));
-        let set = reward
-            .slug
-            .as_deref()
-            .map(|slug| {
-                reward_set_overview(
-                    &state.database,
-                    settings,
-                    insights,
-                    metadata.as_ref(),
-                    inventory.as_ref(),
-                    &catalog,
-                    slug,
-                )
-            })
-            .transpose()?
-            .flatten();
-        let part_value = market.as_ref().and_then(|row| {
-            row.recommendation
-                .fair_price
-                .or(row.recommendation.list_price)
-                .or(row.recommendation.quick_sell)
-        });
-        let choice_value = [
-            part_value,
-            completes_set
-                .as_ref()
-                .and_then(|completion| completion.incremental_value),
-        ]
-        .into_iter()
-        .flatten()
-        .reduce(f64::max);
-        let display_name = reward_display_name(market.as_ref(), reward.name);
-        rewards.push(RelicRewardChoice {
-            slot: reward.slot,
-            raw_text: reward.raw_text,
-            confidence: reward.confidence,
-            item_id: reward.item_id,
-            slug: reward.slug,
-            display_name,
-            market,
-            ducats,
-            owned_quantity,
-            set,
-            completes_set,
-            choice_value,
-            recommended: false,
-        });
+        rewards.push(build_reward_choice(
+            state,
+            settings,
+            metadata.as_ref(),
+            inventory.as_ref(),
+            &catalog,
+            reward,
+        )?);
     }
 
     if let Some(best_value) = rewards
@@ -1570,12 +1544,115 @@ fn build_reward_scan_view(
 
     Ok(RelicRewardScanView {
         status: response.status,
-        message: response.message,
+        message: if recognized_count < slot_count {
+            Some(format!(
+                "Распознано {recognized_count} из {slot_count} наград."
+            ))
+        } else {
+            response.message
+        },
+        recognized_count,
+        scan_duration_ms: 0,
         capture_width: response.capture_width,
         capture_height: response.capture_height,
         overlay_scale,
         theme: response.theme,
         rewards,
+    })
+}
+
+fn build_reward_choice(
+    state: &AppState,
+    settings: &AppSettings,
+    metadata: Option<&GameMetadataSnapshot>,
+    inventory: Option<&InventoryView>,
+    catalog: &RewardCatalogDetails,
+    reward: RewardOcrMatch,
+) -> Result<RelicRewardChoice, String> {
+    let mut market = if let (Some(item_id), Some(name)) = (&reward.item_id, &reward.name) {
+        MarketBrowserService::search(
+            &state.database,
+            name,
+            12,
+            Language::Russian,
+            settings.platform,
+        )
+        .map_err(|error| error.to_string())?
+        .rows
+        .into_iter()
+        .find(|row| row.item_id == *item_id)
+    } else {
+        None
+    };
+    override_reward_market_image(&mut market, metadata, reward.slug.as_deref());
+    let completes_set = reward
+        .slug
+        .as_deref()
+        .map(|slug| {
+            reward_set_completion(
+                &state.database,
+                settings,
+                metadata,
+                inventory,
+                catalog,
+                slug,
+            )
+        })
+        .transpose()?
+        .flatten();
+    let ducats = reward
+        .slug
+        .as_deref()
+        .and_then(|slug| reward_ducats(metadata, slug));
+    let owned_quantity = reward
+        .slug
+        .as_deref()
+        .and_then(|slug| reward_owned_quantity(inventory, slug));
+    let set = reward
+        .slug
+        .as_deref()
+        .map(|slug| {
+            reward_set_overview(
+                &state.database,
+                settings,
+                metadata,
+                inventory,
+                catalog,
+                slug,
+            )
+        })
+        .transpose()?
+        .flatten();
+    let part_value = market.as_ref().and_then(|row| {
+        row.recommendation
+            .fair_price
+            .or(row.recommendation.list_price)
+            .or(row.recommendation.quick_sell)
+    });
+    let choice_value = [
+        part_value,
+        completes_set
+            .as_ref()
+            .and_then(|completion| completion.incremental_value),
+    ]
+    .into_iter()
+    .flatten()
+    .reduce(f64::max);
+    let display_name = reward_display_name(market.as_ref(), reward.name);
+    Ok(RelicRewardChoice {
+        slot: reward.slot,
+        raw_text: reward.raw_text,
+        confidence: reward.confidence,
+        item_id: reward.item_id,
+        slug: reward.slug,
+        display_name,
+        market,
+        ducats,
+        owned_quantity,
+        set,
+        completes_set,
+        choice_value,
+        recommended: false,
     })
 }
 
@@ -1687,7 +1764,6 @@ fn reward_owned_quantity(inventory: Option<&InventoryView>, reward_slug: &str) -
 fn reward_set_overview(
     database: &Mutex<Database>,
     settings: &AppSettings,
-    insights: Option<&InsightsView>,
     metadata: Option<&GameMetadataSnapshot>,
     inventory: Option<&InventoryView>,
     catalog: &RewardCatalogDetails,
@@ -1702,7 +1778,7 @@ fn reward_set_overview(
             .iter()
             .any(|component| component.slug == reward_slug)
     }) {
-        let set_price = reward_set_price(database, settings, insights, definition)?;
+        let set_price = reward_set_price(database, settings, definition)?;
         let mut parts = Vec::with_capacity(definition.components.len());
         let mut ready_components = inventory.map(|_| 0_u32);
         for component in &definition.components {
@@ -1758,20 +1834,8 @@ fn reward_set_overview(
 fn reward_set_price(
     database: &Mutex<Database>,
     settings: &AppSettings,
-    insights: Option<&InsightsView>,
     definition: &PrimeSetDefinition,
 ) -> Result<Option<f64>, String> {
-    if let Some(price) = insights
-        .and_then(|view| {
-            view.sets
-                .iter()
-                .find(|set| set.definition.set_slug == definition.set_slug)
-        })
-        .and_then(|set| set.set_recommendation.as_ref())
-        .and_then(|price| price.fair_price.or(price.list_price).or(price.quick_sell))
-    {
-        return Ok(Some(price));
-    }
     let key = MarketVariantKey::new(
         definition.set_slug.clone(),
         settings.platform,
@@ -2292,31 +2356,38 @@ fn run_reward_ocr_process(
 }
 
 fn reward_set_completion(
-    insights: Option<&InsightsView>,
+    database: &Mutex<Database>,
+    settings: &AppSettings,
+    metadata: Option<&GameMetadataSnapshot>,
+    inventory: Option<&InventoryView>,
+    catalog: &RewardCatalogDetails,
     reward_slug: &str,
-) -> Option<RewardSetCompletion> {
+) -> Result<Option<RewardSetCompletion>, String> {
+    let (Some(metadata), Some(inventory)) = (metadata, inventory) else {
+        return Ok(None);
+    };
     let mut best: Option<RewardSetCompletion> = None;
-    for set in &insights?.sets {
-        if !set
-            .components
+    for definition in metadata.prime_sets.iter().filter(|set| {
+        set.components
             .iter()
-            .any(|component| component.definition.slug == reward_slug)
-        {
-            continue;
-        }
-        let before = set
-            .components
-            .iter()
-            .map(|component| component.owned_quantity / component.definition.required_quantity)
-            .min()
-            .unwrap_or(0);
-        let after = set
+            .any(|component| component.slug == reward_slug)
+    }) {
+        let before = definition
             .components
             .iter()
             .map(|component| {
-                let gained = u32::from(component.definition.slug == reward_slug);
-                component.owned_quantity.saturating_add(gained)
-                    / component.definition.required_quantity
+                reward_owned_quantity(Some(inventory), &component.slug).unwrap_or(0)
+                    / component.required_quantity
+            })
+            .min()
+            .unwrap_or(0);
+        let after = definition
+            .components
+            .iter()
+            .map(|component| {
+                let owned = reward_owned_quantity(Some(inventory), &component.slug).unwrap_or(0);
+                let gained = u32::from(component.slug == reward_slug);
+                owned.saturating_add(gained) / component.required_quantity
             })
             .min()
             .unwrap_or(0);
@@ -2324,30 +2395,35 @@ fn reward_set_completion(
             continue;
         }
 
-        let set_price = set
-            .set_recommendation
-            .as_ref()
-            .and_then(|price| price.fair_price.or(price.list_price).or(price.quick_sell));
-        let owned_parts_value = set
-            .components
-            .iter()
-            .map(|component| {
-                let price = component.recommendation.as_ref()?.fair_price?;
-                Some(
-                    price
-                        * f64::from(
-                            component
-                                .owned_quantity
-                                .min(component.definition.required_quantity),
-                        ),
-                )
-            })
-            .sum::<Option<f64>>();
+        let set_price = reward_set_price(database, settings, definition)?;
+        let mut owned_parts_value = Some(0.0);
+        for component in &definition.components {
+            let key = MarketVariantKey::new(
+                component.slug.clone(),
+                settings.platform,
+                None,
+                None::<String>,
+            )
+            .map_err(|error| error.to_string())?;
+            let price =
+                PricingService::price_current_variant(database, &key, MarketItemKind::Standard)
+                    .map_err(|error| error.to_string())?
+                    .and_then(|price| price.fair_price);
+            let owned = reward_owned_quantity(Some(inventory), &component.slug)
+                .unwrap_or(0)
+                .min(component.required_quantity);
+            owned_parts_value = owned_parts_value
+                .zip(price)
+                .map(|(total, price)| total + price * f64::from(owned));
+        }
         let incremental_value = set_price
             .zip(owned_parts_value)
             .map(|(set_value, parts_value)| (set_value - parts_value).max(0.0));
         let candidate = RewardSetCompletion {
-            set_name: set.definition.display_name_en.clone(),
+            set_name: catalog.get(&definition.set_slug).map_or_else(
+                || definition.display_name_en.clone(),
+                |(name, _)| name.clone(),
+            ),
             set_price,
             incremental_value,
         };
@@ -2360,7 +2436,11 @@ fn reward_set_completion(
             best = Some(candidate);
         }
     }
-    best
+    Ok(best)
+}
+
+fn elapsed_millis(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 #[tauri::command]

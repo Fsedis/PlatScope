@@ -73,7 +73,7 @@ Digital Extremes не публикует allowlist и не гарантируе�
 
 Helper adapter читает только объекты с canonical `ItemType`, опциональными `ItemCount` и `Rank`/`UpgradeLevel`. Повторяющиеся exact rows группируются с checked arithmetic. Поддерживаются raw inventory response и Overwolf-style wrapper с `value` object/JSON string. Raw JSON после нормализации не сохраняется.
 
-Внешний export не доказывает instance tradeability. Все его строки получают `Tradeability::Unknown`: они могут участвовать в owned/set/relic представлениях, но имеют `sellable = 0` и не появляются в Sell Now. Это намеренная fail-closed граница, а не недостаток распознавания.
+Внешний export не доказывает instance tradeability. Все его строки получают `Tradeability::Unknown`: они могут участвовать в owned/set/relic расчётах, но имеют `sellable = 0` и не появляются в торговом интерфейсе «Мои предметы». Это намеренная fail-closed граница, а не недостаток распознавания.
 
 Из внешних инструментов перенесён только MIT-код scanner TennoWorth с обязательной атрибуцией. `warframe-api-helper` не используется из-за несовместимого Commons Clause.
 
@@ -99,12 +99,11 @@ sellable = min(tradeable, owned - max(Keep N, untradeable))
 
 Миграция 6 добавляет `inventory_snapshots` и `inventory_items`. Новый снимок становится текущим одной транзакцией; invalid/partial import не изменяет предыдущий LKG. Raw JSON после validation не сохраняется.
 
-Экран Inventory показывает распознанные tradeable-предметы, owned/sellable, источник и абсолютное время снимка. Предмет с известным catalog ID, но без точного rank/subtype, остаётся видимым в полном инвентаре со статусом «Ранг не определён» и `sellable = 0`; в режим продажи он не попадает. Unknown и ambiguous ID по-прежнему скрыты, чтобы не выдавать неподтверждённое сопоставление за реальный предмет. Фильтры комбинируются независимо:
+Экран «Мои предметы» показывает распознанные торговые строки, owned/sellable, источник и абсолютное время снимка. Предмет с известным catalog ID, но без точного rank/subtype, остаётся видимым со статусом проверки и `sellable = 0`; создать ордер для него нельзя. Unknown tradeability и неизвестные item ID не проходят границу торгового UI. Фильтры комбинируются независимо:
 
 - category;
-- sellable/tradeable/untradeable/unknown/attention;
+- весь инвентарь / к продаже / продавать сейчас / лучше подождать / требуют проверки;
 - duplicates;
-- vaulted/available/unknown;
 - priced/unpriced;
 - `Keep 0/1/2`.
 

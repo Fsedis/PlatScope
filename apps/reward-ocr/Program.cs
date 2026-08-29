@@ -19,10 +19,10 @@ internal static class Program
     private const int RewardYDisplay = 316;
     private const int RewardLineHeight = 48;
     private static readonly int[] RewardSlotLayouts = [4, 3, 2];
-    private const int DefaultMaxAttempts = 10;
-    private const int DefaultRetryIntervalMs = 450;
-    private const int DefaultInitialDelayMs = 500;
-    private const int RetryWindowMs = 5_000;
+    private const int DefaultMaxAttempts = 6;
+    private const int DefaultRetryIntervalMs = 250;
+    private const int DefaultInitialDelayMs = 300;
+    private const int RetryWindowMs = 2_400;
     private const string OcrLanguage = "rus";
     private const string EmbeddedTessdataName = "PlatScope.RewardOcr.rus.traineddata";
     private const string RussianCharacterWhitelist =
@@ -832,7 +832,7 @@ internal sealed record ThemeInfo(string Name, Color Primary, Color Secondary, Co
 internal sealed class RewardWatcherState
 {
     private static readonly TimeSpan ProjectionGroupGap = TimeSpan.FromSeconds(30);
-    private static readonly TimeSpan RewardEventCooldown = TimeSpan.FromSeconds(18);
+    private static readonly TimeSpan RewardEventCooldown = TimeSpan.FromSeconds(60);
     private readonly object gate = new();
     private readonly HashSet<string> activeRelicPaths = new(StringComparer.Ordinal);
     private DateTime lastProjectionAt = DateTime.MinValue;
@@ -861,8 +861,10 @@ internal sealed class RewardWatcherState
                 .SelectMany(relic => relic.RewardSlugs)
                 .ToHashSet(StringComparer.Ordinal);
             if (allowed.Count == 0) return request.Catalog;
+            // The projection log is only a hint. A player who joined later may not have emitted a
+            // projection path visible to us, so excluding the rest of the catalog loses rewards.
             return request.Catalog
-                .Where(item => item.Slug == "forma_blueprint" || allowed.Contains(item.Slug))
+                .OrderBy(item => item.Slug != "forma_blueprint" && !allowed.Contains(item.Slug))
                 .ToArray();
         }
     }
@@ -873,6 +875,7 @@ internal sealed class RewardWatcherState
         {
             activeRelicPaths.Clear();
             lastProjectionAt = DateTime.MinValue;
+            lastRewardAt = DateTime.MinValue;
         }
     }
 

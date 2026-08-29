@@ -1,13 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  DEFAULT_INVENTORY_VIEW,
   DEFAULT_MARKET_VIEW,
   DEFAULT_SELL_NOW_VIEW,
-  loadInventoryViewPreferences,
   loadMarketViewPreferences,
   loadSellNowViewPreferences,
-  saveInventoryViewPreferences,
   saveMarketViewPreferences,
   saveSellNowViewPreferences,
   type ViewPreferenceStorage,
@@ -29,7 +26,6 @@ describe("saved working views", () => {
   it("returns stable defaults when nothing was saved", () => {
     const storage = new MemoryStorage();
     expect(loadMarketViewPreferences(storage)).toEqual(DEFAULT_MARKET_VIEW);
-    expect(loadInventoryViewPreferences(storage)).toEqual(DEFAULT_INVENTORY_VIEW);
     expect(loadSellNowViewPreferences(storage)).toEqual(DEFAULT_SELL_NOW_VIEW);
   });
 
@@ -40,17 +36,9 @@ describe("saved working views", () => {
       sortKey: "name",
       sortDirection: "asc",
     }, storage)).toBe(true);
-    expect(saveInventoryViewPreferences({
-      category: "arcane_enhancement",
-      duplicates: "duplicates",
-      vault: "vaulted",
-      price: "unpriced",
-    }, storage)).toBe(true);
     expect(saveSellNowViewPreferences({
       category: "arcane_enhancement",
       preset: "sell_now",
-      confidence: "high",
-      timing: "peak",
       sortKey: "fair",
       sortDirection: "desc",
     }, storage)).toBe(true);
@@ -60,10 +48,9 @@ describe("saved working views", () => {
       sortKey: "name",
       sortDirection: "asc",
     });
-    expect(loadInventoryViewPreferences(storage).category).toBe("arcane_enhancement");
     expect(loadSellNowViewPreferences(storage).preset).toBe("sell_now");
     expect(loadSellNowViewPreferences(storage).category).toBe("arcane_enhancement");
-    expect(storage.values.size).toBe(3);
+    expect(storage.values.size).toBe(2);
   });
 
   it("fails closed for corrupt, stale, and out-of-domain values", () => {
@@ -79,14 +66,12 @@ describe("saved working views", () => {
     expect(loadSellNowViewPreferences(stale)).toEqual(DEFAULT_SELL_NOW_VIEW);
 
     const invalid = new MemoryStorage();
-    invalid.values.set("platscope.inventory-view.v1", JSON.stringify({
+    invalid.values.set("platscope.sell-now-view.v1", JSON.stringify({
       version: 1,
       category: "<script>",
-      duplicates: true,
-      vault: "soon",
-      price: "free",
+      preset: "everything",
     }));
-    expect(loadInventoryViewPreferences(invalid)).toEqual(DEFAULT_INVENTORY_VIEW);
+    expect(loadSellNowViewPreferences(invalid)).toEqual(DEFAULT_SELL_NOW_VIEW);
   });
 
   it("does not throw when storage is unavailable", () => {

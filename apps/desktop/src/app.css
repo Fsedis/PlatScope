@@ -1515,6 +1515,45 @@ td {
   margin-block-end: 0.65rem;
 }
 
+.inventory-command-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: end;
+  gap: 0.65rem;
+  margin-block-end: 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 0.7rem;
+  padding: 0.6rem;
+  background: var(--surface-1);
+  box-shadow: var(--shadow-sm);
+}
+
+.inventory-command-bar__status {
+  display: grid;
+  gap: 0.18rem;
+  min-width: 0;
+}
+
+.inventory-command-bar__status strong {
+  color: var(--text);
+  font-size: 0.82rem;
+}
+
+.inventory-command-bar__status span,
+.inventory-reserve-control > span {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+
+.inventory-reserve-control {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.inventory-reserve-control select {
+  min-width: 4.5rem;
+}
+
 .sell-summary dl {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1557,7 +1596,7 @@ td {
 
 .sell-toolbar {
   display: grid;
-  grid-template-columns: minmax(15rem, 1.5fr) repeat(4, minmax(9rem, 0.7fr));
+  grid-template-columns: minmax(15rem, 1.5fr) repeat(2, minmax(10rem, 0.7fr));
   align-items: end;
   gap: 0.55rem;
   margin-block-end: 0.65rem;
@@ -2430,6 +2469,11 @@ td,
   .sell-toolbar,
   .sell-now-layout {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .inventory-command-bar {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
   }
 
   .inventory-toolbar .search-field {

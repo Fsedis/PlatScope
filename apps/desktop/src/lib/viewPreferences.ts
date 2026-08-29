@@ -1,16 +1,11 @@
 import type {
   InventoryCategoryFilter,
-  InventoryDuplicateFilter,
-  InventoryPriceFilter,
-  InventoryVaultFilter,
 } from "./inventory";
 import type { MarketSortKey, PriceFilter, SortDirection } from "./market";
 import type {
-  SellNowConfidenceFilter,
   SellNowPreset,
   SellNowSortDirection,
   SellNowSortKey,
-  SellNowTimingFilter,
 } from "./sellNow";
 
 export interface ViewPreferenceStorage {
@@ -24,18 +19,9 @@ export interface MarketViewPreferences {
   sortDirection: SortDirection;
 }
 
-export interface InventoryViewPreferences {
-  category: InventoryCategoryFilter;
-  duplicates: InventoryDuplicateFilter;
-  vault: InventoryVaultFilter;
-  price: InventoryPriceFilter;
-}
-
 export interface SellNowViewPreferences {
   category: InventoryCategoryFilter;
   preset: SellNowPreset;
-  confidence: SellNowConfidenceFilter;
-  timing: SellNowTimingFilter;
   sortKey: SellNowSortKey;
   sortDirection: SellNowSortDirection;
 }
@@ -46,34 +32,28 @@ export const DEFAULT_MARKET_VIEW: MarketViewPreferences = {
   sortDirection: "desc",
 };
 
-export const DEFAULT_INVENTORY_VIEW: InventoryViewPreferences = {
-  category: "all",
-  duplicates: "all",
-  vault: "all",
-  price: "all",
-};
-
 export const DEFAULT_SELL_NOW_VIEW: SellNowViewPreferences = {
   category: "all",
-  preset: "all",
-  confidence: "all",
-  timing: "all",
+  preset: "sell_now",
   sortKey: "priority",
   sortDirection: "desc",
 };
 
 const MARKET_KEY = "platscope.market-view.v1";
-const INVENTORY_KEY = "platscope.inventory-view.v1";
 const SELL_NOW_KEY = "platscope.sell-now-view.v1";
 
 const priceFilters = ["all", "priced", "unpriced"] as const;
 const marketSortKeys = ["name", "fair", "volume", "confidence"] as const;
 const sortDirections = ["asc", "desc"] as const;
-const inventoryDuplicates = ["all", "duplicates"] as const;
-const inventoryVault = ["all", "available", "vaulted", "unknown"] as const;
-const sellNowPresets = ["all", "sell_now", "high_priority", "unpriced"] as const;
-const sellNowConfidence = ["all", "high", "medium", "low", "unknown"] as const;
-const sellNowTiming = ["all", "hold", "neutral", "sell", "peak", "unknown"] as const;
+const sellNowPresets = [
+  "sellable",
+  "sell_now",
+  "hold",
+  "all",
+  "duplicates",
+  "unpriced",
+  "attention",
+] as const;
 const sellNowSortKeys = [
   "priority",
   "name",
@@ -105,29 +85,6 @@ export function saveMarketViewPreferences(
   return writeRecord(MARKET_KEY, preferences, storage);
 }
 
-export function loadInventoryViewPreferences(
-  storage: ViewPreferenceStorage | null = defaultStorage(),
-): InventoryViewPreferences {
-  const value = readRecord(INVENTORY_KEY, storage);
-  return {
-    category: validCategory(value?.category),
-    duplicates: allowed(
-      value?.duplicates,
-      inventoryDuplicates,
-      DEFAULT_INVENTORY_VIEW.duplicates,
-    ),
-    vault: allowed(value?.vault, inventoryVault, DEFAULT_INVENTORY_VIEW.vault),
-    price: allowed(value?.price, priceFilters, DEFAULT_INVENTORY_VIEW.price),
-  };
-}
-
-export function saveInventoryViewPreferences(
-  preferences: InventoryViewPreferences,
-  storage: ViewPreferenceStorage | null = defaultStorage(),
-): boolean {
-  return writeRecord(INVENTORY_KEY, preferences, storage);
-}
-
 export function loadSellNowViewPreferences(
   storage: ViewPreferenceStorage | null = defaultStorage(),
 ): SellNowViewPreferences {
@@ -135,12 +92,6 @@ export function loadSellNowViewPreferences(
   return {
     category: validCategory(value?.category),
     preset: allowed(value?.preset, sellNowPresets, DEFAULT_SELL_NOW_VIEW.preset),
-    confidence: allowed(
-      value?.confidence,
-      sellNowConfidence,
-      DEFAULT_SELL_NOW_VIEW.confidence,
-    ),
-    timing: allowed(value?.timing, sellNowTiming, DEFAULT_SELL_NOW_VIEW.timing),
     sortKey: allowed(value?.sortKey, sellNowSortKeys, DEFAULT_SELL_NOW_VIEW.sortKey),
     sortDirection: allowed(
       value?.sortDirection,
@@ -221,5 +172,5 @@ function validCategory(value: unknown): InventoryCategoryFilter {
     "warframe",
     "misc",
   ] as const;
-  return allowed(value, categories, DEFAULT_INVENTORY_VIEW.category);
+  return allowed(value, categories, DEFAULT_SELL_NOW_VIEW.category);
 }
