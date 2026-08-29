@@ -753,18 +753,22 @@ function makeInsightsView(): InsightsView {
     { slug: "nyx_prime_chassis", requiredQuantity: 1, ownedQuantity: 1, ducats: 45 },
     { slug: "nyx_prime_systems", requiredQuantity: 1, ownedQuantity: 1, ducats: 100 },
   ];
-  const components: SetComponentInsight[] = componentSpecs.map((component) => ({
-    definition: {
-      slug: component.slug,
-      gameRef: `/Lotus/Demo/${component.slug}`,
-      requiredQuantity: component.requiredQuantity,
-      ducats: component.ducats,
-    },
-    itemId: `demo-${component.slug}`,
-    displayName: rows.find((row) => row.recommendation.key.slug === component.slug)?.displayName ?? component.slug,
-    ownedQuantity: component.ownedQuantity,
-    recommendation: scopedRecommendation(component.slug),
-  }));
+  const components: SetComponentInsight[] = componentSpecs.map((component) => {
+    const marketComponent = rows.find((row) => row.recommendation.key.slug === component.slug);
+    return {
+      definition: {
+        slug: component.slug,
+        gameRef: `/Lotus/Demo/${component.slug}`,
+        requiredQuantity: component.requiredQuantity,
+        ducats: component.ducats,
+      },
+      itemId: `demo-${component.slug}`,
+      displayName: marketComponent?.displayName ?? component.slug,
+      imageUrl: marketComponent?.imageUrl,
+      ownedQuantity: component.ownedQuantity,
+      recommendation: scopedRecommendation(component.slug),
+    };
+  });
   const rewards: RelicRewardInsight[] = [
     { name: "Никс Прайм: Нейрооптика (Чертеж)", slug: "nyx_prime_neuroptics", chance: 25.33 },
     { name: "Никс Прайм: Каркас (Чертеж)", slug: "nyx_prime_chassis", chance: 25.33 },
@@ -777,6 +781,8 @@ function makeInsightsView(): InsightsView {
       displayNameEn: reward.name,
       chancePercent: reward.chance,
     },
+    displayName: reward.name,
+    imageUrl: components.find((component) => component.definition.slug === reward.slug)?.imageUrl,
     recommendation: reward.slug === null ? null : scopedRecommendation(reward.slug),
   }));
   const setPrice = scopedRecommendation("nyx_prime_set");
@@ -841,6 +847,7 @@ function makeInsightsView(): InsightsView {
           vaultStatus: "vaulted",
           rewards: rewards.map((reward) => reward.definition),
         },
+        displayName: "Реликвия Акси N10",
         ownedQuantity: 3,
         sellableQuantity: 2,
         relicRecommendation: relicPrice,
@@ -885,29 +892,6 @@ function makeInsightsView(): InsightsView {
             ? ["Эффективность рассчитана по credible fair price, а не по единичному low ask."]
             : ["Для выбранной платформы нет credible bulk-цены; PC-цена не подставляется."],
         },
-      },
-    ],
-    rivenDispositions: [
-      {
-        weaponNameEn: "Soma",
-        weaponGameRef: "/Lotus/Weapons/Tenno/Rifle/StartingRifle",
-        category: "primary",
-        disposition: 4,
-        multiplier: 1.2,
-      },
-      {
-        weaponNameEn: "Acceltra Prime",
-        weaponGameRef: "/Lotus/Weapons/Tenno/LongGuns/PrimeAcceltra/PrimeAcceltraWeapon",
-        category: "primary",
-        disposition: 1,
-        multiplier: 0.55,
-      },
-      {
-        weaponNameEn: "Kronen Prime",
-        weaponGameRef: "/Lotus/Weapons/Tenno/Melee/Tonfa/PrimeTonfa",
-        category: "melee",
-        disposition: 2,
-        multiplier: 0.65,
       },
     ],
   };

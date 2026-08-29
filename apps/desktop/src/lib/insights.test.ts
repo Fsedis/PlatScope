@@ -2,13 +2,15 @@ import { describe, expect, it } from "vitest";
 
 import {
   coverageLabel,
+  filterAndSortOpportunitySets,
   filterAndSortSets,
   formatPercent,
   formatRatio,
   refinementLabel,
-  rivenCategoryLabel,
   setModeLabel,
   setOpportunity,
+  setRelicSupport,
+  type RelicInsightRow,
   type SetInsightRow,
   vaultLabel,
 } from "./insights";
@@ -35,6 +37,46 @@ function recommendation(
     confidence,
     freshness: "fresh",
     reasons: [],
+  };
+}
+
+function relicRow(rewardSlug: string, chancePercent = 10, ownedQuantity = 3): RelicInsightRow {
+  return {
+    displayName: "Реликвия Акси T1",
+    definition: {
+      relicSlug: "axi_t1_relic",
+      relicGameRef: "/Lotus/Types/Game/Projections/AxiT1Bronze",
+      displayNameEn: "Axi T1 Relic",
+      refinement: "intact",
+      vaultStatus: "available",
+      rewards: [{
+        rewardSlug,
+        rewardGameRef: "/Lotus/Reward",
+        displayNameEn: "Useful reward",
+        chancePercent,
+      }],
+    },
+    ownedQuantity,
+    sellableQuantity: Math.max(0, ownedQuantity - 1),
+    relicRecommendation: null,
+    expectedValue: {
+      pricedExpectedValue: null,
+      pricedChancePercent: 0,
+      totalChancePercent: 100,
+      missingRewardCount: 1,
+      coverage: "insufficient",
+      reasons: [],
+    },
+    rewards: [{
+      displayName: "Нужная деталь",
+      definition: {
+        rewardSlug,
+        rewardGameRef: "/Lotus/Reward",
+        displayNameEn: "Useful reward",
+        chancePercent,
+      },
+      recommendation: null,
+    }],
   };
 }
 
@@ -112,8 +154,6 @@ describe("insights presentation", () => {
     expect(setModeLabel("insufficient_pricing", "en")).toBe("Not enough prices");
     expect(coverageLabel("partial", "en")).toBe("Partial EV");
     expect(refinementLabel("radiant", "en")).toBe("Radiant");
-    expect(rivenCategoryLabel("arch_gun", "en")).toBe("Arch-gun");
-    expect(rivenCategoryLabel("sentinel_weapon")).toBe("Оружие стража");
   });
 
   it("calculates the next set without treating owned parts as free profit", () => {
@@ -138,5 +178,20 @@ describe("insights presentation", () => {
     localized.displayName = "Никс Прайм: Комплект";
     expect(filterAndSortSets([localized], "all", "никс")).toEqual([localized]);
     expect(filterAndSortSets([localized], "all", "Nyx")).toEqual([]);
+  });
+
+  it("shows owned relics that can drop a missing set part", () => {
+    const row = setRow("Strun Prime Set", 1);
+    const usefulRelic = relicRow(`${row.definition.setSlug}_a`);
+    const irrelevantRelic = relicRow("other_prime_part", 25, 10);
+
+    const support = setRelicSupport(row, [irrelevantRelic, usefulRelic]);
+
+    expect(support.matches).toHaveLength(1);
+    expect(support.ownedRelicCount).toBe(3);
+    expect(support.coveredPartCount).toBe(1);
+    expect(support.allMissingPartsCovered).toBe(true);
+    expect(support.aggregateChancePercent).toBeCloseTo(27.1, 5);
+    expect(filterAndSortOpportunitySets([row], [usefulRelic], "relics")).toEqual([row]);
   });
 });

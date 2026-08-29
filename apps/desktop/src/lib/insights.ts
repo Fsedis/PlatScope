@@ -10,14 +10,6 @@ export type SetSaleMode =
   | "insufficient_inventory"
   | "insufficient_pricing";
 export type RelicPricingCoverage = "complete" | "partial" | "insufficient";
-export type RivenWeaponCategory =
-  | "primary"
-  | "secondary"
-  | "melee"
-  | "sentinel_weapon"
-  | "arch_gun"
-  | "arch_melee";
-
 export interface GameMetadataSnapshotMetadata {
   source: "wfcd_warframe_items";
   fetchedAt: string;
@@ -28,14 +20,6 @@ export interface GameMetadataSnapshotMetadata {
   rivenDispositionCount: number;
   itemDefinitionCount: number;
   checksumSha256: string;
-}
-
-export interface RivenDispositionDefinition {
-  weaponNameEn: string;
-  weaponGameRef: string;
-  category: RivenWeaponCategory;
-  disposition: number;
-  multiplier: number;
 }
 
 export interface PrimeSetComponentDefinition {
@@ -126,6 +110,7 @@ export interface RelicDefinition {
 
 export interface RelicRewardInsight {
   definition: RelicRewardDefinition;
+  displayName: string;
   imageUrl?: string | null;
   recommendation: PriceRecommendation | null;
 }
@@ -141,6 +126,7 @@ export interface RelicExpectedValue {
 
 export interface RelicInsightRow {
   definition: RelicDefinition;
+  displayName: string;
   imageUrl?: string | null;
   ownedQuantity: number;
   sellableQuantity: number;
@@ -180,7 +166,6 @@ export interface InsightsView {
   sets: SetInsightRow[];
   relics: RelicInsightRow[];
   ducats: DucatInsightRow[];
-  rivenDispositions: RivenDispositionDefinition[];
 }
 
 export interface GameMetadataRefreshOutcome {
@@ -188,6 +173,34 @@ export interface GameMetadataRefreshOutcome {
   stale: boolean;
   usedLkg: boolean;
   warning: string | null;
+}
+
+export type SetOpportunityMode = "relics" | "buy" | "ready";
+
+export interface UsefulRelicReward {
+  slug: string;
+  displayName: string;
+  quantityNeeded: number;
+  chancePercent: number;
+  imageUrl?: string | null;
+}
+
+export interface SetRelicMatch {
+  relic: RelicInsightRow;
+  usefulRewards: UsefulRelicReward[];
+  chancePerRelicPercent: number;
+  chanceFromOwnedPercent: number;
+  expectedUsefulDrops: number;
+}
+
+export interface SetRelicSupport {
+  matches: SetRelicMatch[];
+  ownedRelicCount: number;
+  coveredPartCount: number;
+  missingPartCount: number;
+  allMissingPartsCovered: boolean;
+  aggregateChancePercent: number;
+  expectedUsefulDrops: number;
 }
 
 export function setOpportunity(row: SetInsightRow): SetOpportunity {
@@ -241,6 +254,114 @@ export function setOpportunity(row: SetInsightRow): SetOpportunity {
   };
 }
 
+export function setRelicSupport(
+  row: SetInsightRow,
+  relics: RelicInsightRow[],
+): SetRelicSupport {
+  const opportunity = setOpportunity(row);
+  const missingBySlug = new Map(opportunity.missingParts.map((part) => [part.slug, part]));
+  const coveredSlugs = new Set<string>();
+  let noUsefulDropProbability = 1;
+  let expectedUsefulDrops = 0;
+
+  const matches = relics.flatMap((relic): SetRelicMatch[] => {
+    if (relic.ownedQuantity <= 0) return [];
+    const usefulRewards = relic.rewards.flatMap((reward): UsefulRelicReward[] => {
+      const slug = reward.definition.rewardSlug;
+      if (!slug) return [];
+      const missingPart = missingBySlug.get(slug);
+      if (!missingPart) return [];
+      const chancePercent = clampPercent(reward.definition.chancePercent);
+      if (chancePercent <= 0) return [];
+      coveredSlugs.add(slug);
+      return [{
+        slug,
+        displayName: reward.displayName,
+        quantityNeeded: missingPart.quantity,
+        chancePercent,
+        imageUrl: reward.imageUrl,
+      }];
+    });
+    if (usefulRewards.length === 0) return [];
+
+    const chancePerRelicPercent = clampPercent(
+      usefulRewards.reduce((sum, reward) => sum + reward.chancePercent, 0),
+    );
+    const missChance = 1 - chancePerRelicPercent / 100;
+    const chanceFromOwnedPercent = (1 - missChance ** relic.ownedQuantity) * 100;
+    const expectedFromRelic = relic.ownedQuantity * chancePerRelicPercent / 100;
+    noUsefulDropProbability *= missChance ** relic.ownedQuantity;
+    expectedUsefulDrops += expectedFromRelic;
+    return [{
+      relic,
+      usefulRewards,
+      chancePerRelicPercent,
+      chanceFromOwnedPercent,
+      expectedUsefulDrops: expectedFromRelic,
+    }];
+  }).sort((left, right) =>
+    right.usefulRewards.length - left.usefulRewards.length
+    || right.chanceFromOwnedPercent - left.chanceFromOwnedPercent
+    || right.relic.ownedQuantity - left.relic.ownedQuantity
+    || left.relic.displayName.localeCompare(right.relic.displayName, "ru-RU")
+  );
+
+  return {
+    matches,
+    ownedRelicCount: matches.reduce((sum, match) => sum + match.relic.ownedQuantity, 0),
+    coveredPartCount: coveredSlugs.size,
+    missingPartCount: missingBySlug.size,
+    allMissingPartsCovered: missingBySlug.size > 0 && coveredSlugs.size === missingBySlug.size,
+    aggregateChancePercent: clampPercent((1 - noUsefulDropProbability) * 100),
+    expectedUsefulDrops,
+  };
+}
+
+export function filterAndSortOpportunitySets(
+  rows: SetInsightRow[],
+  relics: RelicInsightRow[],
+  mode: SetOpportunityMode,
+  query = "",
+  locale: UiLocale = "ru",
+): SetInsightRow[] {
+  const normalizedQuery = query.trim().toLocaleLowerCase(localeCode(locale));
+  return rows
+    .filter((row) => row.displayName.toLocaleLowerCase(localeCode(locale)).includes(normalizedQuery))
+    .filter((row) => {
+      const opportunity = setOpportunity(row);
+      if (mode === "ready") return opportunity.completeSets > 0;
+      if (mode === "buy") return opportunity.profitableToComplete;
+      return opportunity.missingParts.length > 0 && setRelicSupport(row, relics).matches.length > 0;
+    })
+    .sort((left, right) => {
+      const leftOpportunity = setOpportunity(left);
+      const rightOpportunity = setOpportunity(right);
+      if (mode === "relics") {
+        const leftRelics = setRelicSupport(left, relics);
+        const rightRelics = setRelicSupport(right, relics);
+        return Number(rightRelics.allMissingPartsCovered) - Number(leftRelics.allMissingPartsCovered)
+          || rightRelics.coveredPartCount - leftRelics.coveredPartCount
+          || rightRelics.aggregateChancePercent - leftRelics.aggregateChancePercent
+          || nullableOpportunity(rightOpportunity.setPremiumValue) - nullableOpportunity(leftOpportunity.setPremiumValue)
+          || left.displayName.localeCompare(right.displayName, localeCode(locale));
+      }
+      if (mode === "ready") {
+        return rightOpportunity.completeSets - leftOpportunity.completeSets
+          || nullableOpportunity(rightOpportunity.setPremiumValue) - nullableOpportunity(leftOpportunity.setPremiumValue)
+          || left.displayName.localeCompare(right.displayName, localeCode(locale));
+      }
+      return nullableOpportunity(rightOpportunity.setPremiumValue) - nullableOpportunity(leftOpportunity.setPremiumValue)
+        || leftOpportunity.missingQuantity - rightOpportunity.missingQuantity
+        || nullableCost(leftOpportunity.completionCost) - nullableCost(rightOpportunity.completionCost)
+        || left.displayName.localeCompare(right.displayName, localeCode(locale));
+    });
+}
+
+function clampPercent(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(100, Math.max(0, value));
+}
+
 export function filterAndSortSets(
   rows: SetInsightRow[],
   mode: SetViewMode,
@@ -274,6 +395,10 @@ export function filterAndSortSets(
 
 function nullableOpportunity(value: number | null): number {
   return value ?? Number.NEGATIVE_INFINITY;
+}
+
+function nullableCost(value: number | null): number {
+  return value ?? Number.POSITIVE_INFINITY;
 }
 
 export function vaultLabel(status: VaultStatus, locale: UiLocale = "ru"): string {
@@ -326,28 +451,6 @@ export function formatPercent(value: number | null, locale: UiLocale = "ru"): st
   if (value === null) return "—";
   const sign = value > 0 ? "+" : "";
   return `${sign}${value.toLocaleString(localeCode(locale), { maximumFractionDigits: 1 })}%`;
-}
-
-export function rivenCategoryLabel(
-  category: RivenWeaponCategory,
-  locale: UiLocale = "ru",
-): string {
-  const labels: Record<RivenWeaponCategory, string> = locale === "en" ? {
-    primary: "Primary",
-    secondary: "Secondary",
-    melee: "Melee",
-    sentinel_weapon: "Sentinel weapon",
-    arch_gun: "Arch-gun",
-    arch_melee: "Arch-melee",
-  } : {
-    primary: "Основное",
-    secondary: "Вторичное",
-    melee: "Ближний бой",
-    sentinel_weapon: "Оружие стража",
-    arch_gun: "Арч-пушка",
-    arch_melee: "Арч-ближний бой",
-  };
-  return labels[category];
 }
 
 export function setReasonMessages(row: SetInsightRow, locale: UiLocale = "ru"): string[] {

@@ -14,8 +14,8 @@
   {:else if screen === "inventory"}
     <path d="M4 7h16v13H4zM3 4h18v3H3zM9 11h6" />
   {:else if screen === "insights"}
-    <path d="M4 19V9m5 10V5m5 14v-7m5 7V3M3 21h18" />
-    <path d="m4 8 5-4 5 7 5-9" />
+    <path d="m11 3 1.8 4.2L17 9l-4.2 1.8L11 15l-1.8-4.2L5 9l4.2-1.8L11 3Z" />
+    <path d="m18.5 13 .9 2.1 2.1.9-2.1.9-.9 2.1-.9-2.1-2.1-.9 2.1-.9.9-2.1Z" />
   {:else if screen === "account"}
     <circle cx="12" cy="8" r="4" />
     <path d="M4.5 21a7.5 7.5 0 0 1 15 0" />

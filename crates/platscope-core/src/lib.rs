@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -10,11 +10,12 @@ use chrono::{Duration as ChronoDuration, NaiveDate, Utc};
 pub use platscope_account::{AccountOrder, AccountProfile, CreateListingInput, UpdateListingInput};
 use platscope_account::{CredentialStore, OsCredentialStore, WfmAccountClient};
 use platscope_domain::{
-    GameMetadataSnapshotMetadata, InventoryResolution, InventorySnapshotMetadata, InventorySource,
-    ItemCatalog, LiveOrder, LiveOrderBook, LiveOrderSide, MarketHistoryPoint, MarketItemKind,
-    MarketVariantKey, Platform, PlayerInventory, PrimePartMetadata, PrimeSetComponentDefinition,
-    PrimeSetDefinition, ProviderId, RelicDefinition, RelicRewardDefinition, ResolvedInventoryItem,
-    ResolvedInventorySnapshot, RivenDispositionDefinition, UserStatus, VaultStatus,
+    GameMetadataSnapshot, GameMetadataSnapshotMetadata, InventoryResolution,
+    InventorySnapshotMetadata, InventorySource, ItemCatalog, LiveOrder, LiveOrderBook,
+    LiveOrderSide, MarketHistoryPoint, MarketItemKind, MarketVariantKey, Platform, PlayerInventory,
+    PrimePartMetadata, PrimeSetComponentDefinition, PrimeSetDefinition, ProviderId,
+    RelicDefinition, RelicRewardDefinition, ResolvedInventoryItem, ResolvedInventorySnapshot,
+    UserStatus, VaultStatus,
 };
 use platscope_insights::{
     DucatEfficiency, RelicExpectedValue, RelicRewardInput, SetComparison, SetComparisonInput,
@@ -215,6 +216,7 @@ pub struct SetInsightRow {
 #[serde(rename_all = "camelCase")]
 pub struct RelicRewardInsight {
     pub definition: RelicRewardDefinition,
+    pub display_name: String,
     pub image_url: Option<String>,
     pub recommendation: Option<PriceRecommendation>,
 }
@@ -223,6 +225,7 @@ pub struct RelicRewardInsight {
 #[serde(rename_all = "camelCase")]
 pub struct RelicInsightRow {
     pub definition: RelicDefinition,
+    pub display_name: String,
     pub image_url: Option<String>,
     pub owned_quantity: u32,
     pub sellable_quantity: u32,
@@ -251,7 +254,6 @@ pub struct InsightsView {
     pub sets: Vec<SetInsightRow>,
     pub relics: Vec<RelicInsightRow>,
     pub ducats: Vec<DucatInsightRow>,
-    pub riven_dispositions: Vec<RivenDispositionDefinition>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -818,12 +820,20 @@ impl InventoryService {
             )
         })?;
         let variants = database_guard.current_market_variant_keys()?;
+        let game_metadata = database_guard.load_current_game_metadata()?;
         let resolved = resolve_inventory(
             inventory,
             &catalog,
             &variants,
             settings.platform,
             settings.keep_inventory_copies,
+        );
+        let resolved = relink_exact_relic_inventory(
+            &resolved,
+            Some(&catalog),
+            game_metadata.as_ref(),
+            &variants,
+            settings.platform,
         );
         database_guard.promote_inventory_snapshot(&resolved)?;
         drop(database_guard);
@@ -848,9 +858,24 @@ impl InventoryService {
         database: &Mutex<Database>,
         settings: &AppSettings,
     ) -> Result<Option<InventoryView>, CoreError> {
-        let snapshot = lock_database(database)?.current_inventory_snapshot()?;
+        let (snapshot, catalog, game_metadata, variants) = {
+            let database = lock_database(database)?;
+            (
+                database.current_inventory_snapshot()?,
+                database.load_current_catalog()?,
+                database.load_current_game_metadata()?,
+                database.current_market_variant_keys()?,
+            )
+        };
         snapshot
             .map(|snapshot| {
+                let snapshot = relink_exact_relic_inventory(
+                    &snapshot,
+                    catalog.as_ref(),
+                    game_metadata.as_ref(),
+                    &variants,
+                    settings.platform,
+                );
                 enrich_inventory_view(
                     database,
                     inventory_view_from_snapshot(
@@ -1016,11 +1041,15 @@ impl InsightsService {
             .map_or(&[][..], |view| view.items.as_slice());
         let mut sets =
             build_set_insights(database, settings, &snapshot.prime_sets, inventory_items)?;
-        let mut relics =
-            build_relic_insights(database, settings, &snapshot.relics, inventory_items)?;
+        let mut relics = build_relic_insights(
+            database,
+            settings,
+            &snapshot.relics,
+            &snapshot.prime_sets,
+            inventory_items,
+        )?;
         let mut ducats =
             build_ducat_insights(database, settings, &snapshot.prime_parts, inventory_items)?;
-        let riven_dispositions = snapshot.riven_dispositions;
         sets.sort_by(|left, right| {
             right
                 .comparison
@@ -1055,7 +1084,6 @@ impl InsightsService {
             sets,
             relics,
             ducats,
-            riven_dispositions,
         }))
     }
 }
@@ -1442,16 +1470,30 @@ fn build_relic_insights(
     database: &Mutex<Database>,
     settings: &AppSettings,
     definitions: &[RelicDefinition],
+    prime_sets: &[PrimeSetDefinition],
     inventory: &[InventoryViewItem],
 ) -> Result<Vec<RelicInsightRow>, CoreError> {
+    let catalog_by_slug = load_insight_catalog(database, settings.language)?;
+    let component_images = prime_sets
+        .iter()
+        .flat_map(|set| &set.components)
+        .filter_map(|component| {
+            component
+                .image_url
+                .as_ref()
+                .map(|image_url| (component.slug.as_str(), image_url.clone()))
+        })
+        .collect::<HashMap<_, _>>();
     let mut rows = Vec::new();
     for definition in definitions {
         let subtype = definition.refinement.market_subtype();
         let Some(owned) = inventory.iter().find(|item| {
-            item.resolution == InventoryResolution::Resolved
-                && item.key.as_ref().is_some_and(|key| {
-                    key.slug == definition.relic_slug && key.subtype.as_deref() == Some(subtype)
-                })
+            matches!(
+                item.resolution,
+                InventoryResolution::Resolved | InventoryResolution::ExactVariantUnavailable
+            ) && item.key.as_ref().is_some_and(|key| {
+                key.slug == definition.relic_slug && key.subtype.as_deref() == Some(subtype)
+            })
         }) else {
             continue;
         };
@@ -1480,11 +1522,20 @@ fn build_relic_insights(
                 .flatten();
             rewards.push(RelicRewardInsight {
                 definition: reward.clone(),
+                display_name: reward.reward_slug.as_deref().map_or_else(
+                    || reward.display_name_en.clone(),
+                    |slug| {
+                        catalog_by_slug.get(slug).map_or_else(
+                            || reward.display_name_en.clone(),
+                            |(_, display_name, _)| display_name.clone(),
+                        )
+                    },
+                ),
                 image_url: reward.reward_slug.as_deref().and_then(|slug| {
-                    inventory
-                        .iter()
-                        .find(|item| item.key.as_ref().is_some_and(|key| key.slug == slug))
-                        .and_then(|item| item.image_url.clone())
+                    component_images
+                        .get(slug)
+                        .cloned()
+                        .or_else(|| insight_image_url(slug, inventory, &catalog_by_slug))
                 }),
                 recommendation,
             });
@@ -1506,7 +1557,14 @@ fn build_relic_insights(
             .collect::<Vec<_>>();
         rows.push(RelicInsightRow {
             definition: definition.clone(),
-            image_url: owned.image_url.clone(),
+            display_name: catalog_by_slug.get(&definition.relic_slug).map_or_else(
+                || definition.display_name_en.clone(),
+                |(_, display_name, _)| display_name.clone(),
+            ),
+            image_url: owned
+                .image_url
+                .clone()
+                .or_else(|| insight_image_url(&definition.relic_slug, inventory, &catalog_by_slug)),
             owned_quantity: owned.owned_quantity,
             sellable_quantity: owned.sellable_quantity,
             relic_recommendation,
@@ -1829,6 +1887,92 @@ fn market_item_kind(tags: &[String], key: &MarketVariantKey) -> MarketItemKind {
     } else {
         MarketItemKind::Standard
     }
+}
+
+/// Восстанавливает точный рыночный вариант реликвии по неизменяемому игровому пути WFCD.
+///
+/// `warframe.market` хранит одну карточку реликвии с subtype, а read-only inventory отдаёт
+/// отдельный `ItemType` для каждого уровня улучшения. Каталог предметов не обязан содержать
+/// эти четыре игровых пути, поэтому обычный resolver не может связать их самостоятельно.
+/// Сопоставление здесь только точное: неизвестные или неоднозначные пути не изменяются.
+fn relink_exact_relic_inventory(
+    snapshot: &ResolvedInventorySnapshot,
+    catalog: Option<&ItemCatalog>,
+    metadata: Option<&GameMetadataSnapshot>,
+    available_variants: &HashSet<MarketVariantKey>,
+    platform: Platform,
+) -> ResolvedInventorySnapshot {
+    let Some(metadata) = metadata else {
+        return snapshot.clone();
+    };
+
+    let mut aliases: HashMap<String, Option<&RelicDefinition>> = HashMap::new();
+    for definition in &metadata.relics {
+        let identity = definition.relic_game_ref.trim().to_lowercase();
+        match aliases.entry(identity) {
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(Some(definition));
+            }
+            std::collections::hash_map::Entry::Occupied(mut entry) => {
+                let same_variant = entry.get().is_some_and(|existing| {
+                    existing.relic_slug == definition.relic_slug
+                        && existing.refinement == definition.refinement
+                });
+                if !same_variant {
+                    entry.insert(None);
+                }
+            }
+        }
+    }
+    let catalog_by_slug: HashMap<&str, _> = catalog.map_or_else(HashMap::new, |catalog| {
+        catalog
+            .items
+            .iter()
+            .map(|item| (item.slug.as_str(), item))
+            .collect()
+    });
+
+    let mut repaired = snapshot.clone();
+    for item in &mut repaired.items {
+        let identity = item.canonical_game_id.trim().to_lowercase();
+        let Some(Some(definition)) = aliases.get(&identity) else {
+            continue;
+        };
+        let subtype = definition.refinement.market_subtype().to_owned();
+        let key = MarketVariantKey::new(
+            definition.relic_slug.clone(),
+            platform,
+            None,
+            Some(subtype.clone()),
+        )
+        .expect("validated relic metadata creates a market key");
+        let resolution = if available_variants.iter().any(|candidate| {
+            candidate.slug == key.slug
+                && candidate.rank == key.rank
+                && candidate.subtype == key.subtype
+                && candidate.amber_stars == key.amber_stars
+                && candidate.cyan_stars == key.cyan_stars
+        }) {
+            InventoryResolution::Resolved
+        } else {
+            InventoryResolution::ExactVariantUnavailable
+        };
+
+        if let Some(catalog_item) = catalog_by_slug.get(definition.relic_slug.as_str()) {
+            item.display_name_en = Some(catalog_item.display_name_en.clone());
+            item.display_name_ru
+                .clone_from(&catalog_item.display_name_ru);
+            item.tags.clone_from(&catalog_item.tags);
+        } else {
+            item.display_name_en = Some(definition.display_name_en.clone());
+            item.tags = vec!["relic".into()];
+        }
+        item.key = Some(key);
+        item.rank = None;
+        item.subtype = Some(subtype);
+        item.resolution = resolution;
+    }
+    apply_keep_copies(&repaired, repaired.keep_copies)
 }
 
 fn inventory_view_from_snapshot(
@@ -2742,6 +2886,152 @@ mod tests {
         }));
     }
 
+    fn relic_refinement_fixtures() -> [(
+        platscope_domain::RelicRefinement,
+        &'static str,
+        &'static str,
+    ); 4] {
+        use platscope_domain::RelicRefinement;
+        [
+            (RelicRefinement::Intact, "Bronze", "intact"),
+            (RelicRefinement::Exceptional, "Silver", "exceptional"),
+            (RelicRefinement::Flawless, "Gold", "flawless"),
+            (RelicRefinement::Radiant, "Platinum", "radiant"),
+        ]
+    }
+
+    fn relic_repair_metadata(
+        refinements: &[(platscope_domain::RelicRefinement, &str, &str)],
+    ) -> GameMetadataSnapshot {
+        use platscope_domain::GameMetadataSource;
+        let definitions = refinements
+            .iter()
+            .map(|(refinement, suffix, _)| RelicDefinition {
+                relic_slug: "axi_n10_relic".into(),
+                relic_game_ref: format!("/Lotus/Types/Game/Projections/AxiN10{suffix}"),
+                display_name_en: "Axi N10 Relic".into(),
+                refinement: *refinement,
+                vault_status: VaultStatus::Vaulted,
+                rewards: vec![],
+            })
+            .collect::<Vec<_>>();
+        GameMetadataSnapshot {
+            metadata: GameMetadataSnapshotMetadata {
+                source: GameMetadataSource::WfcdWarframeItems,
+                fetched_at: Utc::now(),
+                schema_version: CURRENT_GAME_METADATA_SCHEMA_VERSION,
+                set_count: 0,
+                relic_count: definitions.len() as u64,
+                prime_part_count: 0,
+                riven_disposition_count: 0,
+                item_definition_count: 0,
+                checksum_sha256: "metadata".into(),
+            },
+            prime_sets: vec![],
+            relics: definitions,
+            prime_parts: vec![],
+            riven_dispositions: vec![],
+            item_definitions: vec![],
+        }
+    }
+
+    fn relic_repair_catalog(
+        refinements: &[(platscope_domain::RelicRefinement, &str, &str)],
+    ) -> ItemCatalog {
+        ItemCatalog {
+            metadata: CatalogMetadata {
+                provider: ProviderId::WarframeMarket,
+                fetched_at: Utc::now(),
+                schema_version: CURRENT_CATALOG_SCHEMA_VERSION,
+                item_count: 1,
+                checksum_sha256: "catalog".into(),
+            },
+            items: vec![CatalogItem {
+                item_id: "axi-n10".into(),
+                slug: "axi_n10_relic".into(),
+                display_name_en: "Axi N10 Relic".into(),
+                display_name_ru: Some("Реликвия Акси N10".into()),
+                thumb: None,
+                thumb_ru: None,
+                game_ref: None,
+                bulk_tradable: true,
+                max_rank: None,
+                subtypes: refinements
+                    .iter()
+                    .map(|(_, _, subtype)| (*subtype).into())
+                    .collect(),
+                tags: vec!["relic".into()],
+            }],
+        }
+    }
+
+    #[test]
+    fn persisted_relic_paths_are_relinked_for_all_refinements_without_a_new_scan() {
+        let refinements = relic_refinement_fixtures();
+        let metadata = relic_repair_metadata(&refinements);
+        let catalog = relic_repair_catalog(&refinements);
+        let snapshot = ResolvedInventorySnapshot {
+            metadata: InventorySnapshotMetadata {
+                source: InventorySource::ReadOnlyScan,
+                observed_at: Utc::now(),
+                schema_version: 1,
+                item_count: refinements.len() as u64,
+                checksum_sha256: "inventory".into(),
+            },
+            keep_copies: 1,
+            items: refinements
+                .iter()
+                .map(|(_, suffix, _)| ResolvedInventoryItem {
+                    canonical_game_id: format!("/Lotus/Types/Game/Projections/AxiN10{suffix}"),
+                    display_name_en: None,
+                    display_name_ru: None,
+                    tags: vec![],
+                    key: None,
+                    rank: None,
+                    subtype: None,
+                    owned_quantity: 3,
+                    tradeable_quantity: 3,
+                    untradeable_quantity: 0,
+                    unknown_quantity: 0,
+                    leveled_quantity: 0,
+                    sellable_quantity: 0,
+                    resolution: InventoryResolution::UnknownItem,
+                })
+                .collect(),
+        };
+        let variants = refinements
+            .iter()
+            .map(|(_, _, subtype)| {
+                MarketVariantKey::new("axi_n10_relic", Platform::Pc, None, Some(*subtype))
+                    .expect("valid variant")
+            })
+            .collect();
+
+        let repaired = relink_exact_relic_inventory(
+            &snapshot,
+            Some(&catalog),
+            Some(&metadata),
+            &variants,
+            Platform::Pc,
+        );
+
+        assert_eq!(repaired.items.len(), 4);
+        for item in repaired.items {
+            assert_eq!(item.resolution, InventoryResolution::Resolved);
+            assert_eq!(
+                item.key.as_ref().map(|key| key.slug.as_str()),
+                Some("axi_n10_relic")
+            );
+            assert!(
+                refinements
+                    .iter()
+                    .any(|(_, _, subtype)| { item.subtype.as_deref() == Some(*subtype) })
+            );
+            assert_eq!(item.display_name_ru.as_deref(), Some("Реликвия Акси N10"));
+            assert_eq!(item.sellable_quantity, 2);
+        }
+    }
+
     #[test]
     fn legacy_catalog_tags_preserve_bulk_order_requirements() {
         assert!(catalog_bulk_tradable(
@@ -3118,11 +3408,10 @@ mod tests {
             .expect("insights view succeeds")
             .expect("metadata snapshot exists");
         eprintln!(
-            "insights_sets={} relics={} ducats={} rivens={} inventory={}",
+            "insights_sets={} relics={} ducats={} inventory={}",
             insights.sets.len(),
             insights.relics.len(),
             insights.ducats.len(),
-            insights.riven_dispositions.len(),
             insights.inventory_available
         );
         assert!(insights.inventory_available);
