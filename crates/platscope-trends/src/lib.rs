@@ -8,6 +8,7 @@ pub const MIN_DAILY_CLOSED_VOLUME: f64 = 3.0;
 pub const MIN_POINTS_7D: usize = 3;
 pub const MIN_POINTS_30D: usize = 7;
 pub const MIN_POINTS_90D: usize = 14;
+const MEANINGFUL_90D_CHANGE_PERCENT: f64 = 5.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -26,8 +27,10 @@ pub struct TrendSummary {
     pub median_90d: Option<f64>,
     pub change_7d: Option<f64>,
     pub change_30d: Option<f64>,
+    pub change_90d: Option<f64>,
     pub volume_avg_7d: Option<f64>,
     pub volume_avg_30d: Option<f64>,
+    pub volume_avg_90d: Option<f64>,
     pub historical_low: Option<f64>,
     pub historical_high: Option<f64>,
     pub timing: Option<TimingSignal>,
@@ -46,6 +49,7 @@ pub fn calculate(points: &[MarketHistoryPoint], context: TrendContext) -> TrendS
     let seven = summarize_window(points, context.as_of, 7, MIN_POINTS_7D);
     let thirty = summarize_window(points, context.as_of, 30, MIN_POINTS_30D);
     let ninety = summarize_window(points, context.as_of, 90, MIN_POINTS_90D);
+    let price_change_90d = summarize_price_change_90d(points, context.as_of);
     let range = ninety.as_ref().or(thirty.as_ref()).or(seven.as_ref());
     let (historical_low, historical_high) =
         range.map_or((None, None), |window| (Some(window.low), Some(window.high)));
@@ -54,6 +58,7 @@ pub fn calculate(points: &[MarketHistoryPoint], context: TrendContext) -> TrendS
         context.live_lowest_ask,
         historical_low,
         historical_high,
+        price_change_90d,
     );
 
     TrendSummary {
@@ -62,8 +67,10 @@ pub fn calculate(points: &[MarketHistoryPoint], context: TrendContext) -> TrendS
         median_90d: ninety.as_ref().map(|window| window.median),
         change_7d: seven.as_ref().and_then(|window| window.change),
         change_30d: thirty.as_ref().and_then(|window| window.change),
+        change_90d: price_change_90d,
         volume_avg_7d: seven.as_ref().map(|window| window.average_volume),
         volume_avg_30d: thirty.as_ref().map(|window| window.average_volume),
+        volume_avg_90d: ninety.as_ref().map(|window| window.average_volume),
         historical_low,
         historical_high,
         timing,
@@ -72,6 +79,31 @@ pub fn calculate(points: &[MarketHistoryPoint], context: TrendContext) -> TrendS
             .filter(|point| trusted_price(point).is_some())
             .count(),
     }
+}
+
+fn summarize_price_change_90d(points: &[MarketHistoryPoint], as_of: NaiveDate) -> Option<f64> {
+    let first_date = as_of - Duration::days(89);
+    let early_end = first_date + Duration::days(29);
+    let recent_start = as_of - Duration::days(29);
+
+    let representative_price = |from: NaiveDate, through: NaiveDate| {
+        let mut trusted = points
+            .iter()
+            .filter(|point| point.source_date >= from && point.source_date <= through)
+            .filter_map(|point| {
+                trusted_price(point).map(|price| (point.source_date, price, point.closed_volume))
+            })
+            .collect::<Vec<_>>();
+        if trusted.len() < MIN_POINTS_30D {
+            return None;
+        }
+        trusted.sort_by_key(|point| point.0);
+        weighted_median(&trusted)
+    };
+
+    let early = representative_price(first_date, early_end)?;
+    let recent = representative_price(recent_start, as_of)?;
+    (early > 0.0).then_some(((recent - early) / early) * 100.0)
 }
 
 struct WindowSummary {
@@ -154,6 +186,7 @@ fn timing_signal(
     live_lowest_ask: Option<f64>,
     low: Option<f64>,
     high: Option<f64>,
+    change_90d: Option<f64>,
 ) -> Option<TimingSignal> {
     let (current, low, high) = (current_price?, low?, high?);
     if !current.is_finite() || current <= 0.0 || high <= low {
@@ -172,6 +205,13 @@ fn timing_signal(
         } else {
             TimingSignal::Sell
         });
+    }
+    if change_90d.is_some_and(|change| change >= MEANINGFUL_90D_CHANGE_PERCENT) {
+        return Some(TimingSignal::Hold);
+    }
+    if position >= 0.35 && change_90d.is_some_and(|change| change <= -MEANINGFUL_90D_CHANGE_PERCENT)
+    {
+        return Some(TimingSignal::Sell);
     }
     if position >= 0.65 {
         Some(TimingSignal::Sell)
@@ -244,6 +284,104 @@ mod tests {
                 live_lowest_ask: Some(10.0),
             },
         );
+        assert_eq!(trend.timing, Some(TimingSignal::Sell));
+    }
+
+    #[test]
+    fn ninety_day_price_trend_compares_early_and_recent_months() {
+        let as_of = NaiveDate::from_ymd_opt(2026, 8, 29).expect("date");
+        let first_date = as_of - Duration::days(89);
+        let points = (0..90)
+            .map(|offset| MarketHistoryPoint {
+                source_date: first_date + Duration::days(offset),
+                closed_median: Some(if offset < 30 {
+                    10.0
+                } else if offset >= 60 {
+                    15.0
+                } else {
+                    12.0
+                }),
+                closed_volume: 5.0,
+                sell_median: None,
+                buy_median: None,
+            })
+            .collect::<Vec<_>>();
+        let trend = calculate(
+            &points,
+            TrendContext {
+                as_of,
+                current_price: Some(10.0),
+                live_lowest_ask: None,
+            },
+        );
+
+        assert_eq!(trend.change_90d, Some(50.0));
+        assert_eq!(trend.volume_avg_90d, Some(5.0));
+    }
+
+    #[test]
+    fn rising_price_below_peak_recommends_waiting() {
+        let as_of = NaiveDate::from_ymd_opt(2026, 8, 29).expect("date");
+        let first_date = as_of - Duration::days(89);
+        let points = (0..90)
+            .map(|offset| MarketHistoryPoint {
+                source_date: first_date + Duration::days(offset),
+                closed_median: Some(if offset < 30 {
+                    10.0
+                } else if offset < 60 {
+                    20.0
+                } else {
+                    15.0
+                }),
+                closed_volume: 5.0,
+                sell_median: None,
+                buy_median: None,
+            })
+            .collect::<Vec<_>>();
+
+        let trend = calculate(
+            &points,
+            TrendContext {
+                as_of,
+                current_price: Some(15.0),
+                live_lowest_ask: Some(15.0),
+            },
+        );
+
+        assert_eq!(trend.change_90d, Some(50.0));
+        assert_eq!(trend.timing, Some(TimingSignal::Hold));
+    }
+
+    #[test]
+    fn falling_price_above_the_low_recommends_selling() {
+        let as_of = NaiveDate::from_ymd_opt(2026, 8, 29).expect("date");
+        let first_date = as_of - Duration::days(89);
+        let points = (0..90)
+            .map(|offset| MarketHistoryPoint {
+                source_date: first_date + Duration::days(offset),
+                closed_median: Some(if offset < 30 {
+                    20.0
+                } else if offset < 60 {
+                    10.0
+                } else {
+                    15.0
+                }),
+                closed_volume: 5.0,
+                sell_median: None,
+                buy_median: None,
+            })
+            .collect::<Vec<_>>();
+
+        let trend = calculate(
+            &points,
+            TrendContext {
+                as_of,
+                current_price: Some(15.0),
+                live_lowest_ask: Some(15.0),
+            },
+        );
+
+        assert_eq!(trend.change_90d, Some(-25.0));
         assert_eq!(trend.timing, Some(TimingSignal::Sell));
     }
 }

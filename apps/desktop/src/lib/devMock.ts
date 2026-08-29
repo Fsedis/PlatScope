@@ -25,6 +25,7 @@ import type {
   PriceConfidence,
 } from "./market";
 import type { LiveSellNowResult, SellNowRow, SellNowView } from "./sellNow";
+import type { RelicRewardScanView } from "./relicRewards";
 
 const sourceDate = "2026-08-26";
 const snapshot = {
@@ -164,9 +165,10 @@ const masteryRequirements: Record<string, number> = {
 
 const rows: MarketSearchRow[] = [
   makeRow("Никс Прайм: комплект", "nyx_prime_set", 87, 14, "medium"),
+  makeRow("Никс Прайм: чертёж", "nyx_prime_blueprint", 10, 5, "medium"),
   makeRow("Никс Прайм: нейрооптика", "nyx_prime_neuroptics", 24, 7, "medium"),
   makeRow("Никс Прайм: каркас", "nyx_prime_chassis", 18, 3, "medium"),
-  makeRow("Никс Прайм: система", "nyx_prime_systems", null, 1, "unknown"),
+  makeRow("Никс Прайм: система", "nyx_prime_systems", 27, 4, "medium"),
   makeRow("Акси N10 реликвия", "axi_n10_relic", 8, 36, "medium", "relic", "radiant"),
   makeRow("Поток Прайм", "primed_flow", 73, 52, "medium", "standard", null, 10),
   makeRow("Primary Deadhead", "primary_deadhead", 2, 5, "medium", "standard", null, 0),
@@ -353,6 +355,7 @@ export async function installMarketBrowserMock(): Promise<void> {
           "demo-nyx_prime_set": {
             slug: "nyx_prime_set",
             displayName: localizedName("nyx_prime_set", "Никс Прайм: комплект"),
+            displayNameEn: "Nyx Prime Set",
             imageUrl: "https://warframe.market/static/assets/items/images/en/thumbs/nyx_prime_set.fd41c04c9e9bcc7e0e6963914f68f880.128x128.png",
           },
         },
@@ -415,6 +418,64 @@ export async function installMarketBrowserMock(): Promise<void> {
       account = { ...account, orders: account.orders.filter((candidate) => candidate.id !== request.id) };
       return order;
     }
+    if (
+      command === "scan_relic_rewards"
+      || command === "latest_relic_rewards"
+      || command === "preview_reward_overlay"
+    ) {
+      const requestedOverlayScale = Number.parseFloat(
+        new URLSearchParams(window.location.search).get("mockOverlayScale") ?? "1",
+      );
+      const rewards = [
+        { row: rows[1], rawText: "Никс Прайм (Чертеж)", confidence: 0.97, ducats: 45, ownedQuantity: 1, completesSet: null },
+        { row: rows[2], rawText: "Никс Прайм: Нейрооптика", confidence: 0.94, ducats: 45, ownedQuantity: 0, completesSet: { setName: "Никс Прайм: Комплект", setPrice: 87, incrementalValue: 63 } },
+        { row: rows[5], rawText: "Акси N10 Реликвия", confidence: 0.89, ducats: null, ownedQuantity: 3, completesSet: null },
+        { row: rows[4], rawText: "Никс Прайм: Система", confidence: 0.93, ducats: 100, ownedQuantity: 2, completesSet: null },
+      ];
+      return {
+        status: "ok",
+        message: null,
+        captureWidth: 1920,
+        captureHeight: 1080,
+        overlayScale: Number.isFinite(requestedOverlayScale) ? requestedOverlayScale : 1,
+        theme: "Lotus",
+        rewards: rewards.map((reward, slot) => ({
+          slot,
+          rawText: reward.rawText,
+          confidence: reward.confidence,
+          itemId: reward.row.itemId,
+          slug: reward.row.recommendation.key.slug,
+          displayName: localizedName(reward.row.recommendation.key.slug, reward.row.displayName),
+          market: localizeMarketRow(reward.row),
+          ducats: reward.ducats,
+          ownedQuantity: reward.ownedQuantity,
+          set: reward.rawText.startsWith("Акси ") ? null : {
+            setName: "Никс Прайм: Комплект",
+            setPrice: 87,
+            readyComponents: reward.completesSet ? 3 : 2,
+            totalComponents: 4,
+            parts: reward.completesSet
+              ? [
+                  { name: "Чертёж", imageUrl: rows[1].imageUrl ?? null, ownedQuantity: 1, requiredQuantity: 1, isReward: false },
+                  { name: "Каркас", imageUrl: rows[3].imageUrl ?? null, ownedQuantity: 1, requiredQuantity: 1, isReward: false },
+                   { name: "Нейрооптика", imageUrl: rows[2].imageUrl ?? null, ownedQuantity: 0, requiredQuantity: 1, isReward: true },
+                   { name: "Система", imageUrl: rows[4].imageUrl ?? null, ownedQuantity: 1, requiredQuantity: 1, isReward: false },
+                   { name: "Тетива", imageUrl: rows[1].imageUrl ?? null, ownedQuantity: 1, requiredQuantity: 1, isReward: false },
+                 ]
+              : [
+                  { name: "Чертёж", imageUrl: rows[1].imageUrl ?? null, ownedQuantity: 1, requiredQuantity: 1, isReward: reward.rawText.includes("Чертеж") },
+                  { name: "Каркас", imageUrl: rows[3].imageUrl ?? null, ownedQuantity: 0, requiredQuantity: 1, isReward: false },
+                   { name: "Нейрооптика", imageUrl: rows[2].imageUrl ?? null, ownedQuantity: 0, requiredQuantity: 1, isReward: false },
+                   { name: "Система", imageUrl: rows[4].imageUrl ?? null, ownedQuantity: 2, requiredQuantity: 1, isReward: reward.rawText.includes("Система") },
+                   { name: "Тетива", imageUrl: rows[1].imageUrl ?? null, ownedQuantity: 1, requiredQuantity: 1, isReward: false },
+                 ],
+          },
+          completesSet: reward.completesSet,
+          choiceValue: reward.completesSet?.incrementalValue ?? reward.row.recommendation.fairPrice,
+          recommended: slot === 1,
+        })),
+      } satisfies RelicRewardScanView;
+    }
     if (command === "search_market") {
       const query = String((args as Record<string, unknown>)?.query ?? "").toLocaleLowerCase("ru");
       const matchingRows = rows.filter(
@@ -439,6 +500,19 @@ export async function installMarketBrowserMock(): Promise<void> {
         catalogFromCache: false,
         failures: [],
       } satisfies MarketRefreshOutcome;
+    }
+    if (command === "bootstrap_history") {
+      return {
+        targetDays: 90,
+        importedDays: 90,
+        skippedDays: 0,
+        coverage: {
+          oldestDate: "2026-05-29",
+          newestDate: "2026-08-26",
+          dayCount: 90,
+        },
+        failures: [],
+      };
     }
     if (command === "live_price_current_variant") {
       const key = (args as { key?: MarketSearchRow["recommendation"]["key"] })?.key;
@@ -493,8 +567,10 @@ export async function installMarketBrowserMock(): Promise<void> {
             median90d: null,
             change7d: null,
             change30d: null,
+            change90d: null,
             volumeAvg7d: null,
             volumeAvg30d: null,
+            volumeAvg90d: null,
             historicalLow: null,
             historicalHigh: null,
             timing: null,
@@ -524,8 +600,10 @@ export async function installMarketBrowserMock(): Promise<void> {
           median90d: null,
           change7d: 17.6,
           change30d: null,
+          change90d: null,
           volumeAvg7d: 11,
           volumeAvg30d: null,
+          volumeAvg90d: null,
           historicalLow: 74,
           historicalHigh: 87,
           timing: "peak",
@@ -543,6 +621,10 @@ export async function installMarketBrowserMock(): Promise<void> {
     }
     if (command === "insights") {
       return makeInsightsView();
+    }
+    if (command === "open_market_items") {
+      const slugs = (args as { slugs?: unknown } | undefined)?.slugs;
+      return Array.isArray(slugs) ? slugs.length : 0;
     }
     if (command === "refresh_game_metadata") {
       return {
@@ -676,14 +758,16 @@ function makeInsightsView(): InsightsView {
       requiredQuantity: component.requiredQuantity,
       ducats: component.ducats,
     },
+    itemId: `demo-${component.slug}`,
+    displayName: rows.find((row) => row.recommendation.key.slug === component.slug)?.displayName ?? component.slug,
     ownedQuantity: component.ownedQuantity,
     recommendation: scopedRecommendation(component.slug),
   }));
   const rewards: RelicRewardInsight[] = [
-    { name: "Nyx Prime Neuroptics Blueprint", slug: "nyx_prime_neuroptics", chance: 25.33 },
-    { name: "Nyx Prime Chassis Blueprint", slug: "nyx_prime_chassis", chance: 25.33 },
-    { name: "Nyx Prime Systems Blueprint", slug: "nyx_prime_systems", chance: 11 },
-    { name: "Forma Blueprint", slug: null, chance: 38.34 },
+    { name: "Никс Прайм: Нейрооптика (Чертеж)", slug: "nyx_prime_neuroptics", chance: 25.33 },
+    { name: "Никс Прайм: Каркас (Чертеж)", slug: "nyx_prime_chassis", chance: 25.33 },
+    { name: "Никс Прайм: Система (Чертеж)", slug: "nyx_prime_systems", chance: 11 },
+    { name: "Чертёж: Форма", slug: null, chance: 38.34 },
   ].map((reward) => ({
     definition: {
       rewardSlug: reward.slug,
@@ -700,7 +784,7 @@ function makeInsightsView(): InsightsView {
     metadata: {
       source: "wfcd_warframe_items",
       fetchedAt: "2026-08-27T07:00:00Z",
-      schemaVersion: 3,
+      schemaVersion: 4,
       setCount: 162,
       relicCount: 2_184,
       primePartCount: 643,
@@ -711,6 +795,8 @@ function makeInsightsView(): InsightsView {
     inventoryAvailable: true,
     sets: [
       {
+        itemId: "demo-nyx_prime_set",
+        imageUrl: "https://warframe.market/static/assets/items/images/en/thumbs/nyx_prime_set.fd41c04c9e9bcc7e0e6963914f68f880.128x128.png",
         definition: {
           setSlug: "nyx_prime_set",
           setGameRef: "/Lotus/Powersuits/Jade/JadePrime",
@@ -844,15 +930,17 @@ function makeSellNowView(): SellNowView {
         trend: {
           median7d: isNyx ? 81 : 70,
           median30d: isNyx ? 76 : 68,
-          median90d: null,
+          median90d: isNyx ? 72 : 65,
           change7d: isNyx ? 17.6 : 6.2,
           change30d: isNyx ? 11.5 : 3.4,
+          change90d: isNyx ? 24.5 : -8.7,
           volumeAvg7d: isNyx ? 11 : 45,
           volumeAvg30d: isNyx ? 9 : 41,
+          volumeAvg90d: isNyx ? 8 : 37,
           historicalLow: isNyx ? 70 : 62,
           historicalHigh: isNyx ? 87 : 75,
           timing: isNyx ? "peak" : "sell",
-          trustedDays: 7,
+          trustedDays: 90,
         },
         priority: {
           score: priorityScore,
@@ -908,6 +996,9 @@ function makeRow(
   return {
     itemId: `demo-${slug}`,
     displayName,
+    imageUrl: slug.startsWith("nyx_prime_")
+      ? "https://warframe.market/static/assets/items/images/en/thumbs/nyx_prime_set.fd41c04c9e9bcc7e0e6963914f68f880.128x128.png"
+      : null,
     itemKind,
     masteryRequirement: masteryRequirements[slug] ?? null,
     recommendation: {

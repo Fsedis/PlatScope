@@ -78,11 +78,13 @@ function row(
     trend: {
       median7d: fairPrice,
       median30d: fairPrice,
-      median90d: null,
+      median90d: fairPrice,
       change7d: 5,
       change30d: null,
+      change90d: 5,
       volumeAvg7d: 12,
       volumeAvg30d: null,
+      volumeAvg90d: 12,
       historicalLow: fairPrice,
       historicalHigh: fairPrice,
       timing,
@@ -111,6 +113,55 @@ describe("sell now presentation", () => {
       filters,
     );
     expect(result.map((item) => item.inventory.canonicalGameId)).toEqual(["high", "low"]);
+  });
+
+  it("sorts trend by the robust 90-day price change", () => {
+    const stronger90d = row("stronger_90d", 10, 5, "neutral");
+    stronger90d.trend!.change7d = -20;
+    stronger90d.trend!.change90d = 30;
+    const stronger7d = row("stronger_7d", 10, 5, "neutral");
+    stronger7d.trend!.change7d = 40;
+    stronger7d.trend!.change90d = 10;
+
+    const result = filterAndSortSellNowRows([stronger7d, stronger90d], {
+      ...filters,
+      sortKey: "trend",
+      sortDirection: "desc",
+    });
+
+    expect(result.map((item) => item.inventory.canonicalGameId)).toEqual([
+      "stronger_90d",
+      "stronger_7d",
+    ]);
+  });
+
+  it("sorts sales volume independently from price growth", () => {
+    const liquid = row("liquid", 10, 5, "neutral");
+    liquid.recommendation!.closedVolume = 80;
+    liquid.trend!.change90d = -10;
+    const growing = row("growing", 10, 5, "hold");
+    growing.recommendation!.closedVolume = 12;
+    growing.trend!.change90d = 30;
+
+    const bySales = filterAndSortSellNowRows([growing, liquid], {
+      ...filters,
+      sortKey: "volume",
+      sortDirection: "desc",
+    });
+    const byGrowth = filterAndSortSellNowRows([liquid, growing], {
+      ...filters,
+      sortKey: "trend",
+      sortDirection: "desc",
+    });
+
+    expect(bySales.map((item) => item.inventory.canonicalGameId)).toEqual([
+      "liquid",
+      "growing",
+    ]);
+    expect(byGrowth.map((item) => item.inventory.canonicalGameId)).toEqual([
+      "growing",
+      "liquid",
+    ]);
   });
 
   it("keeps unpriced rows explicit", () => {
@@ -157,6 +208,7 @@ describe("sell now presentation", () => {
   it("builds English priority explanations from typed factors", () => {
     const result = priorityReasonMessages(row("flow", 70, 40, "sell"), "en");
     expect(result).toHaveLength(4);
-    expect(result.join(" ")).toContain("final ranking score is 70/100");
+    expect(result.join(" ")).toContain("helps choose what to review first");
+    expect(result.join(" ")).not.toContain("70/100");
   });
 });

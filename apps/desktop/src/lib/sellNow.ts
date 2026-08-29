@@ -145,15 +145,22 @@ export function priorityLabel(band: SellPriorityBand, locale: UiLocale = "ru"): 
 }
 
 export function priorityReasonMessages(row: SellNowRow, locale: UiLocale = "ru"): string[] {
-  if (locale === "ru") return row.priority.reasons;
-  if (row.inventory.sellableQuantity === 0) return ["There is no confirmed sellable quantity, so priority is 0."];
-  if (row.recommendation?.fairPrice == null) return ["There is no reliable fair price, so this item does not move up the sell queue."];
-  const factors = row.priority.factors;
-  return [
-    `Sellable quantity is ${row.inventory.sellableQuantity}; the quantity factor is ${Math.round(factors.quantity * 100)}% and saturates after 5 copies.`,
-    `Fair price and closed trades produce a ${Math.round(factors.price * 100)}% price factor and ${Math.round(factors.liquidity * 100)}% liquidity factor.`,
-    `Confidence and timing apply ${Math.round(factors.confidenceMultiplier * 100)}% and ${Math.round(factors.timingMultiplier * 100)}% multipliers; the final ranking score is ${row.priority.score}/100.`,
-    "Priority is a relative review order, not a platinum-per-day forecast.",
+  if (row.inventory.sellableQuantity === 0) return [locale === "ru"
+    ? "Нет подтверждённых копий для продажи, поэтому предмет не поднимается в очереди."
+    : "There are no confirmed copies to sell, so the item does not move up the queue."];
+  if (row.recommendation?.fairPrice == null) return [locale === "ru"
+    ? "Нет надёжной цены, поэтому предмет не поднимается в очереди."
+    : "There is no reliable price, so the item does not move up the queue."];
+  return locale === "ru" ? [
+    `Можно выставить ${row.inventory.sellableQuantity} шт. Количество повышает позицию в очереди, но после пяти копий влияние не растёт.`,
+    "Цена и число завершённых сделок повышают позицию предмета.",
+    "Тренд цены за 90 дней и положение текущей цены формируют рекомендацию: продавать или ждать.",
+    "Очередность помогает выбрать, что проверить первым; она не обещает быструю продажу.",
+  ] : [
+    `${row.inventory.sellableQuantity} can be listed. Quantity raises the item in the queue, with no extra weight after five copies.`,
+    "Price and completed trades raise the item's position.",
+    "The 90-day price trend and current price position determine whether to sell or wait.",
+    "The queue helps choose what to review first; it does not promise a quick sale.",
   ];
 }
 
@@ -170,7 +177,7 @@ function compareRows(left: SellNowRow, right: SellNowRow, key: SellNowSortKey): 
     case "volume":
       return compareNullable(left.recommendation?.closedVolume, right.recommendation?.closedVolume);
     case "trend":
-      return compareNullable(left.trend?.change7d, right.trend?.change7d);
+      return compareNullable(left.trend?.change90d, right.trend?.change90d);
   }
 }
 

@@ -30,6 +30,16 @@ impl ValidationProfile {
         }
     }
 
+    pub const fn historical() -> Self {
+        Self {
+            minimum_catalog_items: 3_000,
+            minimum_market_items: 3_000,
+            minimum_market_records: 9_000,
+            maximum_unknown_item_permyriad: 100,
+            maximum_source_age_days: None,
+        }
+    }
+
     #[cfg(test)]
     const fn fixture() -> Self {
         Self {
@@ -54,7 +64,10 @@ pub fn normalize_catalog(
     let value: Value = serde_json::from_slice(&raw.body).map_err(|error| invalid_json(&error))?;
     let array = value
         .as_array()
-        .ok_or_else(|| ProviderError::schema_changed("catalog root must be an array"))?;
+        .or_else(|| value.get("data").and_then(Value::as_array))
+        .ok_or_else(|| {
+            ProviderError::schema_changed("catalog root must be an array or contain data array")
+        })?;
     if array.len() < profile.minimum_catalog_items {
         return Err(ProviderError::validation(format!(
             "catalog contains {} items; minimum is {}",
@@ -70,34 +83,12 @@ pub fn normalize_catalog(
         let object = object(value, "catalog item")?;
         let item_id = required_string(object, "id")?.to_owned();
         let slug = required_string(object, "slug")?.to_owned();
-        let display_name_en = object
-            .get("i18n")
-            .and_then(Value::as_object)
-            .and_then(|i18n| i18n.get("en"))
-            .and_then(Value::as_object)
-            .and_then(|en| en.get("name"))
-            .and_then(Value::as_str)
-            .filter(|name| !name.trim().is_empty())
+        let display_name_en = localized_catalog_field(object, "en", "name")
             .ok_or_else(|| ProviderError::schema_changed("catalog item lacks i18n.en.name"))?
             .to_owned();
-        let display_name_ru = object
-            .get("i18n")
-            .and_then(Value::as_object)
-            .and_then(|i18n| i18n.get("ru"))
-            .and_then(Value::as_object)
-            .and_then(|ru| ru.get("name"))
-            .and_then(Value::as_str)
-            .filter(|name| !name.trim().is_empty())
-            .map(str::to_owned);
-        let thumb = object
-            .get("i18n")
-            .and_then(Value::as_object)
-            .and_then(|i18n| i18n.get("en"))
-            .and_then(Value::as_object)
-            .and_then(|en| en.get("thumb"))
-            .and_then(Value::as_str)
-            .filter(|thumb| !thumb.trim().is_empty())
-            .map(str::to_owned);
+        let display_name_ru = localized_catalog_field(object, "ru", "name").map(str::to_owned);
+        let thumb = localized_catalog_field(object, "en", "thumb").map(str::to_owned);
+        let thumb_ru = localized_catalog_field(object, "ru", "thumb").map(str::to_owned);
         if !ids.insert(item_id.clone()) || !slugs.insert(slug.clone()) {
             return Err(ProviderError::validation(
                 "catalog contains duplicate id or slug",
@@ -126,6 +117,7 @@ pub fn normalize_catalog(
             display_name_en,
             display_name_ru,
             thumb,
+            thumb_ru,
             game_ref,
             bulk_tradable,
             max_rank,
@@ -138,12 +130,27 @@ pub fn normalize_catalog(
         metadata: CatalogMetadata {
             provider: raw.provider,
             fetched_at: raw.fetched_at,
-            schema_version: 2,
+            schema_version: 3,
             item_count: items.len() as u64,
             checksum_sha256: checksum(&raw.body),
         },
         items,
     })
+}
+
+fn localized_catalog_field<'a>(
+    object: &'a Map<String, Value>,
+    locale: &str,
+    field: &str,
+) -> Option<&'a str> {
+    object
+        .get("i18n")
+        .and_then(Value::as_object)
+        .and_then(|i18n| i18n.get(locale))
+        .and_then(Value::as_object)
+        .and_then(|localized| localized.get(field))
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
 }
 
 /// Нормализует price dump, связывая каждую запись с независимым catalog по `item_id`.
@@ -427,7 +434,7 @@ mod tests {
     use super::*;
 
     const CATALOG: &[u8] = br#"[
-      {"id":"normal","slug":"normal_item","gameRef":"/Normal","tags":["weapon"],"i18n":{"en":{"name":"Normal Item","thumb":"items/images/en/thumbs/normal.png"}}},
+      {"id":"normal","slug":"normal_item","gameRef":"/Normal","tags":["weapon"],"i18n":{"en":{"name":"Normal Item","thumb":"items/images/en/thumbs/normal.png"},"ru":{"name":"\u041e\u0431\u044b\u0447\u043d\u044b\u0439 \u043f\u0440\u0435\u0434\u043c\u0435\u0442","thumb":"items/images/ru/thumbs/normal.png"}}},
       {"id":"ranked","slug":"ranked_mod","tags":["mod"],"bulkTradable":true,"maxRank":10,"i18n":{"en":{"name":"Ranked Mod"}}},
       {"id":"relic","slug":"axi_test_relic","tags":["relic"],"subtypes":["intact","radiant"],"i18n":{"en":{"name":"Axi Test Relic"}}}
     ]"#;
@@ -460,6 +467,35 @@ mod tests {
         assert_eq!(
             item.thumb.as_deref(),
             Some("items/images/en/thumbs/normal.png")
+        );
+        assert_eq!(item.display_name_ru.as_deref(), Some("Обычный предмет"));
+        assert_eq!(
+            item.thumb_ru.as_deref(),
+            Some("items/images/ru/thumbs/normal.png")
+        );
+        assert_eq!(catalog().metadata.schema_version, 3);
+    }
+
+    #[test]
+    fn accepts_wfm_v2_data_envelope() {
+        let body = br#"{
+          "apiVersion":"2.0",
+          "data":[{"id":"normal","slug":"normal_item","i18n":{"en":{"name":"Normal Item"},"ru":{"name":"\u041e\u0431\u044b\u0447\u043d\u044b\u0439 \u043f\u0440\u0435\u0434\u043c\u0435\u0442"}}}]
+        }"#;
+        let catalog = normalize_catalog(
+            &RawMetadataCatalog {
+                provider: ProviderId::WarframeMarket,
+                fetched_at: Utc.with_ymd_and_hms(2026, 8, 29, 0, 0, 0).unwrap(),
+                body: body.to_vec(),
+            },
+            ValidationProfile::fixture(),
+        )
+        .expect("WFM v2 catalog envelope");
+
+        assert_eq!(catalog.items.len(), 1);
+        assert_eq!(
+            catalog.items[0].display_name_ru.as_deref(),
+            Some("Обычный предмет")
         );
     }
 
@@ -536,5 +572,30 @@ mod tests {
         )
         .expect_err("object is not a catalog");
         assert_eq!(error.code, ProviderErrorCode::UpstreamSchemaChanged);
+    }
+
+    #[test]
+    fn historical_profile_keeps_validation_limits_without_rejecting_old_dates() {
+        let current = ValidationProfile::production();
+        let historical = ValidationProfile::historical();
+
+        assert_eq!(
+            historical.minimum_catalog_items,
+            current.minimum_catalog_items
+        );
+        assert_eq!(
+            historical.minimum_market_items,
+            current.minimum_market_items
+        );
+        assert_eq!(
+            historical.minimum_market_records,
+            current.minimum_market_records
+        );
+        assert_eq!(
+            historical.maximum_unknown_item_permyriad,
+            current.maximum_unknown_item_permyriad
+        );
+        assert_eq!(current.maximum_source_age_days, Some(10));
+        assert_eq!(historical.maximum_source_age_days, None);
     }
 }

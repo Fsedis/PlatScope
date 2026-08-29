@@ -770,6 +770,7 @@ mod tests {
                 display_name_en: "Primed Flow".into(),
                 display_name_ru: Some("Поток Прайм".into()),
                 thumb: None,
+                thumb_ru: None,
                 game_ref: Some("/Lotus/Upgrades/Mods/PrimedFlow".into()),
                 bulk_tradable: false,
                 max_rank: Some(10),

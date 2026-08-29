@@ -43,6 +43,7 @@ export interface PrimeSetComponentDefinition {
   gameRef: string;
   requiredQuantity: number;
   ducats: number | null;
+  imageUrl?: string | null;
 }
 
 export interface PrimeSetDefinition {
@@ -67,6 +68,8 @@ export interface SetComparison {
 
 export interface SetComponentInsight {
   definition: PrimeSetComponentDefinition;
+  itemId?: string | null;
+  displayName: string;
   imageUrl?: string | null;
   ownedQuantity: number;
   recommendation: PriceRecommendation | null;
@@ -74,10 +77,34 @@ export interface SetComponentInsight {
 
 export interface SetInsightRow {
   definition: PrimeSetDefinition;
+  itemId?: string | null;
   imageUrl?: string | null;
   setRecommendation: PriceRecommendation | null;
   comparison: SetComparison;
   components: SetComponentInsight[];
+}
+
+export type SetViewMode = "finish" | "ready" | "all";
+
+export interface MissingSetPart {
+  slug: string;
+  displayName: string;
+  quantity: number;
+  fairPrice: number | null;
+  estimatedCost: number | null;
+}
+
+export interface SetOpportunity {
+  completeSets: number;
+  missingParts: MissingSetPart[];
+  missingQuantity: number;
+  completionCost: number | null;
+  setFairValue: number | null;
+  partsFairValue: number | null;
+  setPremiumValue: number | null;
+  setPremiumPercent: number | null;
+  quickToComplete: boolean;
+  profitableToComplete: boolean;
 }
 
 export interface RelicRewardDefinition {
@@ -162,6 +189,92 @@ export interface GameMetadataRefreshOutcome {
   warning: string | null;
 }
 
+export function setOpportunity(row: SetInsightRow): SetOpportunity {
+  const targetSetCount = row.comparison.completeSets + 1;
+  const missingParts = row.components.flatMap((component): MissingSetPart[] => {
+    const targetQuantity = component.definition.requiredQuantity * targetSetCount;
+    const quantity = Math.max(0, targetQuantity - component.ownedQuantity);
+    if (quantity === 0) return [];
+    const fairPrice = component.recommendation?.fairPrice ?? null;
+    return [{
+      slug: component.definition.slug,
+      displayName: component.displayName,
+      quantity,
+      fairPrice,
+      estimatedCost: fairPrice === null ? null : fairPrice * quantity,
+    }];
+  });
+  const completionCost = missingParts.length > 0 && missingParts.every((part) => part.estimatedCost !== null)
+    ? missingParts.reduce((sum, part) => sum + (part.estimatedCost ?? 0), 0)
+    : null;
+  const setFairValue = row.comparison.setFairValue;
+  const partsFairValue = row.comparison.partsFairValue;
+  const setPremiumValue = setFairValue !== null && partsFairValue !== null
+    ? setFairValue - partsFairValue
+    : null;
+  const missingQuantity = missingParts.reduce((sum, part) => sum + part.quantity, 0);
+  const credibleSetPrice = row.setRecommendation !== null
+    && (row.setRecommendation.confidence === "high" || row.setRecommendation.confidence === "medium");
+  const credibleMissingPrices = missingParts.every((part) => {
+    const component = row.components.find((candidate) => candidate.definition.slug === part.slug);
+    const confidence = component?.recommendation?.confidence;
+    return confidence === "high" || confidence === "medium";
+  });
+  const quickToComplete = missingParts.length > 0 && missingParts.length <= 2 && missingQuantity <= 3;
+  return {
+    completeSets: row.comparison.completeSets,
+    missingParts,
+    missingQuantity,
+    completionCost,
+    setFairValue,
+    partsFairValue,
+    setPremiumValue,
+    setPremiumPercent: row.comparison.setPremiumPercent,
+    quickToComplete,
+    profitableToComplete: quickToComplete
+      && credibleSetPrice
+      && credibleMissingPrices
+      && completionCost !== null
+      && setPremiumValue !== null
+      && setPremiumValue > 0,
+  };
+}
+
+export function filterAndSortSets(
+  rows: SetInsightRow[],
+  mode: SetViewMode,
+  query = "",
+  locale: UiLocale = "ru",
+): SetInsightRow[] {
+  const normalizedQuery = query.trim().toLocaleLowerCase(localeCode(locale));
+  return rows
+    .filter((row) => row.definition.displayNameEn.toLocaleLowerCase(localeCode(locale)).includes(normalizedQuery))
+    .filter((row) => {
+      const opportunity = setOpportunity(row);
+      if (mode === "finish") return opportunity.profitableToComplete;
+      if (mode === "ready") return opportunity.completeSets > 0;
+      return true;
+    })
+    .sort((left, right) => {
+      const leftOpportunity = setOpportunity(left);
+      const rightOpportunity = setOpportunity(right);
+      if (mode === "ready") {
+        return rightOpportunity.completeSets - leftOpportunity.completeSets
+          || nullableOpportunity(rightOpportunity.setPremiumValue) - nullableOpportunity(leftOpportunity.setPremiumValue)
+          || left.definition.displayNameEn.localeCompare(right.definition.displayNameEn, localeCode(locale));
+      }
+      return Number(rightOpportunity.profitableToComplete) - Number(leftOpportunity.profitableToComplete)
+        || leftOpportunity.missingParts.length - rightOpportunity.missingParts.length
+        || leftOpportunity.missingQuantity - rightOpportunity.missingQuantity
+        || nullableOpportunity(rightOpportunity.setPremiumValue) - nullableOpportunity(leftOpportunity.setPremiumValue)
+        || left.definition.displayNameEn.localeCompare(right.definition.displayNameEn, localeCode(locale));
+    });
+}
+
+function nullableOpportunity(value: number | null): number {
+  return value ?? Number.NEGATIVE_INFINITY;
+}
+
 export function vaultLabel(status: VaultStatus, locale: UiLocale = "ru"): string {
   if (status === "available") return locale === "en" ? "Available" : "Доступно";
   if (status === "vaulted") return locale === "en" ? "Vaulted" : "В хранилище";
@@ -172,8 +285,8 @@ export function refinementLabel(refinement: RelicRefinement, locale: UiLocale = 
   const labels: Record<RelicRefinement, string> = locale === "en" ? {
     intact: "Intact", exceptional: "Exceptional", flawless: "Flawless", radiant: "Radiant",
   } : {
-    intact: "Интактная",
-    exceptional: "Необычная",
+    intact: "Нетронутая",
+    exceptional: "Исключительная",
     flawless: "Безупречная",
     radiant: "Сияющая",
   };
@@ -197,9 +310,9 @@ export function coverageLabel(coverage: RelicPricingCoverage, locale: UiLocale =
   const labels: Record<RelicPricingCoverage, string> = locale === "en" ? {
     complete: "Complete price coverage", partial: "Partial EV", insufficient: "Not enough prices for EV",
   } : {
-    complete: "Полное покрытие ценами",
-    partial: "Частичный EV",
-    insufficient: "Недостаточно цен для EV",
+    complete: "Цены есть для всех наград",
+    partial: "Цены есть для части наград",
+    insufficient: "Недостаточно цен для расчёта",
   };
   return labels[coverage];
 }

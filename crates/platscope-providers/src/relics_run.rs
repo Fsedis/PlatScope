@@ -32,7 +32,7 @@ impl HistoricalMarketProvider for RelicsRunProvider {
         dump: &RawMarketDump,
         catalog: &ItemCatalog,
     ) -> Result<NormalizedMarketSnapshot, ProviderError> {
-        normalize_market_dump(dump, catalog, self.validation)
+        normalize_market_dump(dump, catalog, ValidationProfile::historical())
     }
 }
 
@@ -135,5 +135,35 @@ impl MetadataProvider for RelicsRunCatalogProvider {
         catalog: &RawMetadataCatalog,
     ) -> Result<ItemCatalog, ProviderError> {
         normalize_catalog(catalog, self.validation)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    #[ignore = "требует доступ к production relics.run"]
+    async fn historical_archive_older_than_ten_days_normalizes() {
+        let catalog_provider = RelicsRunCatalogProvider::new().expect("catalog provider");
+        let raw_catalog = catalog_provider
+            .load_metadata()
+            .await
+            .expect("catalog downloads");
+        let catalog = catalog_provider
+            .normalize_metadata(&raw_catalog)
+            .expect("catalog normalizes");
+        let history_provider = RelicsRunProvider::new().expect("history provider");
+        let source_date = NaiveDate::from_ymd_opt(2026, 8, 16).expect("valid archive date");
+        let dump = history_provider
+            .fetch_day(source_date)
+            .await
+            .expect("old archive downloads");
+        let snapshot = history_provider
+            .normalize_history(&dump, &catalog)
+            .expect("old archive normalizes");
+
+        assert_eq!(snapshot.metadata.source_date, source_date);
+        assert!(snapshot.metadata.record_count >= 9_000);
     }
 }

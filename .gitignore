@@ -4,7 +4,10 @@
 /apps/desktop/node_modules/
 /apps/desktop/dist/
 **/dist/
+**/bin/
+**/obj/
 /apps/desktop/src-tauri/gen/
+/apps/desktop/src-tauri/resources/reward-ocr/
 /coverage/
 .env
 .env.*
@@ -18,3 +21,5 @@
 *.log
 .DS_Store
 Thumbs.db
+*.key
+*-password.xml

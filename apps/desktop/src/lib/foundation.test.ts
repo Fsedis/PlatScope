@@ -17,7 +17,7 @@ describe("describeFoundationStatus", () => {
     };
 
     expect(describeFoundationStatus(status)).toBe(
-      "Локальное хранилище готово, схема 1",
+      "Сохранённые данные готовы · формат 1",
     );
   });
 
@@ -35,7 +35,7 @@ describe("describeFoundationStatus", () => {
     };
 
     expect(describeFoundationStatus(status)).toBe(
-      "Локальное хранилище не готово",
+      "Сохранённые данные не готовы",
     );
   });
 });

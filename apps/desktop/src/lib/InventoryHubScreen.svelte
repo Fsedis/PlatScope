@@ -36,10 +36,7 @@
 </script>
 
 <section class="inventory-view-switcher" aria-labelledby="inventory-view-label">
-  <div>
-    <p id="inventory-view-label">{c.label}</p>
-    <span>{mode === "all" ? c.allHint : c.sellHint}</span>
-  </div>
+  <p id="inventory-view-label" class="sr-only">{c.label}</p>
   <div class="inventory-view-switcher__controls" aria-label={c.label}>
     <button
       type="button"
@@ -66,60 +63,47 @@
   .inventory-view-switcher {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 1rem;
-    margin-block-end: 1rem;
-    border: 1px solid #283752;
-    border-radius: .8rem;
-    padding: .75rem;
-    background: #111b2f;
-  }
-
-  .inventory-view-switcher p,
-  .inventory-view-switcher span {
-    margin: 0;
+    justify-content: flex-start;
+    gap: .65rem;
+    margin-block-end: .7rem;
   }
 
   .inventory-view-switcher p {
-    color: #edf4f7;
-    font-weight: 750;
-  }
-
-  .inventory-view-switcher span {
-    display: block;
-    margin-block-start: .15rem;
-    color: #9ba9bd;
-    font-size: .78rem;
+    margin: 0;
   }
 
   .inventory-view-switcher__controls {
     display: grid;
     flex: 0 0 auto;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: .4rem;
-    border-radius: .65rem;
-    padding: .25rem;
-    background: #0b1424;
+    gap: .25rem;
+    border: 1px solid var(--border);
+    border-radius: .55rem;
+    padding: .18rem;
+    background: var(--surface-2);
   }
 
   .inventory-view-switcher__controls button {
-    min-height: 2.5rem;
+    min-height: 2.125rem;
     border-color: transparent;
     background: transparent;
-    color: #9ba9bd;
+    color: var(--text-muted);
   }
 
   .inventory-view-switcher__controls button.active {
-    border-color: #365a73;
-    background: #1a3147;
-    color: #edf4f7;
+    border-color: var(--border);
+    background: var(--surface-1);
+    color: var(--accent-strong);
+    box-shadow: var(--shadow-sm);
   }
 
   @media (max-width: 46rem) {
     .inventory-view-switcher {
       align-items: stretch;
-      flex-direction: column;
     }
+
+    .inventory-view-switcher__controls { width: 100%; }
+    .inventory-view-switcher__controls button { min-height: 2.5rem; }
   }
 
   @media (max-width: 30rem) {

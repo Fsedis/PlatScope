@@ -92,7 +92,7 @@ Frontend зависит только от сериализуемых command DTO
 
 Порты `BulkMarketProvider`, `LiveMarketProvider`, `InventoryProvider`, `MetadataProvider` и типизированные ошибки. Каждый адаптер владеет транспортным DTO и parser. Ошибка schema drift получает код `UPSTREAM_SCHEMA_CHANGED`.
 
-Catalog следует отдельному `MetadataProvider`; price provider не обещает, что поставляет каталог.
+Catalog следует отдельному `MetadataProvider`; production-адаптер WFM v2 поставляет английские/русские имена и локализованные изображения, а relics.run остаётся независимым price provider. Exact component art из WFCD перекрывает общий WFM thumbnail только на уровне presentation DTO.
 
 ### `platscope-storage`
 

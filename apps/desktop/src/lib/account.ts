@@ -40,7 +40,14 @@ export interface AccountView {
 export interface AccountOrderItem {
   slug: string;
   displayName: string;
+  displayNameEn: string;
   imageUrl: string | null;
+}
+
+export function orderEnglishName(item: AccountOrderItem | undefined): string | null {
+  const localized = item?.displayName.trim() ?? "";
+  const english = item?.displayNameEn.trim() ?? "";
+  return english && english !== localized ? english : null;
 }
 
 export interface CreateListingInput {
@@ -127,26 +134,26 @@ export function accountActionErrorMessage(
   if (normalized.includes("already") || normalized.includes("duplicate")) {
     return locale === "en"
       ? "An order for this exact item variant already exists on WFM. Refresh your orders and edit the existing one."
-      : "На WFM уже есть ордер для этого варианта. Обновите ордера и измените существующий.";
+      : "На Warframe Market уже есть ордер для этого варианта. Обновите список и измените существующий ордер.";
   }
   if (normalized.includes("authorization") || normalized.includes("unauthorized")) {
     return locale === "en"
       ? "The WFM session has expired. Reconnect the account and try again."
-      : "Сессия WFM истекла. Переподключите аккаунт и повторите действие.";
+      : "Сессия Warframe Market истекла. Подключите аккаунт заново и повторите действие.";
   }
   if (normalized.includes("rate limit")) {
     return locale === "en"
       ? "WFM is temporarily limiting requests. Wait a moment and try again."
-      : "WFM временно ограничил запросы. Подождите немного и повторите действие.";
+      : "Warframe Market временно ограничил запросы. Подождите немного и повторите действие.";
   }
   if (normalized.includes("400") || normalized.includes("bad request") || normalized.includes("validation")) {
     return locale === "en"
       ? "WFM rejected the order parameters. Refresh market data, check the exact variant and quantity, then try again."
-      : "WFM отклонил параметры ордера. Обновите рыночные данные, проверьте вариант и количество, затем повторите действие.";
+      : "Warframe Market не принял ордер. Обновите цены и проверьте вариант, цену и количество.";
   }
   return locale === "en"
     ? "WFM did not apply the action. Refresh your orders and try again."
-    : "WFM не применил действие. Обновите ордера и повторите попытку.";
+    : "Warframe Market не применил действие. Обновите ордера и повторите попытку.";
 }
 
 export function matchingSellOrder(

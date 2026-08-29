@@ -169,6 +169,8 @@ pub struct CatalogItem {
     pub display_name_ru: Option<String>,
     #[serde(default)]
     pub thumb: Option<String>,
+    #[serde(default)]
+    pub thumb_ru: Option<String>,
     pub game_ref: Option<String>,
     #[serde(default)]
     pub bulk_tradable: bool,
@@ -241,6 +243,8 @@ pub struct PrimeSetComponentDefinition {
     pub game_ref: String,
     pub required_quantity: u32,
     pub ducats: Option<u32>,
+    #[serde(default)]
+    pub image_url: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -524,5 +528,15 @@ mod tests {
             record.validate(),
             Err(DomainError::InvalidNumber { field: "median" })
         );
+    }
+
+    #[test]
+    fn old_set_components_default_to_no_image() {
+        let component: PrimeSetComponentDefinition = serde_json::from_str(
+            r#"{"slug":"test_prime_barrel","gameRef":"/Lotus/Test/Barrel","requiredQuantity":1,"ducats":45}"#,
+        )
+        .expect("old metadata remains readable");
+
+        assert!(component.image_url.is_none());
     }
 }

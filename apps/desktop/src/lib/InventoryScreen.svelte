@@ -32,23 +32,23 @@
   } as const;
   const copy = {
     ru: {
-      opening: "Открываем локальный инвентарь…", scanning: "Читаем инвентарь запущенного Warframe…",
-      loaded: (count: number) => `Загружено ${count} строк локального снимка.`, noLocal: "Локальный инвентарь ещё не импортирован.",
-      loadError: (reason: string) => `Инвентарь не загрузился. Перезапустите PlatScope и повторите попытку. ${reason}`,
+      opening: "Открываем инвентарь…", scanning: "Получаем инвентарь из Warframe…",
+      loaded: (count: number) => `Загружено предметов: ${count}.`, noLocal: "Инвентарь ещё не обновлялся.",
+      loadError: "Инвентарь не загрузился. Перезапустите PlatScope и повторите попытку.",
       reserveUpdated: (count: number) => `Резерв обновлён: сохраняем ${count} ${count === 1 ? "копию" : "копии"} каждого варианта.`,
-      reserveError: (reason: string) => `Резерв не обновлён. Повторите попытку. ${reason}`,
-      scanHeading: "Сканировать запущенный Warframe", scanBody: "PlatScope читает память процесса только для получения accountId и nonce, затем запрашивает инвентарь у Digital Extremes. Запись в память и внедрение кода не используются.",
-      scanButton: "Сканировать Warframe", scanningButton: "Сканируем…", scanNote: "Warframe должен быть запущен после экрана входа. Метод основан на MIT-коде TennoWorth; абсолютную защиту от санкций разработчик игры не гарантировал.",
+      reserveError: "Резерв не обновлён. Повторите попытку.",
+      scanHeading: "Обновить инвентарь из Warframe", scanBody: "Запустите Warframe, войдите в аккаунт и оставьте игру открытой. PlatScope получит актуальный список предметов.",
+      scanButton: "Обновить инвентарь", scanningButton: "Обновляем…", scanDetails: "Как работает сканирование", scanMethod: "PlatScope только читает два служебных значения из памяти запущенной игры, чтобы запросить ваш инвентарь у Digital Extremes. Приложение не изменяет память игры и не внедряет в неё код.", scanRisk: "Это сторонний способ чтения данных. Digital Extremes не давала отдельной гарантии его безопасности, поэтому запуск остаётся вашим решением.",
       scanComplete: (resolved: number, attention: number) => `Сканирование завершено: ${resolved} строк сопоставлено, ${attention} требуют внимания.`,
-      scanError: (reason: string) => `Сканирование не выполнено. Запустите Warframe, войдите в аккаунт и повторите попытку. Предыдущий снимок сохранён. ${reason}`,
-      summaryLabel: "Сводка инвентаря", totalCopies: "Трейдбл копий", sellable: "Можно продать", matched: "Сопоставлено", attention: "Требуют внимания", snapshot: "снимок",
-      helperWarning: "Внешний export подтверждает количество, но не статус продажи. Такие копии не попадают в Sell Now, пока tradeability неизвестна.",
+      scanError: "Не удалось обновить инвентарь. Запустите Warframe, войдите в аккаунт и повторите попытку. Предыдущие данные сохранены.", technical: "Технические подробности",
+      summaryLabel: "Сводка инвентаря", totalCopies: "Доступных копий", sellable: "Можно продать", matched: "Распознано", attention: "Требуют внимания", snapshot: "данные от",
+      helperWarning: "Внешний файл подтверждает количество, но не возможность продажи. Такие копии не попадут в очередь, пока статус не определён.",
       filtersHeading: "Поиск и фильтры инвентаря", searchLabel: "Поиск в инвентаре", searchExample: "Например, Поток Прайм",
       category: "Категория", allCategories: "Все категории", duplicates: "Дубликаты", allQuantities: "Все количества", duplicatesOnly: "Только дубликаты",
-      vaultStatus: "Vault status", anyVault: "Любой vault status", vaulted: "В хранилище", available: "Доступен", unknown: "Неизвестно",
-      salesMedian48h: "Медиана продаж · 48 ч", cardMedian48h: "Медиана · 48 ч", anyPrice: "Все предметы", priced: "Есть продажи за 48 ч", unpriced: "Нет продаж за 48 ч", keepCopies: "Сохранять копий",
-      inventoryHeading: "Инвентарь", resultHint: "Показаны распознанные продаваемые предметы. Без точного ранга цена и количество к продаже не рассчитываются.", rankUnknown: "Ранг не определён",
-      tableCaption: "Продаваемые предметы, количество и рыночный контекст", item: "Предмет", owned: "Трейдбл", context: "Контекст", matching: "Сопоставление",
+      vaultStatus: "Доступность в игре", anyVault: "Любая", vaulted: "В хранилище", available: "Доступен", unknown: "Неизвестно",
+      salesMedian48h: "Сделки за 48 ч", cardMedian48h: "Средняя цена сделок · 48 ч", anyPrice: "Все предметы", priced: "Были сделки", unpriced: "Сделок не было", keepCopies: "Сохранять копий",
+      inventoryHeading: "Инвентарь", resultHint: "Цена и количество к продаже рассчитываются только для предметов с точным рангом.", rankUnknown: "Ранг не определён",
+      tableCaption: "Продаваемые предметы, количество и рыночные данные", item: "Предмет", owned: "Доступно", context: "Рынок", matching: "Сопоставление",
       noResults: "Нет предметов для выбранных фильтров", loosenFilters: "Очистите поиск или ослабьте один из фильтров.",
       localOnly: "Инвентарь ещё не получен", firstImport: "Сканируйте запущенный Warframe",
       firstImportBody: "Запустите Warframe, войдите в аккаунт и нажмите «Сканировать Warframe» выше.",
@@ -56,13 +56,13 @@
     en: {
       opening: "Opening local inventory…", scanning: "Reading inventory from the running Warframe process…",
       loaded: (count: number) => `Loaded ${count} rows from the local snapshot.`, noLocal: "No local inventory has been imported yet.",
-      loadError: (reason: string) => `Unable to load inventory. Restart PlatScope and try again. ${reason}`,
+      loadError: "Unable to load inventory. Restart PlatScope and try again.",
       reserveUpdated: (count: number) => `Reserve updated: keeping ${count} ${count === 1 ? "copy" : "copies"} of each variant.`,
-      reserveError: (reason: string) => `Unable to update the reserve. Try again. ${reason}`,
-      scanHeading: "Scan the running Warframe client", scanBody: "PlatScope reads process memory only to obtain the accountId and nonce, then requests inventory from Digital Extremes. It does not write memory or inject code.",
-      scanButton: "Scan Warframe", scanningButton: "Scanning…", scanNote: "Warframe must be running past login. This method is based on TennoWorth's MIT code; the game developer has not guaranteed that third-party memory reading is risk-free.",
+      reserveError: "Unable to update the reserve. Try again.",
+      scanHeading: "Update inventory from Warframe", scanBody: "Start Warframe, sign in, and leave the game open. PlatScope will retrieve the current item list.",
+      scanButton: "Update inventory", scanningButton: "Updating…", scanDetails: "How scanning works", scanMethod: "PlatScope reads only two service values from the running game to request your inventory from Digital Extremes. It does not change game memory or inject code.", scanRisk: "This is a third-party method of reading data. Digital Extremes has not provided a separate safety guarantee, so using it remains your choice.",
       scanComplete: (resolved: number, attention: number) => `Scan complete: ${resolved} rows matched, ${attention} need review.`,
-      scanError: (reason: string) => `Scan failed. Start Warframe, log in, and try again. The previous snapshot was preserved. ${reason}`,
+      scanError: "Unable to update inventory. Start Warframe, sign in, and try again. Previous data was preserved.", technical: "Technical details",
       summaryLabel: "Inventory summary", totalCopies: "Tradeable copies", sellable: "Sellable", matched: "Matched", attention: "Needs review", snapshot: "snapshot",
       helperWarning: "An external export confirms quantity but not tradeability. These copies stay out of Sell now while tradeability is unknown.",
       filtersHeading: "Inventory search and filters", searchLabel: "Search inventory", searchExample: "For example, Primed Flow",
@@ -91,6 +91,7 @@
   let viewPreferencesReady = false;
   let message = "";
   let errorMessage = "";
+  let errorDetail = "";
 
   $: visibleItems = filterInventory(inventory?.items ?? [], query, {
     category,
@@ -108,6 +109,7 @@
   async function loadInventory(): Promise<void> {
     loading = true;
     errorMessage = "";
+    errorDetail = "";
     try {
       inventory = await invoke<InventoryView | null>("load_inventory");
       message = inventory
@@ -115,7 +117,8 @@
         : c.noLocal;
     } catch (error) {
       inventory = null;
-      errorMessage = c.loadError(String(error));
+      errorMessage = c.loadError;
+      errorDetail = String(error);
     } finally {
       loading = false;
     }
@@ -124,13 +127,15 @@
   async function scanWarframe(): Promise<void> {
     scanning = true;
     errorMessage = "";
+    errorDetail = "";
     message = "";
     try {
       inventory = await invoke<InventoryView>("scan_read_only_inventory");
       message = c.scanComplete(inventory.summary.resolvedRows, inventory.summary.attentionRows);
       onInventoryChange?.();
     } catch (error) {
-      errorMessage = c.scanError(String(error));
+      errorMessage = c.scanError;
+      errorDetail = String(error);
     } finally {
       scanning = false;
     }
@@ -140,13 +145,15 @@
     const keepCopies = Number((event.currentTarget as HTMLSelectElement).value);
     reserveUpdating = true;
     errorMessage = "";
+    errorDetail = "";
     try {
       inventory = await invoke<InventoryView | null>("set_inventory_keep_copies", {
         keepCopies,
       });
       message = c.reserveUpdated(keepCopies);
     } catch (error) {
-      errorMessage = c.reserveError(String(error));
+      errorMessage = c.reserveError;
+      errorDetail = String(error);
     } finally {
       reserveUpdating = false;
     }
@@ -206,20 +213,25 @@
 {#if errorMessage}
   <div class="error-block" role="alert">
     <p>{errorMessage}</p>
+    {#if errorDetail}<details><summary>{c.technical}</summary><code>{errorDetail}</code></details>{/if}
   </div>
 {/if}
 
 <section class="inventory-import scan-panel" aria-labelledby="inventory-scan-heading">
   <div>
-    <p class="eyebrow">TennoWorth · read-only</p>
+    <p class="eyebrow">Warframe</p>
     <h2 id="inventory-scan-heading">{c.scanHeading}</h2>
     <p>{c.scanBody}</p>
+    <details class="scan-details">
+      <summary>{c.scanDetails}</summary>
+      <p>{c.scanMethod}</p>
+      <p>{c.scanRisk}</p>
+    </details>
   </div>
   <div class="inventory-actions">
     <button type="button" onclick={scanWarframe} disabled={loading || scanning}>
       {scanning ? c.scanningButton : c.scanButton}
     </button>
-    <p class="scan-note" role="note">{c.scanNote}</p>
   </div>
 </section>
 
@@ -318,7 +330,7 @@
             <div class="inventory-card__heading">
               <div>
                 <h3>{item.displayName}</h3>
-                <p>{item.rank === null ? c.rankUnknown : inventoryVariantLabel(item, $locale)}</p>
+                <p>{item.resolution === "exact_variant_unavailable" && item.rank === null && !item.subtype ? c.rankUnknown : inventoryVariantLabel(item, $locale)}</p>
               </div>
               <span class="inventory-card__owned" aria-label={`${c.owned}: ${item.ownedQuantity}`}>
                 <span aria-hidden="true">✓</span> {item.ownedQuantity}

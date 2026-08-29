@@ -18,8 +18,10 @@ export interface TrendSummary {
   median90d: number | null;
   change7d: number | null;
   change30d: number | null;
+  change90d: number | null;
   volumeAvg7d: number | null;
   volumeAvg30d: number | null;
+  volumeAvg90d: number | null;
   historicalLow: number | null;
   historicalHigh: number | null;
   timing: TimingSignal | null;
@@ -92,15 +94,29 @@ export function buildHistoryChart(
 
 export function timingLabel(value: TimingSignal, locale: UiLocale = "ru"): string {
   return (locale === "en" ? {
-    hold: "HOLD — price is near the historical low",
-    neutral: "NEUTRAL — price is within the usual range",
-    sell: "SELL — price is in the upper range",
-    peak: "PEAK — live market confirms the upper range",
+    hold: "Wait — the price is near its recent low",
+    neutral: "Usual price — within the recent range",
+    sell: "Good time to sell — the price is in the upper range",
+    peak: "Best time to sell — current orders confirm the upper range",
   } : {
-    hold: "HOLD — цена у нижней границы истории",
-    neutral: "NEUTRAL — цена внутри обычного диапазона",
-    sell: "SELL — цена в верхней части диапазона",
-    peak: "PEAK — верх диапазона подтверждён live-рынком",
+    hold: "Лучше подождать — цена у нижней границы последних значений",
+    neutral: "Обычная цена — внутри привычного диапазона",
+    sell: "Хорошее время для продажи — цена в верхней части диапазона",
+    peak: "Лучший момент для продажи — текущие ордера подтверждают верх диапазона",
+  })[value];
+}
+
+export function timingShortLabel(value: TimingSignal, locale: UiLocale = "ru"): string {
+  return (locale === "en" ? {
+    hold: "Wait",
+    neutral: "Usual price",
+    sell: "Good time",
+    peak: "Best time",
+  } : {
+    hold: "Лучше подождать",
+    neutral: "Обычная цена",
+    sell: "Хорошее время",
+    peak: "Лучший момент",
   })[value];
 }
 

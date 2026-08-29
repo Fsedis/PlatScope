@@ -32,6 +32,7 @@ const DOCUMENT_NAMES: [&str; 10] = [
 ];
 const MAX_DOCUMENT_COUNT: usize = 12;
 const MAX_TOTAL_BYTES: usize = 96 * 1024 * 1024;
+const WFCD_IMAGE_BASE_URL: &str = "https://cdn.warframestat.us/img";
 
 pub struct WfcdMetadataProvider {
     client: BoundedHttpClient,
@@ -116,6 +117,7 @@ struct WfcdComponent {
     tradable: bool,
     ducats: Option<u32>,
     prime_selling_price: Option<u32>,
+    image_name: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -152,6 +154,19 @@ struct WfcdMarketInfo {
 
 const fn one() -> u32 {
     1
+}
+
+fn wfcd_component_image_url(image_name: Option<&str>) -> Option<String> {
+    let image_name = image_name?.trim();
+    if image_name.is_empty()
+        || image_name.len() > 128
+        || !image_name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
+        return None;
+    }
+    Some(format!("{WFCD_IMAGE_BASE_URL}/{image_name}"))
 }
 
 fn normalize_wfcd_metadata(
@@ -232,7 +247,7 @@ fn normalize_wfcd_metadata(
         metadata: GameMetadataSnapshotMetadata {
             source: GameMetadataSource::WfcdWarframeItems,
             fetched_at: dump.fetched_at,
-            schema_version: 3,
+            schema_version: 4,
             set_count: u64::try_from(prime_sets.len()).unwrap_or(u64::MAX),
             relic_count: u64::try_from(relics.len()).unwrap_or(u64::MAX),
             prime_part_count: u64::try_from(prime_parts.len()).unwrap_or(u64::MAX),
@@ -358,11 +373,13 @@ fn parse_sets(
                 continue;
             };
             let ducats = component.ducats.or(component.prime_selling_price);
+            let image_url = wfcd_component_image_url(component.image_name.as_deref());
             components.push(PrimeSetComponentDefinition {
                 slug: slug.into(),
                 game_ref: component.unique_name.clone(),
                 required_quantity: component.item_count,
                 ducats,
+                image_url,
             });
             if let Some(ducats) = ducats.filter(|ducats| *ducats > 0) {
                 parts.insert(
@@ -520,6 +537,10 @@ mod tests {
         assert_eq!(result.prime_sets.len(), 1);
         assert_eq!(result.prime_sets[0].set_slug, "nyx_prime_set");
         assert_eq!(result.prime_sets[0].components.len(), 4);
+        assert_eq!(
+            result.prime_sets[0].components[0].image_url.as_deref(),
+            Some("https://cdn.warframestat.us/img/blueprint.png")
+        );
         assert_eq!(result.prime_sets[0].vault_status, VaultStatus::Vaulted);
         assert_eq!(result.prime_parts.len(), 4);
         assert_eq!(result.relics.len(), 2);
@@ -585,6 +606,16 @@ mod tests {
         assert!(error.message.contains("invalid mastery requirement"));
     }
 
+    #[test]
+    fn component_images_accept_only_safe_cdn_file_names() {
+        assert_eq!(
+            wfcd_component_image_url(Some("GenericGunPrimeBarrel.png")).as_deref(),
+            Some("https://cdn.warframestat.us/img/GenericGunPrimeBarrel.png")
+        );
+        assert!(wfcd_component_image_url(Some("../secret.png")).is_none());
+        assert!(wfcd_component_image_url(Some("https://example.com/a.png")).is_none());
+    }
+
     fn catalog() -> ItemCatalog {
         let definitions = [
             (
@@ -630,6 +661,7 @@ mod tests {
                     display_name_en: slug.into(),
                     display_name_ru: None,
                     thumb: None,
+                    thumb_ru: None,
                     game_ref: Some(game_ref.into()),
                     bulk_tradable: false,
                     max_rank: None,

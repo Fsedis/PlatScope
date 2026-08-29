@@ -5,6 +5,7 @@ import {
   createListingInput,
   createListingInputFromInventory,
   matchingSellOrder,
+  orderEnglishName,
   validateListingNumbers,
   type AccountView,
 } from "./account";
@@ -43,6 +44,21 @@ const row: MarketSearchRow = {
 };
 
 describe("account listing drafts", () => {
+  it("shows the English market name only when it adds useful context", () => {
+    expect(orderEnglishName({
+      slug: "primed_flow",
+      displayName: "Поток Прайм",
+      displayNameEn: "Primed Flow",
+      imageUrl: null,
+    })).toBe("Primed Flow");
+    expect(orderEnglishName({
+      slug: "primed_flow",
+      displayName: "Primed Flow",
+      displayNameEn: "Primed Flow",
+      imageUrl: null,
+    })).toBeNull();
+  });
+
   it("preserves the exact selected market variant", () => {
     expect(createListingInput(row, 75, 1, false, null)).toMatchObject({
       itemId: "wfm-item-id",

@@ -54,7 +54,7 @@ Structured logs используют allowlist полей. Запрещены re
 
 ## Packaging и подпись
 
-CI packaging создаёт только workflow artifacts с read-only repository permission и SHA-256 manifest. Неподписанный NSIS/AppImage предназначен для внутреннего QA. Публичная публикация, auto-update manifest и формулировки о доверенном installer запрещены до появления защищённых signing credentials и release environment. Полная политика ключей, проверки, публикации, ротации и реакции на компрометацию: [Подпись и доверенный релиз](RELEASE_SIGNING.md).
+Ручной CI packaging создаёт workflow artifacts с read-only repository permission. Теговый release workflow получает отдельный Tauri updater key только через GitHub Secrets, публикует подписанный update artifact, `latest.json` и SHA-256. Приватный ключ не доступен frontend, обычным quality jobs и pull request из forks. Authenticode-сертификата пока нет, поэтому Windows может показывать SmartScreen; подпись updater не выдаётся за подпись подтверждённого Windows-издателя. Полная политика: [Подпись и публичный релиз](RELEASE_SIGNING.md).
 
 Уровень локального логирования можно переопределить только через `PLATSCOPE_LOG`; глобальная переменная `RUST_LOG` других Rust-приложений не меняет диагностическую полноту PlatScope.
 
@@ -72,7 +72,7 @@ CI packaging создаёт только workflow artifacts с read-only reposit
 - lockfiles коммитятся;
 - зависимости минимальны и проверяются audit-инструментами;
 - GPL/proprietary reference code не переносится;
-- updater, когда появится, проверяет подпись и не блокирует ручное восстановление;
+- updater проверяет встроенную подпись Tauri, требует подтверждения установки и не блокирует ручное восстановление;
 - provider schema changes не могут автоматически менять исполняемый код.
 
 ## Diagnostic export

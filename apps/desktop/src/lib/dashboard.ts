@@ -57,9 +57,9 @@ export function liquidityLabel(band: LiquidityBand, locale: UiLocale = "ru"): st
     active: "Active market",
   } : {
     unpriced: "Нет надёжной цены",
-    thin: "Тонкий рынок",
-    limited: "Ограниченный объём",
-    active: "Активный рынок",
+    thin: "Мало покупателей",
+    limited: "Небольшой спрос",
+    active: "Высокий спрос",
   })[band];
 }
 

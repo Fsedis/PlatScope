@@ -98,11 +98,11 @@ describe("market presentation helpers", () => {
   });
 
   it("явно помечает stale live-кэш", () => {
-    expect(liveQuoteLabel("stale_cache")).toBe("Устаревший live-кэш");
+    expect(liveQuoteLabel("stale_cache")).toBe("Сохранённые ордера могли устареть");
   });
 
   it("localizes price explanations and live-cache state by stable codes", () => {
-    expect(liveQuoteLabel("stale_cache", "en")).toBe("Stale live cache");
+    expect(liveQuoteLabel("stale_cache", "en")).toBe("Saved orders may be outdated");
     expect(priceReasonMessage({ code: "source_fresh", message: "Свежие данные" }, "en"))
       .toBe("The bulk snapshot is fresh.");
     expect(priceReasonMessage({ code: "riven_pricing_unsupported", message: "Нет оценки" }, "en"))

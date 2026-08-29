@@ -16,6 +16,20 @@ export interface HistoryCoverage {
   dayCount: number;
 }
 
+export interface HistoryBootstrapFailure {
+  sourceDate: string;
+  code: string;
+  message: string;
+}
+
+export interface HistoryBootstrapOutcome {
+  targetDays: number;
+  importedDays: number;
+  skippedDays: number;
+  coverage: HistoryCoverage;
+  failures: HistoryBootstrapFailure[];
+}
+
 export type ProviderId =
   | "relics_run"
   | "frame_forge_mirror"
@@ -50,12 +64,12 @@ export interface MarketRefreshOutcome {
 
 export function describeFoundationStatus(status: FoundationStatus, locale: UiLocale = "ru"): string {
   if (!status.offlineReady) {
-    return locale === "en" ? "Local storage is not ready" : "Локальное хранилище не готово";
+    return locale === "en" ? "Saved data is not ready" : "Сохранённые данные не готовы";
   }
 
   return locale === "en"
-    ? `Local storage ready, schema ${status.schemaVersion}`
-    : `Локальное хранилище готово, схема ${status.schemaVersion}`;
+    ? `Saved data is ready · format ${status.schemaVersion}`
+    : `Сохранённые данные готовы · формат ${status.schemaVersion}`;
 }
 
 export function providerLabel(provider: ProviderId, locale: UiLocale = "ru"): string {
@@ -67,9 +81,9 @@ export function providerLabel(provider: ProviderId, locale: UiLocale = "ru"): st
     case "warframe_market":
       return "Warframe.Market";
     case "local_cache":
-      return locale === "en" ? "local cache" : "локальный кэш";
+      return locale === "en" ? "saved data" : "сохранённые данные";
     case "import":
-      return locale === "en" ? "import" : "импорт";
+      return locale === "en" ? "imported file" : "импортированный файл";
   }
 }
 import type { UiLocale } from "./i18n";

@@ -106,10 +106,11 @@
 
 - [x] Windows x64 NSIS и Linux x86_64 AppImage закреплены в Tauri config;
 - [x] ручной matrix workflow собирает и сохраняет оба installer artifact;
-- [x] workflow не создаёт GitHub Release и не требует write permission;
+- [x] QA workflow не создаёт GitHub Release и не требует write permission;
 - [x] code signing policy, граница доверенного релиза и SHA-256 manifests;
-- [ ] защищённые signing credentials, release environment и реально подписанные artifacts;
-- [ ] auto-update после появления подписанного release channel.
+- [x] защищённые GitHub Secrets и подписанные updater artifacts;
+- [x] публичный GitHub Release и встроенный auto-update для Windows;
+- [ ] Authenticode-сертификат издателя и отдельный подписанный Linux release channel.
 
 ## 13. Dashboard
 

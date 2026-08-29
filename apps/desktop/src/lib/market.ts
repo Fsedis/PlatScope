@@ -20,8 +20,29 @@ export interface PriceReason {
 }
 
 export function priceReasonMessage(reason: PriceReason, locale: UiLocale = "ru"): string {
-  if (locale === "ru") return reason.message;
-  const messages: Record<string, string> = {
+  const messages: Record<string, string> = locale === "ru" ? {
+    trusted_closed_trades: "Цена подтверждается завершёнными сделками именно для этого варианта.",
+    closed_volume_too_low: "Сделок пока мало, поэтому оценка менее надёжна.",
+    conservative_sell_adjustment: "Рекомендуемая цена немного снижена, чтобы повысить шанс продажи.",
+    sell_only_fallback: "Есть только ордера на продажу; подтверждённых сделок недостаточно.",
+    relic_sell_ignored: "Ордера на продажу реликвии не использовались как подтверждённая цена.",
+    no_exact_variant: "Для выбранного ранга или варианта нет отдельных данных.",
+    live_book_variant_mismatch: "Ордера для других рангов и вариантов не учитывались.",
+    isolated_ask_ignored: "Одиночный ордер с необычной ценой исключён из расчёта.",
+    live_cluster_shift: "Несколько текущих ордеров показывают, что цена рынка изменилась.",
+    thin_market_protection: "Из-за малого числа сделок рекомендация рассчитана осторожнее.",
+    live_market_agreement: "Текущие ордера совпадают с оценкой по завершённым сделкам.",
+    live_market_disagreement: "Текущие ордера расходятся с историей сделок, поэтому надёжность оценки снижена.",
+    live_top_buy: "Лучшая покупка сейчас взята из самой высокой активной заявки покупателя.",
+    no_live_top_buy: "Активных заявок покупателей нет, поэтому мгновенную цену показать нельзя.",
+    source_fresh: "Цена рассчитана по свежим данным.",
+    source_aging: "Данные начинают устаревать; перед публикацией лучше проверить текущие ордера.",
+    source_stale: "Данные устарели; обновите рынок перед публикацией ордера.",
+    source_date_invalid: "Не удалось определить дату цены.",
+    fallback_provider: "Основной источник недоступен, поэтому показаны последние доступные данные.",
+    riven_pricing_unsupported: "Цена конкретного мода разлома зависит от его характеристик и здесь не рассчитывается.",
+    insufficient_signal: "Надёжных сделок недостаточно для расчёта цены.",
+  } : {
     trusted_closed_trades: "Fair price is supported by exact-variant closed trades.",
     closed_volume_too_low: "Closed-trade volume is too low for a strong signal.",
     conservative_sell_adjustment: "The sell estimate was adjusted conservatively.",
@@ -44,7 +65,9 @@ export function priceReasonMessage(reason: PriceReason, locale: UiLocale = "ru")
     riven_pricing_unsupported: "Unique Riven rolls require a separate model; standard item medians were not used.",
     insufficient_signal: "There is not enough reliable market data for a price.",
   };
-  return messages[reason.code] ?? "A bounded pricing rule contributed to this recommendation.";
+  return messages[reason.code] ?? (locale === "ru"
+    ? "На оценку повлияло одно из ограничений расчёта."
+    : "A pricing safeguard affected this recommendation.");
 }
 
 export interface PriceRecommendation {
@@ -113,13 +136,13 @@ export interface LivePricingResult {
 
 export function liveQuoteLabel(value: LiveQuoteState, locale: UiLocale = "ru"): string {
   return (locale === "en" ? {
-    network: "Just fetched from WFM",
-    cache: "From the local live cache",
-    stale_cache: "Stale live cache",
+    network: "Just updated from Warframe Market",
+    cache: "Updated recently",
+    stale_cache: "Saved orders may be outdated",
   } : {
-    network: "Только что с WFM",
-    cache: "Из локального live-кэша",
-    stale_cache: "Устаревший live-кэш",
+    network: "Только что обновлено с Warframe Market",
+    cache: "Обновлено недавно",
+    stale_cache: "Сохранённые ордера могли устареть",
   })[value];
 }
 

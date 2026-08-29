@@ -28,8 +28,8 @@ pub use platscope_pricing::PriceRecommendation;
 use platscope_pricing::{PricingContext, recommend};
 use platscope_providers::{
     BulkMarketProvider, FrameForgeMirrorProvider, GameMetadataProvider, HistoricalMarketProvider,
-    LiveMarketProvider, MetadataProvider, ProviderError, ProviderErrorCode,
-    RelicsRunCatalogProvider, RelicsRunProvider, WarframeMarketProvider, WfcdMetadataProvider,
+    LiveMarketProvider, MetadataProvider, ProviderError, ProviderErrorCode, RelicsRunProvider,
+    WarframeMarketProvider, WfcdMetadataProvider,
 };
 use platscope_selling::{SellPriorityInput, SellPriorityScore, calculate_priority, nominal_value};
 use platscope_storage::{Database, HistoryCoverage, MarketSnapshotSummary};
@@ -44,7 +44,12 @@ pub const DEFAULT_LIVE_QUOTE_TTL_SECONDS: u64 = 90;
 const MINIMUM_RELATIVE_SNAPSHOT_PERCENT: u128 = 20;
 pub const HISTORY_TARGET_DAYS: u16 = 90;
 pub const HISTORY_IMPORTS_PER_RUN: usize = 7;
+const HISTORY_FETCH_ATTEMPTS: u8 = 3;
 pub const DEFAULT_KEEP_COPIES: u32 = 1;
+pub const DEFAULT_REWARD_OVERLAY_SCALE_PERCENT: u16 = 100;
+pub const DEFAULT_REWARD_OVERLAY_OFFSET_PERCENT: i16 = 0;
+const CURRENT_GAME_METADATA_SCHEMA_VERSION: u32 = 4;
+const CURRENT_CATALOG_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -67,6 +72,12 @@ pub struct AppSettings {
     pub inventory_companion_enabled: bool,
     #[serde(default)]
     pub inventory_companion_path: Option<String>,
+    #[serde(default = "default_reward_overlay_scale_percent")]
+    pub reward_overlay_scale_percent: u16,
+    #[serde(default = "default_reward_overlay_offset_percent")]
+    pub reward_overlay_offset_x_percent: i16,
+    #[serde(default = "default_reward_overlay_offset_percent")]
+    pub reward_overlay_offset_y_percent: i16,
 }
 
 impl Default for AppSettings {
@@ -80,12 +91,23 @@ impl Default for AppSettings {
             keep_inventory_copies: DEFAULT_KEEP_COPIES,
             inventory_companion_enabled: false,
             inventory_companion_path: None,
+            reward_overlay_scale_percent: DEFAULT_REWARD_OVERLAY_SCALE_PERCENT,
+            reward_overlay_offset_x_percent: DEFAULT_REWARD_OVERLAY_OFFSET_PERCENT,
+            reward_overlay_offset_y_percent: DEFAULT_REWARD_OVERLAY_OFFSET_PERCENT,
         }
     }
 }
 
 const fn default_keep_copies() -> u32 {
     DEFAULT_KEEP_COPIES
+}
+
+const fn default_reward_overlay_scale_percent() -> u16 {
+    DEFAULT_REWARD_OVERLAY_SCALE_PERCENT
+}
+
+const fn default_reward_overlay_offset_percent() -> i16 {
+    DEFAULT_REWARD_OVERLAY_OFFSET_PERCENT
 }
 
 pub struct LoggingGuard {
@@ -153,6 +175,7 @@ pub struct AccountView {
 pub struct AccountOrderItemView {
     pub slug: String,
     pub display_name: String,
+    pub display_name_en: String,
     pub image_url: Option<String>,
 }
 
@@ -169,6 +192,8 @@ pub struct GameMetadataRefreshOutcome {
 #[serde(rename_all = "camelCase")]
 pub struct SetComponentInsight {
     pub definition: PrimeSetComponentDefinition,
+    pub item_id: Option<String>,
+    pub display_name: String,
     pub image_url: Option<String>,
     pub owned_quantity: u32,
     pub recommendation: Option<PriceRecommendation>,
@@ -178,6 +203,7 @@ pub struct SetComponentInsight {
 #[serde(rename_all = "camelCase")]
 pub struct SetInsightRow {
     pub definition: PrimeSetDefinition,
+    pub item_id: Option<String>,
     pub image_url: Option<String>,
     pub set_recommendation: Option<PriceRecommendation>,
     pub comparison: SetComparison,
@@ -662,10 +688,20 @@ impl MarketBrowserService {
                 catalog
                     .items
                     .into_iter()
-                    .filter_map(|item| item.thumb.map(|thumb| (item.item_id, thumb)))
+                    .filter_map(|item| {
+                        let thumb = match language {
+                            Language::Russian => item.thumb_ru.or(item.thumb),
+                            Language::English => item.thumb,
+                        };
+                        thumb.map(|thumb| (item.item_id, thumb))
+                    })
                     .collect()
             })
             .unwrap_or_default();
+        let component_images = database
+            .load_current_game_metadata()?
+            .as_ref()
+            .map_or_else(HashMap::new, component_image_urls_by_slug);
         let mastery_requirements = database.current_mastery_requirements()?;
         let truncated = bundles.len() > limit;
         bundles.truncate(limit);
@@ -695,9 +731,11 @@ impl MarketBrowserService {
                     live_order_book: None,
                 });
                 MarketSearchRow {
-                    image_url: image_by_item_id
-                        .get(&bundle.item_id)
-                        .map(|thumb| market_image_url(thumb)),
+                    image_url: component_images.get(&bundle.key.slug).cloned().or_else(|| {
+                        image_by_item_id
+                            .get(&bundle.item_id)
+                            .map(|thumb| market_image_url(thumb))
+                    }),
                     item_id: bundle.item_id,
                     display_name,
                     item_kind,
@@ -794,6 +832,7 @@ impl InventoryService {
                 settings.platform,
                 settings.keep_inventory_copies,
             ),
+            settings.language,
         )
     }
 
@@ -817,6 +856,7 @@ impl InventoryService {
                         settings.platform,
                         settings.keep_inventory_copies,
                     ),
+                    settings.language,
                 )
             })
             .transpose()
@@ -947,7 +987,10 @@ pub fn game_metadata_refresh_due(
     refresh_hours: u16,
 ) -> bool {
     let interval = ChronoDuration::hours(i64::from(refresh_hours.clamp(1, 168)));
-    current.is_none_or(|metadata| now.signed_duration_since(metadata.fetched_at) >= interval)
+    current.is_none_or(|metadata| {
+        metadata.schema_version < CURRENT_GAME_METADATA_SCHEMA_VERSION
+            || now.signed_duration_since(metadata.fetched_at) >= interval
+    })
 }
 
 impl InsightsService {
@@ -1171,9 +1214,15 @@ pub fn enrich_account_view(
     language: Language,
     mut view: AccountView,
 ) -> Result<AccountView, CoreError> {
-    let Some(catalog) = lock_database(database)?.load_current_catalog()? else {
+    let database = lock_database(database)?;
+    let Some(catalog) = database.load_current_catalog()? else {
         return Ok(view);
     };
+    let component_images = database
+        .load_current_game_metadata()?
+        .as_ref()
+        .map_or_else(HashMap::new, component_image_urls_by_slug);
+    drop(database);
     let wanted: std::collections::HashSet<&str> = view
         .orders
         .iter()
@@ -1184,16 +1233,27 @@ pub fn enrich_account_view(
         .into_iter()
         .filter(|item| wanted.contains(item.item_id.as_str()))
         .map(|item| {
+            let display_name_en = item.display_name_en;
             let display_name = match language {
-                Language::Russian => item.display_name_ru.unwrap_or(item.display_name_en),
-                Language::English => item.display_name_en,
+                Language::Russian => item
+                    .display_name_ru
+                    .unwrap_or_else(|| display_name_en.clone()),
+                Language::English => display_name_en.clone(),
+            };
+            let thumb = match language {
+                Language::Russian => item.thumb_ru.or(item.thumb),
+                Language::English => item.thumb,
             };
             (
                 item.item_id,
                 AccountOrderItemView {
+                    image_url: component_images
+                        .get(&item.slug)
+                        .cloned()
+                        .or_else(|| thumb.map(|thumb| market_image_url(&thumb))),
                     slug: item.slug,
                     display_name,
-                    image_url: item.thumb.map(|thumb| market_image_url(&thumb)),
+                    display_name_en,
                 },
             )
         })
@@ -1215,38 +1275,101 @@ fn require_write_confirmation(confirmed: bool) -> Result<(), CoreError> {
     }
 }
 
+type InsightCatalogIdentity = (String, String, Option<String>);
+
+fn load_insight_catalog(
+    database: &Mutex<Database>,
+    language: Language,
+) -> Result<HashMap<String, InsightCatalogIdentity>, CoreError> {
+    Ok(lock_database(database)?
+        .load_current_catalog()?
+        .map(|catalog| {
+            catalog
+                .items
+                .into_iter()
+                .map(|item| {
+                    let display_name = match language {
+                        Language::Russian => item
+                            .display_name_ru
+                            .filter(|name| !name.trim().is_empty())
+                            .unwrap_or(item.display_name_en),
+                        Language::English => item.display_name_en,
+                    };
+                    let thumb = match language {
+                        Language::Russian => item.thumb_ru.or(item.thumb),
+                        Language::English => item.thumb,
+                    };
+                    (item.slug, (item.item_id, display_name, thumb))
+                })
+                .collect()
+        })
+        .unwrap_or_default())
+}
+
+fn insight_image_url(
+    slug: &str,
+    inventory: &[InventoryViewItem],
+    catalog: &HashMap<String, InsightCatalogIdentity>,
+) -> Option<String> {
+    inventory
+        .iter()
+        .find(|item| item.key.as_ref().is_some_and(|key| key.slug == slug))
+        .and_then(|item| item.image_url.clone())
+        .or_else(|| {
+            catalog
+                .get(slug)
+                .and_then(|(_, _, thumb)| thumb.as_deref())
+                .map(market_image_url)
+        })
+}
+
+fn build_set_components(
+    database: &Mutex<Database>,
+    settings: &AppSettings,
+    definition: &PrimeSetDefinition,
+    inventory: &[InventoryViewItem],
+    catalog: &HashMap<String, InsightCatalogIdentity>,
+) -> Result<Vec<SetComponentInsight>, CoreError> {
+    definition
+        .components
+        .iter()
+        .map(|component| {
+            let catalog_item = catalog.get(&component.slug);
+            Ok(SetComponentInsight {
+                definition: component.clone(),
+                item_id: catalog_item.map(|(item_id, _, _)| item_id.clone()),
+                display_name: catalog_item.map_or_else(
+                    || component.slug.replace('_', " "),
+                    |(_, display_name, _)| display_name.clone(),
+                ),
+                image_url: component
+                    .image_url
+                    .clone()
+                    .or_else(|| insight_image_url(&component.slug, inventory, catalog)),
+                owned_quantity: sellable_quantity(inventory, &component.slug),
+                recommendation: price_slug(
+                    database,
+                    &component.slug,
+                    settings.platform,
+                    None,
+                    MarketItemKind::Standard,
+                )?,
+            })
+        })
+        .collect()
+}
+
 fn build_set_insights(
     database: &Mutex<Database>,
     settings: &AppSettings,
     definitions: &[PrimeSetDefinition],
     inventory: &[InventoryViewItem],
 ) -> Result<Vec<SetInsightRow>, CoreError> {
+    let catalog_by_slug = load_insight_catalog(database, settings.language)?;
     let mut rows = Vec::new();
     for definition in definitions {
-        let mut components = Vec::with_capacity(definition.components.len());
-        for component in &definition.components {
-            let owned_quantity = sellable_quantity(inventory, &component.slug);
-            let recommendation = price_slug(
-                database,
-                &component.slug,
-                settings.platform,
-                None,
-                MarketItemKind::Standard,
-            )?;
-            components.push(SetComponentInsight {
-                definition: component.clone(),
-                image_url: inventory
-                    .iter()
-                    .find(|item| {
-                        item.key
-                            .as_ref()
-                            .is_some_and(|key| key.slug == component.slug)
-                    })
-                    .and_then(|item| item.image_url.clone()),
-                owned_quantity,
-                recommendation,
-            });
-        }
+        let components =
+            build_set_components(database, settings, definition, inventory, &catalog_by_slug)?;
         if components
             .iter()
             .all(|component| component.owned_quantity == 0)
@@ -1296,14 +1419,10 @@ fn build_set_insights(
         });
         rows.push(SetInsightRow {
             definition: definition.clone(),
-            image_url: inventory
-                .iter()
-                .find(|item| {
-                    item.key
-                        .as_ref()
-                        .is_some_and(|key| key.slug == definition.set_slug)
-                })
-                .and_then(|item| item.image_url.clone()),
+            item_id: catalog_by_slug
+                .get(&definition.set_slug)
+                .map(|(item_id, _, _)| item_id.clone()),
+            image_url: insight_image_url(&definition.set_slug, inventory, &catalog_by_slug),
             set_recommendation,
             comparison,
             components,
@@ -1594,7 +1713,7 @@ fn build_sell_now_row(
             HistoryService::view(
                 database,
                 &recommendation.key,
-                7,
+                90,
                 recommendation.fair_price,
                 live_lowest_ask,
             )
@@ -1775,46 +1894,67 @@ fn inventory_item_visible(item: &ResolvedInventoryItem) -> bool {
 fn enrich_inventory_view(
     database: &Mutex<Database>,
     mut view: InventoryView,
+    language: Language,
 ) -> Result<InventoryView, CoreError> {
-    let catalog_by_slug: HashMap<String, (String, Option<String>, bool)> = lock_database(database)?
-        .load_current_catalog()?
-        .map(|catalog| {
-            catalog
-                .items
-                .into_iter()
-                .map(|item| {
-                    // Каталоги schema v1 ещё не содержали bulkTradable. Эти теги
-                    // полностью состоят из bulk-предметов в WFM и позволяют
-                    // корректно обновиться без ожидания следующего refresh.
-                    (
-                        item.slug,
+    let catalog_by_slug: HashMap<String, (String, String, Option<String>, bool)> =
+        lock_database(database)?
+            .load_current_catalog()?
+            .map(|catalog| {
+                catalog
+                    .items
+                    .into_iter()
+                    .map(|item| {
+                        // Каталоги schema v1 ещё не содержали bulkTradable. Эти теги
+                        // полностью состоят из bulk-предметов в WFM и позволяют
+                        // корректно обновиться без ожидания следующего refresh.
+                        let display_name = match language {
+                            Language::Russian => item
+                                .display_name_ru
+                                .filter(|name| !name.trim().is_empty())
+                                .unwrap_or_else(|| item.display_name_en.clone()),
+                            Language::English => item.display_name_en.clone(),
+                        };
+                        let thumb = match language {
+                            Language::Russian => item.thumb_ru.or(item.thumb),
+                            Language::English => item.thumb,
+                        };
                         (
-                            item.item_id,
-                            item.thumb,
-                            catalog_bulk_tradable(item.bulk_tradable, &item.tags),
-                        ),
-                    )
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+                            item.slug,
+                            (
+                                item.item_id,
+                                display_name,
+                                thumb,
+                                catalog_bulk_tradable(item.bulk_tradable, &item.tags),
+                            ),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
     let metadata = lock_database(database)?.load_current_game_metadata()?;
     let vault_statuses = metadata
         .as_ref()
         .map_or_else(HashMap::new, vault_status_by_slug);
+    let component_images = metadata
+        .as_ref()
+        .map_or_else(HashMap::new, component_image_urls_by_slug);
     let market_source_date = lock_database(database)?
         .current_market_snapshot()?
         .map(|snapshot| snapshot.source_date);
 
     for item in &mut view.items {
         if let Some(key) = item.key.as_ref()
-            && let Some((item_id, thumb, bulk_tradable)) = catalog_by_slug.get(&key.slug)
+            && let Some((item_id, display_name, thumb, bulk_tradable)) =
+                catalog_by_slug.get(&key.slug)
         {
             item.item_id = Some(item_id.clone());
+            item.display_name.clone_from(display_name);
             item.bulk_tradable = *bulk_tradable;
-            if let Some(thumb) = thumb {
-                item.image_url = Some(format!("https://warframe.market/static/assets/{thumb}"));
-            }
+            item.image_url = component_images.get(&key.slug).cloned().or_else(|| {
+                thumb
+                    .as_ref()
+                    .map(|thumb| format!("https://warframe.market/static/assets/{thumb}"))
+            });
         }
         let vault_slug = item
             .key
@@ -1902,6 +2042,22 @@ fn vault_status_by_slug(
     statuses
 }
 
+fn component_image_urls_by_slug(
+    snapshot: &platscope_domain::GameMetadataSnapshot,
+) -> HashMap<String, String> {
+    snapshot
+        .prime_sets
+        .iter()
+        .flat_map(|set| &set.components)
+        .filter_map(|component| {
+            component
+                .image_url
+                .as_ref()
+                .map(|image_url| (component.slug.clone(), image_url.clone()))
+        })
+        .collect()
+}
+
 fn merge_vault_status(
     statuses: &mut HashMap<String, VaultStatus>,
     slug: &str,
@@ -1940,6 +2096,29 @@ impl HistoryService {
         &self,
         database: &Mutex<Database>,
     ) -> Result<HistoryBootstrapOutcome, CoreError> {
+        self.bootstrap_with_limit(database, HISTORY_IMPORTS_PER_RUN)
+            .await
+    }
+
+    /// Импортирует все отсутствующие дни целевого 90-дневного окна по ручному запросу.
+    /// Raw JSON живёт только до нормализации и не сохраняется в SQLite.
+    ///
+    /// # Errors
+    ///
+    /// Возвращает [`CoreError`] только для локального state; provider failures входят в outcome.
+    pub async fn bootstrap_full(
+        &self,
+        database: &Mutex<Database>,
+    ) -> Result<HistoryBootstrapOutcome, CoreError> {
+        self.bootstrap_with_limit(database, usize::from(HISTORY_TARGET_DAYS))
+            .await
+    }
+
+    async fn bootstrap_with_limit(
+        &self,
+        database: &Mutex<Database>,
+        import_limit: usize,
+    ) -> Result<HistoryBootstrapOutcome, CoreError> {
         let _bootstrap_guard = self.bootstrap_lock.lock().await;
         let (current, catalog) = {
             let database = lock_database(database)?;
@@ -1962,7 +2141,7 @@ impl HistoryService {
         let mut skipped_days = 0;
         let mut failures = Vec::new();
         for offset in 0..HISTORY_TARGET_DAYS {
-            if imported_days >= HISTORY_IMPORTS_PER_RUN {
+            if imported_days >= import_limit {
                 break;
             }
             let source_date = current.source_date - ChronoDuration::days(i64::from(offset));
@@ -1970,8 +2149,7 @@ impl HistoryService {
                 skipped_days += 1;
                 continue;
             }
-            let fetched = self.provider.fetch_day(source_date).await;
-            match fetched.and_then(|dump| self.provider.normalize_history(&dump, &catalog)) {
+            match self.fetch_history_day(source_date, &catalog).await {
                 Ok(snapshot) => {
                     lock_database(database)?.promote_history_snapshot(&snapshot)?;
                     imported_days += 1;
@@ -1983,11 +2161,20 @@ impl HistoryService {
                     );
                 }
                 Err(error) => {
-                    let should_continue = error.code == ProviderErrorCode::NotPublished;
+                    let should_continue =
+                        error.code == ProviderErrorCode::NotPublished || error.retryable;
+                    let message = public_error_message(&error);
+                    tracing::warn!(
+                        event = "history_day_failed",
+                        source_date = %source_date,
+                        code = ?error.code,
+                        message = %message,
+                        "history day could not be imported"
+                    );
                     failures.push(HistoryBootstrapFailure {
                         source_date,
                         code: error.code,
-                        message: public_error_message(&error),
+                        message,
                     });
                     if !should_continue {
                         break;
@@ -2002,6 +2189,35 @@ impl HistoryService {
             coverage: lock_database(database)?.history_coverage()?,
             failures,
         })
+    }
+
+    async fn fetch_history_day(
+        &self,
+        source_date: NaiveDate,
+        catalog: &ItemCatalog,
+    ) -> Result<platscope_domain::NormalizedMarketSnapshot, ProviderError> {
+        for attempt in 1..=HISTORY_FETCH_ATTEMPTS {
+            let result = self
+                .provider
+                .fetch_day(source_date)
+                .await
+                .and_then(|dump| self.provider.normalize_history(&dump, catalog));
+            match result {
+                Ok(snapshot) => return Ok(snapshot),
+                Err(error) if error.retryable && attempt < HISTORY_FETCH_ATTEMPTS => {
+                    tracing::warn!(
+                        event = "history_day_retry",
+                        source_date = %source_date,
+                        attempt,
+                        code = ?error.code,
+                        "retrying transient history download failure"
+                    );
+                    tokio::time::sleep(Duration::from_millis(500 * u64::from(attempt))).await;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        unreachable!("history retry loop always returns")
     }
 
     /// Загружает только запрошенный ряд точного варианта и рассчитывает 7/30/90 trend.
@@ -2058,7 +2274,7 @@ impl MarketDataService {
     /// Возвращает [`CoreError`], если HTTP clients нельзя создать.
     pub fn production() -> Result<Self, CoreError> {
         Ok(Self {
-            catalog_provider: Arc::new(RelicsRunCatalogProvider::new()?),
+            catalog_provider: Arc::new(WarframeMarketProvider::new()?),
             market_providers: vec![
                 Arc::new(RelicsRunProvider::new()?),
                 Arc::new(FrameForgeMirrorProvider::new()?),
@@ -2094,10 +2310,19 @@ impl MarketDataService {
     ) -> Result<Option<MarketRefreshOutcome>, CoreError> {
         let _refresh_guard = self.refresh_lock.lock().await;
         let current = lock_database(database)?.current_market_snapshot()?;
-        let catalog_needs_images = lock_database(database)?
-            .load_current_catalog()?
-            .is_none_or(|catalog| catalog.items.iter().all(|item| item.thumb.is_none()));
-        if !market_refresh_due(current.as_ref(), Utc::now(), refresh_hours) && !catalog_needs_images
+        let catalog_needs_refresh =
+            lock_database(database)?
+                .load_current_catalog()?
+                .is_none_or(|catalog| {
+                    catalog.metadata.schema_version < CURRENT_CATALOG_SCHEMA_VERSION
+                        || catalog.items.iter().all(|item| item.thumb.is_none())
+                        || catalog
+                            .items
+                            .iter()
+                            .all(|item| item.display_name_ru.is_none())
+                });
+        if !market_refresh_due(current.as_ref(), Utc::now(), refresh_hours)
+            && !catalog_needs_refresh
         {
             return Ok(None);
         }
@@ -2535,7 +2760,7 @@ mod tests {
         let metadata = GameMetadataSnapshotMetadata {
             source: platscope_domain::GameMetadataSource::WfcdWarframeItems,
             fetched_at: now - ChronoDuration::hours(23),
-            schema_version: 3,
+            schema_version: CURRENT_GAME_METADATA_SCHEMA_VERSION,
             set_count: 1,
             relic_count: 1,
             prime_part_count: 1,
@@ -2548,6 +2773,11 @@ mod tests {
         assert!(!game_metadata_refresh_due(Some(&metadata), now, 24));
         assert!(game_metadata_refresh_due(Some(&metadata), now, 12));
         assert!(game_metadata_refresh_due(Some(&metadata), now, 0));
+        let old_metadata = GameMetadataSnapshotMetadata {
+            schema_version: CURRENT_GAME_METADATA_SCHEMA_VERSION - 1,
+            ..metadata
+        };
+        assert!(game_metadata_refresh_due(Some(&old_metadata), now, 24));
     }
 
     #[test]
@@ -2656,6 +2886,7 @@ mod tests {
                 display_name_en: "Nyx Prime Set".into(),
                 display_name_ru: Some("Никс Прайм: комплект".into()),
                 thumb: None,
+                thumb_ru: None,
                 game_ref: None,
                 bulk_tradable: false,
                 max_rank: None,

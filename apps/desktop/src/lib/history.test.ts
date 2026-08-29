@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildHistoryChart, formatChange, timingLabel } from "./history";
+import { buildHistoryChart, formatChange, timingLabel, timingShortLabel } from "./history";
 
 describe("history presentation", () => {
   it("не строит линию по одной точке", () => {
@@ -26,8 +26,9 @@ describe("history presentation", () => {
     expect(model?.dots).toHaveLength(2);
   });
 
-  it("локализует изменение и timing", () => {
+  it("локализует изменение и момент продажи", () => {
     expect(formatChange(12.34)).toBe("+12,3%");
-    expect(timingLabel("peak")).toContain("PEAK");
+    expect(timingLabel("peak")).toContain("Лучший момент");
+    expect(timingShortLabel("sell")).toBe("Хорошее время");
   });
 });

@@ -3,7 +3,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use chrono::Utc;
 use platscope_domain::{
-    LiveOrder, LiveOrderBook, LiveOrderSide, MarketVariantKey, Platform, ProviderId, UserStatus,
+    ItemCatalog, LiveOrder, LiveOrderBook, LiveOrderSide, MarketVariantKey, Platform, ProviderId,
+    UserStatus,
 };
 use reqwest::{Client, StatusCode, header};
 use serde::Deserialize;
@@ -11,10 +12,14 @@ use serde_json::Value;
 use tokio::sync::Mutex;
 use tokio::time::{Instant, sleep};
 
-use crate::{LiveMarketProvider, ProviderError, ProviderErrorCode};
+use crate::{
+    LiveMarketProvider, MetadataProvider, ProviderError, ProviderErrorCode, RawMetadataCatalog,
+    ValidationProfile, normalize_catalog,
+};
 
 const API_BASE: &str = "https://api.warframe.market/v2";
 const MAX_LIVE_RESPONSE_BYTES: usize = 1024 * 1024;
+const MAX_CATALOG_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 const MIN_REQUEST_INTERVAL: Duration = Duration::from_millis(350);
 const MAX_ATTEMPTS: u32 = 3;
 
@@ -142,6 +147,112 @@ impl WarframeMarketProvider {
             "WFM retry loop ended unexpectedly",
             true,
         ))
+    }
+
+    async fn fetch_catalog_body(&self) -> Result<Vec<u8>, ProviderError> {
+        let url = format!("{API_BASE}/items");
+        for attempt in 0..MAX_ATTEMPTS {
+            self.wait_for_rate_limit().await;
+            let response = self
+                .client
+                .get(&url)
+                .header("Language", "ru")
+                .header("Platform", "pc")
+                .header("Crossplay", "true")
+                .send()
+                .await
+                .map_err(|error| map_reqwest_error(&error))?;
+            let status = response.status();
+            if status == StatusCode::TOO_MANY_REQUESTS || status.as_u16() == 509 {
+                if attempt + 1 == MAX_ATTEMPTS {
+                    return Err(ProviderError::new(
+                        ProviderErrorCode::RateLimited,
+                        format!("WFM rate limit reached after {MAX_ATTEMPTS} attempts"),
+                        true,
+                    ));
+                }
+                sleep(retry_delay(&response, attempt)).await;
+                continue;
+            }
+            if status.is_server_error() {
+                if attempt + 1 == MAX_ATTEMPTS {
+                    return Err(ProviderError::new(
+                        ProviderErrorCode::Unavailable,
+                        format!("WFM returned HTTP {status}"),
+                        true,
+                    ));
+                }
+                sleep(backoff_with_jitter(attempt)).await;
+                continue;
+            }
+            if !status.is_success() {
+                return Err(ProviderError::new(
+                    ProviderErrorCode::Unavailable,
+                    format!("WFM returned HTTP {status}"),
+                    false,
+                ));
+            }
+            let content_type = response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            if !content_type.contains("application/json") && !content_type.contains("+json") {
+                return Err(ProviderError::schema_changed(format!(
+                    "unexpected WFM content type: {content_type}"
+                )));
+            }
+            if response
+                .content_length()
+                .is_some_and(|length| length > MAX_CATALOG_RESPONSE_BYTES as u64)
+            {
+                return Err(ProviderError::new(
+                    ProviderErrorCode::ResponseTooLarge,
+                    "WFM catalog response exceeds 8 MiB",
+                    false,
+                ));
+            }
+            let body = response
+                .bytes()
+                .await
+                .map_err(|error| map_reqwest_error(&error))?;
+            if body.len() > MAX_CATALOG_RESPONSE_BYTES {
+                return Err(ProviderError::new(
+                    ProviderErrorCode::ResponseTooLarge,
+                    "WFM catalog response exceeds 8 MiB",
+                    false,
+                ));
+            }
+            return Ok(body.to_vec());
+        }
+        Err(ProviderError::new(
+            ProviderErrorCode::Unavailable,
+            "WFM retry loop ended unexpectedly",
+            true,
+        ))
+    }
+}
+
+#[async_trait]
+impl MetadataProvider for WarframeMarketProvider {
+    fn id(&self) -> ProviderId {
+        ProviderId::WarframeMarket
+    }
+
+    async fn load_metadata(&self) -> Result<RawMetadataCatalog, ProviderError> {
+        Ok(RawMetadataCatalog {
+            provider: ProviderId::WarframeMarket,
+            fetched_at: Utc::now(),
+            body: self.fetch_catalog_body().await?,
+        })
+    }
+
+    fn normalize_metadata(
+        &self,
+        catalog: &RawMetadataCatalog,
+    ) -> Result<ItemCatalog, ProviderError> {
+        normalize_catalog(catalog, ValidationProfile::production())
     }
 }
 
@@ -350,5 +461,24 @@ mod tests {
                 ("cyanStars", "1".to_owned()),
             ]
         );
+    }
+
+    #[tokio::test]
+    #[ignore = "hits the public WFM API"]
+    async fn production_catalog_contains_russian_names_and_mod_images() {
+        let provider = WarframeMarketProvider::new().expect("provider");
+        let raw = provider.load_metadata().await.expect("WFM catalog");
+        let catalog = provider
+            .normalize_metadata(&raw)
+            .expect("normalized WFM catalog");
+        let primed_flow = catalog
+            .items
+            .iter()
+            .find(|item| item.slug == "primed_flow")
+            .expect("Primed Flow");
+
+        assert_eq!(primed_flow.display_name_ru.as_deref(), Some("Поток Прайм"));
+        assert!(primed_flow.thumb.is_some());
+        assert!(primed_flow.thumb_ru.is_some());
     }
 }

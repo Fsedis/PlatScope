@@ -177,12 +177,12 @@ export function inventorySourceLabel(source: InventorySource, locale: UiLocale =
     case "platscope_json":
       return "PlatScope JSON";
     case "helper_import":
-      return locale === "en" ? "helper import" : "импорт helper-инструмента";
+      return locale === "en" ? "Imported file" : "Импортированный файл";
     case "overwolf_companion":
       return "Overwolf companion";
     case "test_fixture":
       return locale === "en" ? "test data" : "тестовые данные";
     case "read_only_scan":
-      return locale === "en" ? "read-only scan" : "read-only сканирование";
+      return locale === "en" ? "Warframe scan" : "Сканирование Warframe";
   }
 }

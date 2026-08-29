@@ -16,22 +16,22 @@
   const locale = useLocale();
   const copy = {
     ru: {
-      loadError: (reason: string) => `Не удалось прочитать локальную диагностику. Перезапустите PlatScope или повторите попытку. Техническая причина: ${reason}`,
-      exportError: (reason: string) => `Не удалось сохранить отчёт. Проверьте доступ к локальной папке данных и повторите попытку. Техническая причина: ${reason}`,
-      localState: "Локальное состояние", heading: "Диагностика без terminal logs", intro: "Показывает последний сохранённый результат источников и покрытие локальных данных. Открытие экрана не выполняет сетевых запросов.", updating: "Обновляем сведения…", update: "Обновить сведения", saving: "Сохраняем отчёт…", export: "Экспортировать безопасный отчёт",
-      reading: "Читаем локальное состояние…", updated: (date: string) => `Сведения обновлены ${date}.`, saved: (path: string, bytes: string) => `Отчёт сохранён: ${path} (${bytes} байт).`, unavailable: "Диагностика недоступна", retry: "Повторить",
-      foundation: "Offline foundation", storageVersion: "Хранилище и версия", offlineReady: "Готово offline", attention: "Требует внимания", application: "Приложение", storage: "Хранилище", schema: "Версия схемы", database: "База данных",
-      providerHealth: "Provider health", sources: "Внешние источники", savedAttempt: "Статус основан только на последней сохранённой попытке.", lastAttempt: "Последняя попытка", lastSuccess: "Последний успех", latency: "Время ответа", failures: "Ошибок подряд", unchecked: "PlatScope ещё не обращался к этому источнику в текущем локальном профиле.",
-      localCoverage: "Local coverage", coverage: "Покрытие данных", market: "Рынок", records: "записей", items: "предметов", sourceDate: "Дата источника:", promoted: "Принят:", noMarket: "Корректного рыночного снимка ещё нет.", catalog: "Каталог", catalogBody: "локализованных и canonical записей", history: "История", days: "дней", inventory: "Инвентарь", inventoryBody: "строк последнего корректного локального снимка",
-      privacy: "Что здесь не показывается", privacyBody: "Токены, пароли, account ID, nonce, raw inventory и HTTP authorization headers не входят в диагностический контракт. Сообщения provider-ошибок ограничиваются и сохраняются только в безопасном виде.",
+      loadError: (_reason: string) => "Не удалось проверить состояние данных. Перезапустите PlatScope или повторите попытку.",
+      exportError: (_reason: string) => "Не удалось сохранить отчёт. Проверьте доступ к папке данных и повторите попытку.",
+      localState: "Проверка данных", updating: "Проверяем…", update: "Проверить снова", saving: "Сохраняем отчёт…", export: "Сохранить отчёт",
+      reading: "Проверяем сохранённые данные…", updated: (date: string) => `Проверено ${date}.`, saved: (path: string, bytes: string) => `Отчёт сохранён: ${path} (${bytes} байт).`, unavailable: "Не удалось проверить данные", retry: "Повторить",
+      foundation: "Приложение", storageVersion: "Версия и сохранённые файлы", offlineReady: "Готово к работе", attention: "Нужно проверить", application: "Версия PlatScope", storage: "Состояние файлов", schema: "Версия данных", database: "Папка базы данных",
+      providerHealth: "Обновление", sources: "Источники данных", savedAttempt: "Показан результат последней попытки обновления.", lastAttempt: "Последняя проверка", lastSuccess: "Последнее успешное обновление", latency: "Время ответа", failures: "Неудач подряд", unchecked: "Этот источник ещё не проверялся.", lastError: "Последняя ошибка",
+      localCoverage: "Сохранённые данные", coverage: "Что доступно", market: "Цены рынка", records: "ценовых записей", items: "предметов", sourceDate: "Данные от:", promoted: "Загружены:", noMarket: "Цены рынка ещё не загружены.", catalog: "Предметы", catalogBody: "названий и вариантов", history: "История цен", days: "дней", inventory: "Инвентарь", inventoryBody: "распознанных строк",
+      privacy: "Конфиденциальные данные", privacyBody: "Пароли и ключи входа не попадают в отчёт. Его можно приложить к сообщению об ошибке.",
     },
     en: {
-      loadError: (reason: string) => `Unable to read local diagnostics. Restart PlatScope or try again. Technical reason: ${reason}`,
-      exportError: (reason: string) => `Unable to save the report. Check access to the local data folder and try again. Technical reason: ${reason}`,
-      localState: "Local state", heading: "Diagnostics without terminal logs", intro: "Shows the last saved provider result and local data coverage. Opening this screen does not make network requests.", updating: "Refreshing details…", update: "Refresh details", saving: "Saving report…", export: "Export safe report",
+      loadError: (_reason: string) => "Unable to check data status. Restart PlatScope or try again.",
+      exportError: (_reason: string) => "Unable to save the report. Check access to the data folder and try again.",
+      localState: "Data check", updating: "Checking…", update: "Check again", saving: "Saving report…", export: "Save report",
       reading: "Reading local state…", updated: (date: string) => `Details refreshed ${date}.`, saved: (path: string, bytes: string) => `Report saved: ${path} (${bytes} bytes).`, unavailable: "Diagnostics unavailable", retry: "Try again",
       foundation: "Offline foundation", storageVersion: "Storage and version", offlineReady: "Offline ready", attention: "Needs attention", application: "Application", storage: "Storage", schema: "Schema version", database: "Database",
-      providerHealth: "Provider health", sources: "External sources", savedAttempt: "Status is based only on the last saved attempt.", lastAttempt: "Last attempt", lastSuccess: "Last success", latency: "Response time", failures: "Consecutive failures", unchecked: "PlatScope has not contacted this source in the current local profile.",
+      providerHealth: "Refresh", sources: "Data sources", savedAttempt: "The result of the last refresh attempt is shown.", lastAttempt: "Last check", lastSuccess: "Last successful refresh", latency: "Response time", failures: "Failures in a row", unchecked: "This source has not been checked yet.", lastError: "Last error",
       localCoverage: "Local coverage", coverage: "Data coverage", market: "Market", records: "records", items: "items", sourceDate: "Source date:", promoted: "Promoted:", noMarket: "No valid market snapshot yet.", catalog: "Catalog", catalogBody: "localized and canonical records", history: "History", days: "days", inventory: "Inventory", inventoryBody: "rows in the latest valid local snapshot",
       privacy: "What is not shown", privacyBody: "Tokens, passwords, account IDs, nonces, raw inventory, and HTTP authorization headers are excluded from the diagnostics contract. Provider error messages are bounded and stored only in a safe form.",
     },
@@ -79,10 +79,7 @@
 </script>
 
 <div class="diagnostics-shell" aria-busy={loading}>
-  <section class="diagnostics-intro" aria-labelledby="diagnostics-overview-heading">
-    <div>
-      <p class="section-kicker">{c.localState}</p><h2 id="diagnostics-overview-heading">{c.heading}</h2><p>{c.intro}</p>
-    </div>
+  <div class="diagnostics-intro" aria-label={c.localState}>
     <div class="intro-actions">
       <button type="button" onclick={loadDiagnostics} disabled={loading || exporting}>
         {loading ? c.updating : c.update}
@@ -91,7 +88,7 @@
         {exporting ? c.saving : c.export}
       </button>
     </div>
-  </section>
+  </div>
 
   <div class="diagnostics-status" role="status" aria-live="polite">
     {#if loading}
@@ -125,8 +122,9 @@
         </span>
       </div>
       <dl class="summary-grid">
-        <div><dt>{c.application}</dt><dd>{status.foundation.appName} {status.foundation.appVersion}</dd></div><div><dt>{c.storage}</dt><dd>{describeFoundationStatus(status.foundation, $locale)}</dd></div><div><dt>{c.schema}</dt><dd>{status.foundation.schemaVersion}</dd></div><div class="path-cell"><dt>{c.database}</dt><dd>{status.foundation.databasePath}</dd></div>
+        <div><dt>{c.application}</dt><dd>{status.foundation.appName} {status.foundation.appVersion}</dd></div><div><dt>{c.storage}</dt><dd>{describeFoundationStatus(status.foundation, $locale)}</dd></div><div><dt>{c.schema}</dt><dd>{status.foundation.schemaVersion}</dd></div>
       </dl>
+      <details class="database-path"><summary>{c.database}</summary><code>{status.foundation.databasePath}</code></details>
     </section>
 
     <section aria-labelledby="providers-heading">
@@ -149,7 +147,10 @@
               <div><dt>{c.lastAttempt}</dt><dd>{formatDiagnosticDate(provider.lastAttempt, $locale)}</dd></div><div><dt>{c.lastSuccess}</dt><dd>{formatDiagnosticDate(provider.lastSuccess, $locale)}</dd></div><div><dt>{c.latency}</dt><dd>{formatLatency(provider.latencyMs, $locale)}</dd></div><div><dt>{c.failures}</dt><dd>{provider.consecutiveFailures.toLocaleString(localeCode($locale))}</dd></div>
             </dl>
             {#if provider.lastErrorCode}
-              <p class="provider-error"><strong>{provider.lastErrorCode}</strong>{provider.lastErrorMessage ? ` · ${provider.lastErrorMessage}` : ""}</p>
+              <details class="provider-error">
+                <summary>{c.lastError}</summary>
+                <code><strong>{provider.lastErrorCode}</strong>{provider.lastErrorMessage ? ` · ${provider.lastErrorMessage}` : ""}</code>
+              </details>
             {:else if provider.condition === "unchecked"}
               <p class="provider-note">{c.unchecked}</p>
             {/if}
@@ -195,50 +196,55 @@
 <style>
   .diagnostics-shell { display: grid; gap: 1rem; }
   .diagnostics-intro, .section-heading { display: flex; align-items: start; justify-content: space-between; gap: 1.25rem; }
-  .diagnostics-intro, .diagnostics-error, .privacy-note, .provider-card, .coverage-grid article, .summary-grid > div { border: 1px solid #283752; border-radius: .8rem; background: #111b2f; box-shadow: 0 .75rem 2rem rgb(0 0 0 / 14%); }
-  .diagnostics-intro, .diagnostics-error, .privacy-note { padding: 1rem; }
-  .diagnostics-intro h2, .section-heading h2, .diagnostics-error h2, .privacy-note h2 { margin-block-end: .35rem; font-size: 1.2rem; }
-  .diagnostics-intro p, .section-heading p, .diagnostics-error p, .privacy-note p { max-width: 68ch; margin-block-end: 0; color: #9ba9bd; line-height: 1.5; }
-  .section-kicker { margin-block-end: .3rem !important; color: #72a7ff !important; font-size: .78rem; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
-  .diagnostics-status { min-height: 1.5rem; color: #9ba9bd; }
-  .diagnostics-status span { overflow-wrap: anywhere; color: #d8e5e9; }
+  .diagnostics-intro { justify-content: end; }
+  .diagnostics-error, .privacy-note, .provider-card, .coverage-grid article, .summary-grid > div { border: 1px solid var(--border); border-radius: .75rem; background: var(--surface-1); box-shadow: var(--shadow-sm); }
+  .diagnostics-error, .privacy-note { padding: .75rem; }
+  .section-heading h2, .diagnostics-error h2, .privacy-note h2 { margin-block-end: .35rem; font-size: 1.2rem; }
+  .section-heading p, .diagnostics-error p, .privacy-note p { max-width: 68ch; margin-block-end: 0; color: var(--text-muted); line-height: 1.5; }
+  .section-kicker { margin-block-end: .3rem !important; color: var(--accent-strong) !important; font-size: .76rem; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
+  .diagnostics-status { min-height: 1.5rem; color: var(--text-muted); }
+  .diagnostics-status span { overflow-wrap: anywhere; color: var(--text); }
   .intro-actions { display: flex; flex: 0 0 auto; gap: .65rem; }
   button.secondary { background: transparent; }
-  .export-error { margin: 0; border: 1px solid #9c5555; border-radius: .7rem; padding: .8rem; background: #2b1719; color: #ffd0cc; }
-  .diagnostics-error { border-color: #9c5555; background: #2b1719; }
+  .export-error { margin: 0; border: 1px solid var(--danger); border-radius: .55rem; padding: .6rem; background: var(--danger-soft); color: var(--danger); }
+  .diagnostics-error { border-color: var(--danger); background: var(--danger-soft); }
   .diagnostics-error p { margin-block-end: .8rem; }
   section { min-width: 0; }
   .section-heading { align-items: center; margin-block-end: .7rem; }
   .section-heading > p { max-width: 32rem; font-size: .84rem; text-align: end; }
-  .state-pill { flex: 0 0 auto; border-radius: 999px; padding: .32rem .62rem; background: #3f3020; color: #efd29b; font-size: .76rem; font-weight: 750; }
-  .state-pill.healthy, .state-pill--ok { background: #173c30; color: #a8e7ca; }
-  .state-pill--degraded { background: #43351d; color: #efd49a; }
-  .state-pill--error { background: #4a272a; color: #f3b9bd; }
-  .state-pill--unchecked { background: #233039; color: #b7c7cd; }
+  .state-pill { flex: 0 0 auto; border-radius: 999px; padding: .18rem .42rem; background: oklch(0.92 0.055 78); color: oklch(0.43 0.075 68); font-size: .6875rem; font-weight: 750; }
+  .state-pill.healthy, .state-pill--ok { background: var(--success-soft); color: oklch(0.37 0.08 145); }
+  .state-pill--degraded { background: oklch(0.92 0.055 78); color: oklch(0.43 0.075 68); }
+  .state-pill--error { background: var(--danger-soft); color: var(--danger); }
+  .state-pill--unchecked { background: var(--surface-3); color: var(--text-muted); }
   .summary-grid, .provider-grid, .coverage-grid { display: grid; gap: .75rem; }
   .summary-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 0; }
-  .summary-grid > div { min-width: 0; padding: .85rem; }
-  .summary-grid .path-cell { grid-column: 1 / -1; }
-  dt { color: #91aab3; font-size: .78rem; }
-  dd { margin: .2rem 0 0; overflow-wrap: anywhere; color: #edf4f7; font-variant-numeric: tabular-nums; font-weight: 700; }
+  .summary-grid > div { min-width: 0; padding: .6rem; }
+  .database-path { margin-block-start: .75rem; border-radius: .75rem; padding: .75rem; background: var(--surface-2); color: var(--text-muted); }
+  .database-path summary { color: var(--text); cursor: pointer; font-weight: 700; }
+  .database-path code { display: block; margin-block-start: .5rem; overflow-wrap: anywhere; white-space: normal; }
+  dt { color: var(--text-muted); font-size: .78rem; }
+  dd { margin: .2rem 0 0; overflow-wrap: anywhere; color: var(--text); font-variant-numeric: tabular-nums; font-weight: 700; }
   .provider-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .provider-card { min-width: 0; border-block-start-width: .2rem; padding: 1rem; }
+  .provider-card { min-width: 0; border-block-start-width: .2rem; padding: .75rem; }
   .provider-card--ok { border-block-start-color: #4eac83; }
   .provider-card--degraded { border-block-start-color: #d0a24e; }
   .provider-card--error { border-block-start-color: #d46e74; }
   .provider-card--unchecked { border-block-start-color: #637985; }
   .provider-card header { display: flex; align-items: start; justify-content: space-between; gap: .75rem; }
-  .provider-card h3 { margin-block-end: .8rem; overflow-wrap: anywhere; }
-  .provider-card dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .7rem; margin: 0; }
-  .provider-error, .provider-note { margin: .85rem 0 0; border-radius: .5rem; padding: .65rem; overflow-wrap: anywhere; background: #ffffff08; color: #c8d5d9; font-size: .82rem; line-height: 1.45; }
-  .provider-error { color: #efc0c3; }
+  .provider-card h3 { margin-block-end: .55rem; overflow-wrap: anywhere; }
+  .provider-card dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .5rem; margin: 0; }
+  .provider-error, .provider-note { margin: .85rem 0 0; border-radius: .6rem; padding: .65rem; overflow-wrap: anywhere; background: var(--surface-2); color: var(--text-muted); font-size: .82rem; line-height: 1.45; }
+  .provider-error { color: var(--danger); }
+  .provider-error summary { cursor: pointer; font-weight: 700; }
+  .provider-error code { display: block; margin-block-start: .5rem; white-space: normal; }
   .coverage-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-  .coverage-grid article { min-width: 0; padding: .9rem; }
+  .coverage-grid article { min-width: 0; padding: .65rem; }
   .coverage-grid h3 { margin-block-end: .55rem; }
-  .coverage-grid p { margin-block-end: .35rem; overflow-wrap: anywhere; color: #a9bac1; font-size: .84rem; line-height: 1.45; }
-  .coverage-grid .metric { color: #edf4f7; font-size: 1.2rem; font-weight: 760; }
-  .coverage-grid .empty-copy { color: #d5bd8d; }
-  .privacy-note { border-color: #34496b; background: #0c1526; }
+  .coverage-grid p { margin-block-end: .35rem; overflow-wrap: anywhere; color: var(--text-muted); font-size: .84rem; line-height: 1.45; }
+  .coverage-grid .metric { color: var(--text); font-size: 1.2rem; font-weight: 760; }
+  .coverage-grid .empty-copy { color: var(--gold); }
+  .privacy-note { background: var(--surface-2); }
 
   @media (max-width: 64rem) {
     .provider-grid { grid-template-columns: minmax(0, 1fr); }
@@ -246,7 +252,7 @@
   }
 
   @media (max-width: 44rem) {
-    .diagnostics-intro, .section-heading { align-items: stretch; flex-direction: column; }
+    .section-heading { align-items: stretch; flex-direction: column; }
     .intro-actions { width: 100%; flex-direction: column; }
     .diagnostics-intro button { width: 100%; }
     .section-heading > p { text-align: start; }
@@ -260,6 +266,6 @@
   }
 
   @media (forced-colors: active) {
-    .diagnostics-intro, .diagnostics-error, .privacy-note, .provider-card, .coverage-grid article, .summary-grid > div { border: 1px solid CanvasText; }
+    .diagnostics-error, .privacy-note, .provider-card, .coverage-grid article, .summary-grid > div { border: 1px solid CanvasText; }
   }
 </style>

@@ -1,16 +1,18 @@
 {
   "name": "platscope",
-  "version": "0.1.0",
+  "version": "0.1.21",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build:ocr": "node scripts/build-reward-ocr.mjs",
+    "build": "pnpm run build:ocr && vite build",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "test": "vitest run"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.8.0",
+    "@tauri-apps/plugin-updater": "2.10.1",
     "svelte": "^5.38.0"
   },
   "devDependencies": {

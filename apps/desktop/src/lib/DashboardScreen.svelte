@@ -24,34 +24,34 @@
   const locale = useLocale();
   const copy = {
     ru: {
-      kicker: "Offline overview", heading: "Что стоит проверить сегодня",
-      intro: "Сводка строится из последнего корректного инвентаря, bulk-цен и истории. Открытие Dashboard не выполняет сетевых запросов.",
-      openSellNow: "Открыть Sell Now", refreshing: "Обновляем сводку…", refresh: "Обновить сводку",
-      reading: "Читаем локальные снимки…", ready: (date: string) => `Сводка готова · инвентарь от ${date}.`,
-      loadError: (reason: string) => `Не удалось собрать локальную сводку. Перезапустите PlatScope или повторите попытку. Техническая причина: ${reason}`,
-      unavailable: "Dashboard недоступен", retry: "Повторить", firstStep: "Первый шаг",
-      importHeading: "Импортируйте инвентарь", importBody: "Без локального снимка PlatScope не будет угадывать owned и sellable copies.", openInventory: "Открыть инвентарь",
-      portfolio: "Portfolio snapshot", summary: "Локальная сводка", coverage: (value: number) => `${value}% sellable-кандидатов имеют надёжную bulk-цену.`,
-      inventoryNominal: "Стоимость инвентаря",
-      sellableNominal: "Стоимость к продаже",
+      kicker: "Сводка", heading: "Что проверить сегодня",
+      intro: "Начните с предметов, где цена надёжнее, а спрос выше.",
+      openSellNow: "Перейти к продаже", refreshing: "Пересчитываем…", refresh: "Пересчитать",
+      reading: "Загружаем данные…", ready: (date: string) => `Инвентарь обновлён ${date}.`,
+      loadError: (_reason: string) => "Не удалось собрать сводку. Перезапустите PlatScope или повторите попытку.",
+      unavailable: "Сводка недоступна", retry: "Повторить", firstStep: "Первый шаг",
+      importHeading: "Добавьте инвентарь", importBody: "После сканирования PlatScope покажет количество и предметы, которые можно продать.", openInventory: "Открыть инвентарь",
+      portfolio: "Инвентарь", summary: "По текущим оценкам", coverage: (value: number) => `Цена есть у ${value}% предметов в очереди продажи.`,
+      inventoryNominal: "Оценка всего инвентаря",
+      sellableNominal: "Оценка предметов к продаже",
       sellableCopies: "Предметов к продаже",
       attention: "Нужно проверить",
-      bestKicker: "Best now", bestHeading: "Лучшие кандидаты", fullQueue: "Вся очередь",
-      sellableDeals: (quantity: number, volume: string) => `${quantity} sellable · ${volume} сделок`,
-      noCandidates: "Нет оценённых sellable-кандидатов", noCandidatesBody: "Проверьте инвентарь и актуальность рыночного снимка.",
-      liquidityKicker: "Liquidity watch", liquidityHeading: "Что может продаваться медленно",
-      confidenceTiming: (confidence: string, timing: string) => `${confidence} confidence · ${timing}`, noTiming: "Нет timing-сигнала",
+      bestKicker: "Сначала выставить", bestHeading: "С чего начать", fullQueue: "Вся очередь",
+      sellableDeals: (quantity: number, volume: string) => `${quantity} шт. к продаже · ${volume} сделок`,
+      noCandidates: "Нет кандидатов с рассчитанной ценой", noCandidatesBody: "Проверьте инвентарь и дату рыночных данных.",
+      liquidityKicker: "Низкий спрос", liquidityHeading: "Что может продаваться медленно",
+      confidenceTiming: (confidence: string, timing: string) => `${confidence} · ${timing}`, noTiming: "Нет сигнала момента продажи",
       noWeak: "Явно слабых кандидатов нет", noWeakBody: "Это не гарантирует быструю продажу всего объёма.",
-      freshnessKicker: "Data freshness", freshnessHeading: "Свежесть и покрытие", marketSnapshot: "Рыночный снимок",
+      freshnessKicker: "Данные", freshnessHeading: "Что нужно обновить", marketSnapshot: "Цены рынка",
       noData: "Нет данных", updateMarket: "Обновите рыночные данные", history: "История", days: "дней",
-      offlineCache: "Offline cache", cacheReady: "Готов", cacheAttention: "Требует внимания", openDiagnostics: "Открыть диагностику",
+      offlineCache: "Сохранённые данные", cacheReady: "Готовы", cacheAttention: "Нужно проверить", openDiagnostics: "Проверить данные",
     },
     en: {
       kicker: "Offline overview", heading: "What to review today",
       intro: "This summary uses the latest valid inventory, bulk prices, and history. Opening the dashboard does not make network requests.",
       openSellNow: "Open Sell now", refreshing: "Refreshing summary…", refresh: "Refresh summary",
       reading: "Reading local snapshots…", ready: (date: string) => `Summary ready · inventory observed ${date}.`,
-      loadError: (reason: string) => `Unable to build the local summary. Restart PlatScope or try again. Technical reason: ${reason}`,
+      loadError: (_reason: string) => "Unable to build the summary. Restart PlatScope or try again.",
       unavailable: "Dashboard unavailable", retry: "Try again", firstStep: "First step",
       importHeading: "Import inventory", importBody: "Without a local snapshot, PlatScope will not guess owned or sellable copies.", openInventory: "Open inventory",
       portfolio: "Portfolio snapshot", summary: "Local summary", coverage: (value: number) => `${value}% of sellable candidates have a reliable bulk price.`,
@@ -191,7 +191,7 @@
                 </div>
                 <div class="candidate-value">
                   <strong>{formatPlatinum(row.recommendation?.fairPrice ?? null, $locale)}</strong>
-                  <span>{row.priority.score} · {priorityLabel(row.priority.band, $locale)}</span>
+                  <span>{priorityLabel(row.priority.band, $locale)}</span>
                 </div>
               </li>
             {/each}
@@ -261,45 +261,45 @@
 
 <style>
   .dashboard-shell { display: grid; gap: 1rem; }
-  .dashboard-intro, .dashboard-panel, .freshness-panel, .dashboard-empty, .dashboard-error, .dashboard-summary > div { border: 1px solid #283752; border-radius: .8rem; background: #111b2f; box-shadow: 0 .75rem 2rem rgb(0 0 0 / 14%); }
+  .dashboard-intro, .dashboard-panel, .freshness-panel, .dashboard-empty, .dashboard-error, .dashboard-summary > div { border: 1px solid var(--border); border-radius: .75rem; background: var(--surface-1); box-shadow: var(--shadow-sm); }
   .dashboard-intro, .section-heading, .panel-heading { display: flex; align-items: start; justify-content: space-between; gap: 1.25rem; }
-  .dashboard-intro, .dashboard-empty, .dashboard-error, .freshness-panel { padding: 1rem; }
+  .dashboard-intro, .dashboard-empty, .dashboard-error, .freshness-panel { padding: .75rem; }
   .dashboard-intro h2, .section-heading h2, .panel-heading h2, .freshness-panel h2, .dashboard-empty h2, .dashboard-error h2 { margin-block-end: .35rem; font-size: 1.2rem; }
-  .dashboard-intro p, .dashboard-empty p, .dashboard-error p { max-width: 68ch; margin-block-end: 0; color: #9ba9bd; line-height: 1.5; }
-  .section-kicker { margin-block-end: .3rem !important; color: #72a7ff !important; font-size: .78rem; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
+  .dashboard-intro p, .dashboard-empty p, .dashboard-error p { max-width: 68ch; margin-block-end: 0; color: var(--text-muted); line-height: 1.5; }
+  .section-kicker { margin-block-end: .3rem !important; color: var(--accent-strong) !important; font-size: .76rem; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
   .dashboard-actions { display: flex; flex: 0 0 auto; gap: .65rem; }
   button.secondary, button.text-button { background: transparent; }
-  button.text-button { min-height: 2.5rem; border-color: transparent; color: #a9dce7; }
-  .dashboard-status { min-height: 1.5rem; color: #9ba9bd; }
-  .dashboard-error { border-color: #9c5555; background: #2b1719; }
+  button.text-button { min-height: 2.125rem; border-color: transparent; color: var(--accent-strong); }
+  .dashboard-status { min-height: 1.5rem; color: var(--text-muted); }
+  .dashboard-error { border-color: var(--danger); background: var(--danger-soft); }
   .dashboard-error p, .dashboard-empty p { margin-block-end: .85rem; }
   section { min-width: 0; }
-  .dashboard-item-art { flex: none; width: 3.25rem; height: 3.25rem; object-fit: contain; outline: 1px solid rgb(255 255 255 / 10%); outline-offset: -1px; }
+  .dashboard-item-art { flex: none; width: 3.25rem; height: 3.25rem; object-fit: contain; outline: 1px solid oklch(0 0 0 / 0.1); outline-offset: -1px; }
   .section-heading, .panel-heading { align-items: center; margin-block-end: .7rem; }
-  .section-heading > p { max-width: 32rem; margin: 0; color: #a9bac1; font-size: .84rem; text-align: end; }
+  .section-heading > p { max-width: 32rem; margin: 0; color: var(--text-muted); font-size: .84rem; text-align: end; }
   .dashboard-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .75rem; margin: 0; }
-  .dashboard-summary > div { display: grid; min-width: 0; align-content: center; min-height: 4.5rem; padding: .9rem; }
-  dt { color: #91aab3; font-size: .78rem; }
-  dd { margin: .2rem 0 0; color: #edf4f7; font-size: 1.25rem; font-variant-numeric: tabular-nums; font-weight: 760; }
-  .freshness-panel p { margin: .35rem 0 0; color: #93a7af; font-size: .76rem; line-height: 1.4; }
+  .dashboard-summary > div { display: grid; min-width: 0; align-content: center; min-height: 3.75rem; padding: .65rem; }
+  dt { color: var(--text-muted); font-size: .78rem; }
+  dd { margin: .2rem 0 0; color: var(--text); font-size: 1.25rem; font-variant-numeric: tabular-nums; font-weight: 760; }
+  .freshness-panel p { margin: .35rem 0 0; color: var(--text-muted); font-size: .76rem; line-height: 1.4; }
   .dashboard-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .8rem; }
-  .dashboard-panel { min-width: 0; padding: 1rem; }
+  .dashboard-panel { min-width: 0; padding: .75rem; }
   .candidate-list, .liquidity-list { display: grid; gap: .55rem; margin: 0; padding: 0; list-style: none; }
-  .candidate-list li, .liquidity-list li { display: flex; align-items: center; justify-content: space-between; gap: .8rem; border: 1px solid #283752; border-radius: .65rem; padding: .75rem; background: #172238; }
+  .candidate-list li, .liquidity-list li { display: flex; align-items: center; justify-content: space-between; gap: .8rem; border: 1px solid var(--border); border-radius: .75rem; padding: .75rem; background: var(--surface-2); }
   .candidate-list h3, .liquidity-list h3 { margin-block-end: .2rem; overflow-wrap: anywhere; }
-  .candidate-list p, .liquidity-list p { margin: 0; color: #98abb2; font-size: .78rem; }
+  .candidate-list p, .liquidity-list p { margin: 0; color: var(--text-muted); font-size: .78rem; }
   .candidate-value { display: grid; flex: 0 0 auto; gap: .15rem; text-align: end; }
-  .candidate-value strong { color: #f0c760; font-size: 1.05rem; }
-  .candidate-value span { color: #a8bac0; font-size: .72rem; }
-  .liquidity-pill { flex: 0 0 auto; border-radius: 999px; padding: .3rem .55rem; font-size: .74rem; font-weight: 750; }
-  .liquidity-pill--unpriced, .liquidity-pill--thin { background: #49282b; color: #f2bdc0; }
-  .liquidity-pill--limited { background: #43351d; color: #efd49a; }
-  .liquidity-pill--active { background: #173c30; color: #a8e7ca; }
-  .inline-empty { border-radius: .65rem; padding: 1rem; background: #172238; text-align: center; }
-  .inline-empty p { margin: 0; color: #98abb2; }
+  .candidate-value strong { color: var(--accent-strong); font-size: 1.05rem; }
+  .candidate-value span { color: var(--text-muted); font-size: .72rem; }
+  .liquidity-pill { flex: 0 0 auto; border-radius: 999px; padding: .18rem .42rem; font-size: .6875rem; font-weight: 750; }
+  .liquidity-pill--unpriced, .liquidity-pill--thin { background: var(--danger-soft); color: var(--danger); }
+  .liquidity-pill--limited { background: oklch(0.92 0.055 78); color: oklch(0.43 0.075 68); }
+  .liquidity-pill--active { background: var(--success-soft); color: oklch(0.37 0.08 145); }
+  .inline-empty { border-radius: .55rem; padding: .75rem; background: var(--surface-2); text-align: center; }
+  .inline-empty p { margin: 0; color: var(--text-muted); }
   .freshness-panel { display: flex; align-items: start; justify-content: space-between; gap: 1rem; }
   .freshness-panel dl { display: grid; grid-template-columns: repeat(3, minmax(9rem, 1fr)); gap: .65rem; width: min(60rem, 70%); margin: 0; }
-  .freshness-panel dl > div { min-width: 0; border: 1px solid #283752; border-radius: .6rem; padding: .7rem; background: #172238; }
+  .freshness-panel dl > div { min-width: 0; border: 1px solid var(--border); border-radius: .75rem; padding: .7rem; background: var(--surface-2); }
   .freshness-panel dd { overflow-wrap: anywhere; font-size: 1rem; }
   .freshness-panel .text-button { padding-inline: 0; }
 

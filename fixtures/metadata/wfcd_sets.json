@@ -9,6 +9,7 @@
       {
         "uniqueName": "/Lotus/Types/Recipes/WarframeRecipes/NyxPrimeBlueprint",
         "name": "Blueprint",
+        "imageName": "blueprint.png",
         "itemCount": 1,
         "tradable": true,
         "ducats": 15
@@ -16,6 +17,7 @@
       {
         "uniqueName": "/Lotus/Types/Recipes/WarframeRecipes/NyxPrimeChassisComponent",
         "name": "Chassis",
+        "imageName": "GenericWarframePrimeChassis.png",
         "itemCount": 1,
         "tradable": true,
         "ducats": 65
@@ -23,6 +25,7 @@
       {
         "uniqueName": "/Lotus/Types/Recipes/WarframeRecipes/NyxPrimeHelmetComponent",
         "name": "Neuroptics",
+        "imageName": "GenericWarframePrimeHelmet.png",
         "itemCount": 1,
         "tradable": true,
         "primeSellingPrice": 100
@@ -30,6 +33,7 @@
       {
         "uniqueName": "/Lotus/Types/Recipes/WarframeRecipes/NyxPrimeSystemsComponent",
         "name": "Systems",
+        "imageName": "GenericWarframePrimeSystem.png",
         "itemCount": 1,
         "tradable": true,
         "ducats": 45

@@ -28,7 +28,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/verify-release-a
 cargo tauri build --bundles nsis --config apps/desktop/src-tauri/tauri.conf.json
 ```
 
-Результат: канонический executable `target/release/platscope.exe` и installer `target/release/bundle/nsis/PlatScope_<version>_x64-setup.exe`. Имя Rust package остаётся `platscope-desktop`, а явный binary target называется `platscope` согласно master-guideline. До подключения защищённых signing credentials Authenticode status ожидаемо равен `NotSigned`; такой artifact пригоден для внутреннего QA, но не должен называться доверенным публичным релизом.
+Результат: канонический executable `target/release/platscope.exe`, installer `target/release/bundle/nsis/PlatScope_<version>_x64-setup.exe` и updater-подпись `.sig`, если заданы `TAURI_SIGNING_PRIVATE_KEY` и `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. Имя Rust package остаётся `platscope-desktop`, а явный binary target называется `platscope`. Authenticode status пока ожидаемо равен `NotSigned`, даже если пакет имеет отдельную подпись Tauri.
 
 ## GitHub Actions
 
@@ -45,7 +45,7 @@ Workflow использует официальный `tauri-apps/tauri-action`, 
 
 Windows packaging job после создания checksum запускает `verify-release-artifacts.ps1 -Mode Qa`. Companion job загружает уже проверенный `dist` вместе с собственным `SHA256SUMS.txt`. Это остаётся artifact-level проверкой и не заменяет protected tag/environment, identity издателя или повторную проверку после публичной публикации.
 
-Политика доверенного релиза, хранения ключей и граница auto-update описаны в [Подпись и доверенный релиз](RELEASE_SIGNING.md). Текущий workflow намеренно не получает signing credentials.
+Публичный workflow `.github/workflows/release.yml` запускается тегом `v<version>`, собирает Windows NSIS с защищёнными signing secrets и публикует GitHub Release, `.sig`, `latest.json` и `SHA256SUMS.txt`. Политика хранения ключей и различие между подписью updater и Authenticode описаны в [Подпись и публичный релиз](RELEASE_SIGNING.md).
 
 ## Linux prerequisites
 
@@ -58,4 +58,4 @@ Ubuntu job устанавливает WebKitGTK 4.1, Ayatana AppIndicator, librs
 
 ## Граница проверки
 
-При успешном прогоне quality CI доказывает, что source tree компилируется и тестируется на Windows/Linux. Ручной packaging workflow должен создать неподписанные NSIS/AppImage artifacts и SHA-256 manifest. На 27 августа 2026 года локально проверен Windows NSIS; в текущем Windows-окружении нет установленного WSL-дистрибутива, Docker или Podman, а фактический Ubuntu/AppImage job ещё не запускался. Поэтому одна только workflow-конфигурация не считается доказательством Linux artifact. Реальная подпись, auto-update и публикация в GitHub Release остаются отдельным будущим этапом; их нельзя включать до появления защищённых credentials и release environment по принятой signing policy.
+При успешном прогоне quality CI доказывает, что source tree компилируется и тестируется на Windows/Linux. Публичный релизный канал сейчас выпускает Windows NSIS; Linux AppImage остаётся QA artifact до отдельной проверки OCR-поведения и механизма подписи. `0.1.21` — первая версия со встроенным updater, поэтому её нужно установить вручную поверх `0.1.20`; дальнейшие версии доступны из интерфейса PlatScope.

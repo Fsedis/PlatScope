@@ -1,16 +1,18 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
 
   import AccountScreen from "./lib/AccountScreen.svelte";
   import AppNavIcon from "./lib/AppNavIcon.svelte";
+  import AppUpdatePanel from "./lib/AppUpdatePanel.svelte";
   import DashboardScreen from "./lib/DashboardScreen.svelte";
   import DiagnosticsScreen from "./lib/DiagnosticsScreen.svelte";
   import HistoryChart from "./lib/HistoryChart.svelte";
   import InsightsScreen from "./lib/InsightsScreen.svelte";
   import InventoryHubScreen from "./lib/InventoryHubScreen.svelte";
   import SettingsScreen from "./lib/SettingsScreen.svelte";
+  import { startAutomaticUpdateChecks } from "./lib/appUpdate";
 
   import {
     providerLabel,
@@ -61,31 +63,34 @@
       dashboard: "Обзор",
       market: "Рынок",
       inventory: "Инвентарь",
+      rewards: "Награды",
       insights: "Аналитика",
-      account: "Аккаунт WFM",
-      diagnostics: "Диагностика",
+      account: "Warframe Market",
+      diagnostics: "Состояние данных",
       settings: "Настройки",
-      dashboardLede: "Номинальная стоимость, лучшие кандидаты, слабая ликвидность и свежесть локальных данных.",
-      marketLede: "Локальный поиск по проверенному снимку — без сетевого запроса на каждую строку.",
-      inventoryLede: "Предметы, количество, цены и готовность к продаже в одном разделе.",
-      insightsLede: "Prime sets, relic EV и ducat efficiency по локальным данным с явным покрытием цен.",
-      accountLede: "Подключение по желанию, защищённый токен и только явно подтверждённые операции с ордерами.",
-      diagnosticsLede: "Состояние источников, локального кэша и покрытия данных без чтения terminal logs.",
-      settingsLede: "Язык, рыночная платформа и параметры обновления данных.",
-      searching: "Ищем в локальном снимке…", shown: (visible: number, total: number) => `${visible} из ${total} вариантов показано`,
-      storageError: (reason: string) => `Не удалось открыть локальное хранилище. Перезапустите PlatScope. Техническая причина: ${reason}`,
-      refreshError: (reason: string) => `Обновление не завершено. Сохранённые данные не изменены. Проверьте подключение и повторите попытку. Техническая причина: ${reason}`,
-      searchError: (reason: string) => `Поиск не выполнен. Сократите запрос или повторите попытку. Техническая причина: ${reason}`,
-      noBulk: "Для этого варианта нет текущего bulk snapshot.", liveError: (reason: string) => `Live-цены недоступны; bulk-оценка сохранена. ${reason}`,
-      historyError: (reason: string) => `История не загрузилась; текущая цена доступна. ${reason}`,
-      refreshing: "Обновляем данные…", refresh: "Обновить данные", openingStorage: "Открываем локальное хранилище…", validatingSnapshot: "Загружаем и проверяем новый снимок…", providersUnavailable: "Провайдеры недоступны. Используется последний корректный снимок.", checkStorage: "Проверить хранилище",
-      noSnapshot: "Локальный снимок не найден", loadMarket: "Загрузите рыночные данные", loadMarketBody: "PlatScope проверит каталог и цены, а затем сохранит их для работы без сети.", loadingMarket: "Загружаем данные…", loadData: "Загрузить данные",
+      dashboardLede: "Что выгоднее выставить и какие данные стоит обновить.",
+      marketLede: "Цены, сделки и спрос по последним сохранённым данным.",
+      inventoryLede: "Количество, цены и готовность предметов к продаже.",
+      rewardsLede: "Самая выгодная награда разрыва с учётом цены и завершения сета.",
+      insightsLede: "Что выгодно дособрать, продать комплектом или оценить отдельно.",
+      accountLede: "Подключение аккаунта и управление выставленными ордерами.",
+      diagnosticsLede: "Что загружено, что устарело и где возникла ошибка.",
+      settingsLede: "Язык, платформа и обновление данных.",
+      searching: "Ищем в сохранённых данных…", shown: (visible: number, total: number) => `${visible} из ${total} вариантов показано`,
+      storageError: (_reason: string) => "Не удалось открыть сохранённые данные. Перезапустите PlatScope.",
+      refreshError: (_reason: string) => "Не удалось обновить рынок. Старые данные сохранены. Проверьте подключение и повторите попытку.",
+      searchError: (_reason: string) => "Не удалось выполнить поиск. Сократите запрос или повторите попытку.",
+      noBulk: "Для этого варианта пока нет сохранённой оценки.", liveError: (_reason: string) => "Не удалось получить текущие цены. Сохранённая оценка не изменилась.",
+      historyError: (_reason: string) => "Не удалось загрузить историю. Текущая цена по-прежнему доступна.",
+      refreshing: "Обновляем данные…", refresh: "Обновить данные", openingStorage: "Открываем сохранённые данные…", validatingSnapshot: "Загружаем и проверяем новые цены…", providersUnavailable: "Источники временно недоступны. Показываем последние сохранённые данные.", checkStorage: "Проверить данные",
+      noSnapshot: "Данные рынка ещё не загружены", loadMarket: "Загрузите цены рынка", loadMarketBody: "Обновление цен и 90-дневной истории находится в настройках.", loadingMarket: "Загружаем данные…", loadData: "Открыть настройки обновления",
       marketFilters: "Поиск и фильтры рынка", searchItem: "Поиск предмета", searchExample: "Например, Никс Прайм или nyx prime", clear: "Очистить", shortcut: "Быстрый доступ:", priceAvailability: "Наличие цены", allVariants: "Все варианты", priced: "С надёжной ценой", unpriced: "Без надёжной цены",
-      results: "Результаты", snapshot: "Снимок", marketCaption: "Рыночные варианты и рассчитанные bulk-цены", item: "Предмет", trades: "Сделки", confidence: "Уверенность", freshness: "Свежесть",
-      first60: "Показаны первые 60 вариантов. Уточните запрос, чтобы сузить список.", noQuery: (query: string) => `Ничего не найдено по запросу «${query}»`, noFilter: "Нет вариантов для этого фильтра", checkSpelling: "Проверьте написание или используйте canonical slug.", choosePriceFilter: "Выберите другой фильтр цены.", clearSearch: "Очистить поиск",
-      relic: "Реликвия", riven: "Riven — отдельная модель", marketItem: "Рыночный предмет", gettingLive: "Получаем live-цены…", updateLive: "Обновить live-цены", getLive: "Получить live-цены", liveHint: "Один запрос к top orders для точного варианта; результат кэшируется на 90 секунд.", dataDate: "Дата данных", masteryRequirement: "Требование мастерства", whyPrice: "Почему такая цена?",
-      fair: "Справедливая", fairPrice: "Справедливая цена", listPrice: "Цена размещения", closedVolume: "Объём закрытых сделок", lowestAsk: "Минимальная продажа", depthThree: "Средняя до 3 ед.", depthPrice: "Средняя до 5 ед.", quickSell: "Быстрая продажа", sell: "продажа", buy: "покупка", currentOrders: "Текущие активные ордера", side: "Сторона", price: "Цена", quantityLot: "Количество · лот", playerStatus: "Статус игрока", sellOrder: "Продажа", buyOrder: "Покупка", noActiveOrders: "Активных ордеров для точного варианта нет.",
-      priceHistory: "История цены", historyRange: "Диапазон истории", dayShort: "д", loadingHistory: "Загружаем локальные агрегаты…", historyCoverage: (points: number, coverage: number) => `${points} дней для варианта · локальное покрытие ${coverage} дней`, selectForHistory: "Выберите строку, чтобы открыть компактную историю точного варианта.", median: "Медиана", change: "Изменение", averageVolume: "Средний объём", insufficientChart: "Недостаточно точек для графика. Фоновый bootstrap добавляет до семи дней за запуск.", itemDetails: "Подробности предмета", selectItem: "Выберите предмет в таблице, чтобы увидеть расчёт и объяснение.",
+      results: "Результаты", snapshot: "Данные от", marketCaption: "Предметы, цены и спрос", item: "Предмет", trades: "Сделки", confidence: "Надёжность цены", freshness: "Актуальность",
+      first60: "Показаны первые 60 вариантов. Уточните запрос, чтобы сократить список.", noQuery: (query: string) => `По запросу «${query}» ничего не найдено`, noFilter: "Для этого фильтра ничего не найдено", checkSpelling: "Проверьте название предмета.", choosePriceFilter: "Выберите другой фильтр цены.", clearSearch: "Очистить поиск",
+      relic: "Реликвия", riven: "Мод разлома", marketItem: "Предмет рынка", gettingLive: "Получаем текущие цены…", updateLive: "Обновить текущие цены", getLive: "Проверить текущие цены", liveHint: "Покажет активные ордера для выбранного варианта.", dataDate: "Цена рассчитана по данным от", masteryRequirement: "Ранг мастерства", whyPrice: "Как рассчитана цена?",
+      marketData: "Данные рынка", dataReady: "Загружены", dataMissing: "Не загружены",
+      fair: "Цена", fairPrice: "Оценка рынка", listPrice: "Цена ордера", closedVolume: "Закрытые сделки", lowestAsk: "Минимальная цена продажи", depthThree: "Средняя цена до 3 шт.", depthPrice: "Средняя цена до 5 шт.", quickSell: "Продать сейчас", sell: "продажа", buy: "покупка", currentOrders: "Активные ордера", side: "Тип", price: "Цена", quantityLot: "Количество · лот", playerStatus: "Статус", sellOrder: "Продажа", buyOrder: "Покупка", noActiveOrders: "Для этого варианта нет активных ордеров.",
+      priceHistory: "История цены", historyRange: "Период", dayShort: "д", loadingHistory: "Загружаем историю…", historyCoverage: (points: number, coverage: number) => `${points} дней · доступно ${coverage} дней истории`, selectForHistory: "Выберите строку, чтобы посмотреть историю цены.", median: "Медиана", change: "Изменение", averageVolume: "Средний объём", insufficientChart: "Пока недостаточно данных для графика. История накопится после обновлений рынка.", itemDetails: "Подробности предмета", selectItem: "Выберите предмет в таблице, чтобы увидеть цену и расчёт.",
     },
     en: {
       skip: "Skip to content",
@@ -93,29 +98,32 @@
       dashboard: "Overview",
       market: "Market",
       inventory: "Inventory",
+      rewards: "Rewards",
       insights: "Insights",
-      account: "WFM account",
-      diagnostics: "Diagnostics",
+      account: "Warframe Market",
+      diagnostics: "Data status",
       settings: "Settings",
-      dashboardLede: "Nominal value, top candidates, weak liquidity, and local data freshness.",
+      dashboardLede: "What to list first and which data needs an update.",
       marketLede: "Search a validated local snapshot without a network request for every row.",
       inventoryLede: "Items, quantities, prices, and sell readiness in one section.",
-      insightsLede: "Prime sets, relic EV, and ducat efficiency from local data with explicit price coverage.",
-      accountLede: "Optional connection, protected credentials, and explicitly confirmed order changes only.",
+      rewardsLede: "Pick the most valuable fissure reward, including set completion value.",
+      insightsLede: "Finish profitable sets, list complete ones, or inspect specialized market calculations.",
+      accountLede: "Connect your account and manage listed orders.",
       diagnosticsLede: "Provider, local cache, and data coverage status without reading terminal logs.",
       settingsLede: "Language, market platform, and data refresh controls.",
-      searching: "Searching the local snapshot…", shown: (visible: number, total: number) => `${visible} of ${total} variants shown`,
-      storageError: (reason: string) => `Unable to open local storage. Restart PlatScope. Technical reason: ${reason}`,
-      refreshError: (reason: string) => `Refresh did not complete. Saved data was not changed. Check the connection and try again. Technical reason: ${reason}`,
-      searchError: (reason: string) => `Search failed. Shorten the query or try again. Technical reason: ${reason}`,
-      noBulk: "No current bulk snapshot exists for this variant.", liveError: (reason: string) => `Live prices unavailable; the bulk estimate was preserved. ${reason}`,
-      historyError: (reason: string) => `History failed to load; the current price remains available. ${reason}`,
-      refreshing: "Refreshing data…", refresh: "Refresh data", openingStorage: "Opening local storage…", validatingSnapshot: "Downloading and validating a new snapshot…", providersUnavailable: "Providers are unavailable. Using the latest valid snapshot.", checkStorage: "Check storage",
-      noSnapshot: "No local snapshot", loadMarket: "Load market data", loadMarketBody: "PlatScope validates the catalog and prices, then saves them for offline use.", loadingMarket: "Loading data…", loadData: "Load data",
+      searching: "Searching saved data…", shown: (visible: number, total: number) => `${visible} of ${total} variants shown`,
+      storageError: (_reason: string) => "Unable to open saved data. Restart PlatScope.",
+      refreshError: (_reason: string) => "Unable to refresh the market. Saved data was preserved. Check the connection and try again.",
+      searchError: (_reason: string) => "Unable to search. Shorten the query or try again.",
+      noBulk: "No saved estimate exists for this variant.", liveError: (_reason: string) => "Unable to retrieve current prices. The saved estimate was preserved.",
+      historyError: (_reason: string) => "Unable to load history. The current price remains available.",
+      refreshing: "Refreshing data…", refresh: "Refresh data", openingStorage: "Opening saved data…", validatingSnapshot: "Downloading and checking new prices…", providersUnavailable: "Sources are temporarily unavailable. Showing the latest saved data.", checkStorage: "Check data",
+      noSnapshot: "Market data has not been loaded", loadMarket: "Load market prices", loadMarketBody: "Price and 90-day history updates are available in Settings.", loadingMarket: "Loading data…", loadData: "Open update settings",
       marketFilters: "Market search and filters", searchItem: "Search items", searchExample: "For example, Nyx Prime or nyx prime", clear: "Clear", shortcut: "Shortcut:", priceAvailability: "Price availability", allVariants: "All variants", priced: "Reliable price", unpriced: "No reliable price",
-      results: "Results", snapshot: "Snapshot", marketCaption: "Market variants and calculated bulk prices", item: "Item", trades: "Trades", confidence: "Confidence", freshness: "Freshness",
+      results: "Results", snapshot: "Data from", marketCaption: "Market items, prices, and demand", item: "Item", trades: "Trades", confidence: "Price reliability", freshness: "Freshness",
       first60: "Showing the first 60 variants. Refine the query to narrow the list.", noQuery: (query: string) => `No results for “${query}”`, noFilter: "No variants match this filter", checkSpelling: "Check the spelling or use a canonical slug.", choosePriceFilter: "Choose a different price filter.", clearSearch: "Clear search",
-      relic: "Relic", riven: "Riven — separate model", marketItem: "Market item", gettingLive: "Getting live prices…", updateLive: "Refresh live prices", getLive: "Get live prices", liveHint: "One top-orders request for the exact variant; the result is cached for 90 seconds.", dataDate: "Data date", masteryRequirement: "Mastery requirement", whyPrice: "Why this price?",
+      relic: "Relic", riven: "Riven mod", marketItem: "Market item", gettingLive: "Getting current prices…", updateLive: "Refresh current prices", getLive: "Check current prices", liveHint: "Shows active orders for the selected variant.", dataDate: "Price data from", masteryRequirement: "Mastery rank", whyPrice: "How is this price calculated?",
+      marketData: "Market data", dataReady: "Loaded", dataMissing: "Not loaded",
       fair: "Fair", fairPrice: "Fair price", listPrice: "List price", closedVolume: "Closed volume", lowestAsk: "Lowest ask", depthThree: "Up to 3 units average", depthPrice: "Up to 5 units average", quickSell: "Quick Sell", sell: "sell", buy: "buy", currentOrders: "Current active orders", side: "Side", price: "Price", quantityLot: "Quantity · lot", playerStatus: "Player status", sellOrder: "Sell", buyOrder: "Buy", noActiveOrders: "No active orders are available for the exact variant.",
       priceHistory: "Price history", historyRange: "History range", dayShort: "d", loadingHistory: "Loading local aggregates…", historyCoverage: (points: number, coverage: number) => `${points} days for this variant · ${coverage} local days covered`, selectForHistory: "Select a row to open compact history for the exact variant.", median: "Median", change: "Change", averageVolume: "Average volume", insufficientChart: "Not enough points for a chart. Background bootstrap adds up to seven days per launch.", itemDetails: "Item details", selectItem: "Select an item in the table to see its calculation and explanation.",
     },
@@ -144,6 +152,7 @@
 
   let activeScreen: AppScreen = "inventory";
   let inventoryMode: InventoryMode = "sell";
+  let pageHeading: HTMLHeadingElement;
   let selectedIdentity = "";
   let query = "";
   let priceFilter: PriceFilter = "all";
@@ -152,7 +161,6 @@
   let viewPreferencesReady = false;
   let errorMessage = "";
   let loading = true;
-  let refreshing = false;
   let searching = false;
   let liveLoading = false;
   let liveError = "";
@@ -163,6 +171,16 @@
   let searchSequence = 0;
   let liveSequence = 0;
   let historySequence = 0;
+  let keyboardNavigation = false;
+
+  function navigateTo(screen: AppScreen, mode?: InventoryMode): void {
+    if (mode) inventoryMode = mode;
+    activeScreen = screen;
+    void tick().then(() => {
+      window.scrollTo({ top: 0, left: 0 });
+      if (keyboardNavigation) pageHeading?.focus();
+    });
+  }
 
   $: visibleRows = filterAndSortRows(
     searchResult?.rows ?? [],
@@ -198,19 +216,9 @@
     }
   }
 
-  async function refreshMarketData(): Promise<void> {
-    refreshing = true;
-    errorMessage = "";
-    refreshOutcome = null;
-    try {
-      refreshOutcome = await invoke<MarketRefreshOutcome>("refresh_market_data");
-      await loadStatus();
-      await searchMarket();
-    } catch (error) {
-      errorMessage = shell.refreshError(String(error));
-    } finally {
-      refreshing = false;
-    }
+  function handleMarketRefreshed(outcome: MarketRefreshOutcome): void {
+    refreshOutcome = outcome;
+    void loadStatus().then(searchMarket);
   }
 
   async function searchMarket(): Promise<void> {
@@ -336,11 +344,11 @@
   }
 
   function trendChange(trend: TrendSummary, days: 7 | 30 | 90): number | null {
-    return days === 7 ? trend.change7d : days === 30 ? trend.change30d : null;
+    return days === 7 ? trend.change7d : days === 30 ? trend.change30d : trend.change90d;
   }
 
   function trendVolume(trend: TrendSummary, days: 7 | 30 | 90): number | null {
-    return days === 7 ? trend.volumeAvg7d : days === 30 ? trend.volumeAvg30d : null;
+    return days === 7 ? trend.volumeAvg7d : days === 30 ? trend.volumeAvg30d : trend.volumeAvg90d;
   }
 
   function changeSort(nextKey: MarketSortKey): void {
@@ -413,19 +421,26 @@
   onMount(() => {
     let disposed = false;
     let unlistenMarketUpdate: UnlistenFn | undefined;
+    let unlistenRewardScreen: UnlistenFn | undefined;
     const savedView = loadMarketViewPreferences();
     priceFilter = savedView.priceFilter;
     sortKey = savedView.sortKey;
     sortDirection = savedView.sortDirection;
     viewPreferencesReady = true;
     const handleShortcut = (event: KeyboardEvent): void => {
+      keyboardNavigation = true;
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
         searchInput?.focus();
         searchInput?.select();
       }
     };
+    const handlePointer = (): void => {
+      keyboardNavigation = false;
+    };
     window.addEventListener("keydown", handleShortcut);
+    window.addEventListener("pointerdown", handlePointer);
+    const stopUpdateChecks = startAutomaticUpdateChecks();
     void loadUiSettings().then(() => loadStatus()).then(() => searchMarket());
     void listen<MarketRefreshOutcome>("market-data-updated", (event) => {
       refreshOutcome = event.payload;
@@ -434,10 +449,19 @@
       if (disposed) cleanup();
       else unlistenMarketUpdate = cleanup;
     });
+    void listen("relic-reward-screen", () => {
+      void invoke("scan_relic_rewards", { imagePath: null }).catch(() => undefined);
+    }).then((cleanup) => {
+      if (disposed) cleanup();
+      else unlistenRewardScreen = cleanup;
+    });
     return () => {
       disposed = true;
       unlistenMarketUpdate?.();
+      unlistenRewardScreen?.();
       window.removeEventListener("keydown", handleShortcut);
+      window.removeEventListener("pointerdown", handlePointer);
+      stopUpdateChecks();
       if (searchTimer) clearTimeout(searchTimer);
     };
   });
@@ -456,7 +480,7 @@
         <path d="M16 2 28 9v14l-12 7L4 23V9z" />
         <path d="m10 21 6-14 6 14-6-4z" />
       </svg>
-      <span class="app-brand__copy"><strong>PlatScope</strong><small>Warframe Intel</small></span>
+      <span class="app-brand__copy"><strong>PlatScope</strong><small>Warframe Market</small></span>
     </div>
 
     <nav class="section-tabs" aria-label={shell.navLabel}>
@@ -464,92 +488,75 @@
           type="button"
           class:active={activeScreen === "dashboard"}
           aria-current={activeScreen === "dashboard" ? "page" : undefined}
-          onclick={() => (activeScreen = "dashboard")}
+          onclick={() => navigateTo("dashboard")}
         ><AppNavIcon screen="dashboard" /><span>{shell.dashboard}</span></button>
         <button
           type="button"
           class:active={activeScreen === "market"}
           aria-current={activeScreen === "market" ? "page" : undefined}
-          onclick={() => (activeScreen = "market")}
+          onclick={() => navigateTo("market")}
         ><AppNavIcon screen="market" /><span>{shell.market}</span></button>
         <button
           type="button"
           class:active={activeScreen === "inventory"}
           aria-current={activeScreen === "inventory" ? "page" : undefined}
-          onclick={() => (activeScreen = "inventory")}
+          onclick={() => navigateTo("inventory")}
         ><AppNavIcon screen="inventory" /><span>{shell.inventory}</span></button>
         <button
           type="button"
           class:active={activeScreen === "insights"}
           aria-current={activeScreen === "insights" ? "page" : undefined}
-          onclick={() => (activeScreen = "insights")}
+          onclick={() => navigateTo("insights")}
         ><AppNavIcon screen="insights" /><span>{shell.insights}</span></button>
         <button
           type="button"
           class:active={activeScreen === "account"}
           aria-current={activeScreen === "account" ? "page" : undefined}
-          onclick={() => (activeScreen = "account")}
+          onclick={() => navigateTo("account")}
         ><AppNavIcon screen="account" /><span>{shell.account}</span></button>
         <button
           type="button"
           class:active={activeScreen === "diagnostics"}
           aria-current={activeScreen === "diagnostics" ? "page" : undefined}
-          onclick={() => (activeScreen = "diagnostics")}
+          onclick={() => navigateTo("diagnostics")}
         ><AppNavIcon screen="diagnostics" /><span>{shell.diagnostics}</span></button>
         <button
           type="button"
           class:active={activeScreen === "settings"}
           aria-current={activeScreen === "settings" ? "page" : undefined}
-          onclick={() => (activeScreen = "settings")}
+          onclick={() => navigateTo("settings")}
         ><AppNavIcon screen="settings" /><span>{shell.settings}</span></button>
     </nav>
 
     <div class="sidebar-status">
       <span class:ready={Boolean(status?.marketSnapshot)} aria-hidden="true"></span>
-      <div><strong>WF DATA</strong><small>{status?.marketSnapshot?.sourceDate ?? "offline"}</small></div>
+      <div><strong>{shell.marketData}</strong><small>{status?.marketSnapshot ? `${shell.dataReady} · ${status.marketSnapshot.sourceDate}` : shell.dataMissing}</small></div>
     </div>
   </aside>
 
   <main id="app-content" class="app-main">
   <header class="app-header">
     <div class="page-heading">
-      <p class="eyebrow">Warframe Market Intelligence</p>
-      <h1>{screenTitle(activeScreen, shell)}</h1>
+      <h1 bind:this={pageHeading} tabindex="-1">{screenTitle(activeScreen, shell)}</h1>
       <p class="lede">{screenLede(activeScreen, shell)}</p>
     </div>
-    <div class="app-header__actions">
-      <span class:ready={Boolean(status?.marketSnapshot)} class="data-health" role="status">
-        <span aria-hidden="true"></span>
-        WF DATA {status?.marketSnapshot ? "OK" : "OFFLINE"}
-      </span>
-      {#if activeScreen === "market"}
-      <button
-        class="refresh-button"
-        type="button"
-        onclick={refreshMarketData}
-        disabled={refreshing || loading}
-      >
-        {refreshing ? shell.refreshing : shell.refresh}
-      </button>
-      {/if}
-    </div>
   </header>
+
+  <AppUpdatePanel mode="banner" />
 
   <div class="screen-body">
 
   {#key $locale}
   {#if activeScreen === "dashboard"}
     <DashboardScreen
-      onOpenSellNow={() => { inventoryMode = "sell"; activeScreen = "inventory"; }}
-      onOpenInventory={() => { inventoryMode = "all"; activeScreen = "inventory"; }}
-      onOpenDiagnostics={() => (activeScreen = "diagnostics")}
+      onOpenSellNow={() => navigateTo("inventory", "sell")}
+      onOpenInventory={() => navigateTo("inventory", "all")}
+      onOpenDiagnostics={() => navigateTo("diagnostics")}
     />
   {:else if activeScreen === "market"}
   <div class="live-region" role="status" aria-live="polite">
     {#if loading}
       {shell.openingStorage}
-    {:else if refreshing}
-      {shell.validatingSnapshot}
     {:else if refreshOutcome?.stale}
       {shell.providersUnavailable}
     {:else}
@@ -569,8 +576,8 @@
       <p class="empty-panel__label">{shell.noSnapshot}</p>
       <h2 id="empty-heading">{shell.loadMarket}</h2>
       <p>{shell.loadMarketBody}</p>
-      <button type="button" onclick={refreshMarketData} disabled={refreshing}>
-        {refreshing ? shell.loadingMarket : shell.loadData}
+      <button type="button" onclick={() => navigateTo("settings")}>
+        {shell.loadData}
       </button>
     </section>
   {:else if status?.marketSnapshot}
@@ -722,7 +729,9 @@
             <div class="live-status" aria-live="polite">
               {#if liveResult && liveIdentity === selectedIdentity}
                 <span>{liveQuoteLabel(liveResult.quoteState, $locale)} · {liveResult.sellOrderCount} {shell.sell} / {liveResult.buyOrderCount} {shell.buy}</span>
-                {#if liveResult.warning}<strong>{liveResult.warning}</strong>{/if}
+                {#if liveResult.warning}
+                  <strong>{$locale === "ru" ? "Часть текущих ордеров недоступна. Проверьте список перед продажей." : "Some current orders are unavailable. Review the list before selling."}</strong>
+                {/if}
               {:else if liveError}
                 <strong>{liveError}</strong>
               {:else}
@@ -862,16 +871,19 @@
       mode={inventoryMode}
       onModeChange={(mode) => (inventoryMode = mode)}
       onInventoryChange={() => void loadStatus()}
-      onOpenAccount={() => (activeScreen = "account")}
+      onOpenAccount={() => navigateTo("account")}
     />
   {:else if activeScreen === "insights"}
-    <InsightsScreen />
+    <InsightsScreen
+      onOpenSettings={() => navigateTo("settings")}
+      onOpenAccount={() => navigateTo("account")}
+    />
   {:else if activeScreen === "account"}
-    <AccountScreen />
+    <AccountScreen onOpenSellQueue={() => navigateTo("inventory", "sell")} />
   {:else if activeScreen === "diagnostics"}
     <DiagnosticsScreen />
   {:else if activeScreen === "settings"}
-    <SettingsScreen onSettingsSaved={applySettings} />
+    <SettingsScreen onSettingsSaved={applySettings} onMarketRefreshed={handleMarketRefreshed} />
   {/if}
   {/key}
   </div>

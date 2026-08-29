@@ -2,6 +2,6 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Минимальные разрешения главного окна PlatScope",
-  "windows": ["main"],
-  "permissions": ["core:default"]
+  "windows": ["main", "reward-overlay"],
+  "permissions": ["core:default", "updater:default"]
 }
