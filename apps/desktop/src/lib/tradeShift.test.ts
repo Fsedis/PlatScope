@@ -5,9 +5,11 @@ import type { InventoryView } from "./inventory";
 import type { PriceRecommendation } from "./market";
 import {
   buildTradeShiftRows,
+  pendingSaleEvents,
   normalizeTradeName,
   planTradeReconciliation,
   recommendationIdentity,
+  visibleTradeHistory,
   type TradeEvent,
 } from "./tradeShift";
 
@@ -98,5 +100,30 @@ describe("торговая смена", () => {
 
   it("нормализует апострофы и пробелы в английских именах", () => {
     expect(normalizeTradeName("  Tenno’s   Item ")).toBe("tennos item");
+  });
+
+  it("показывает покупки и обмены в истории, не отправляя их на сверку ордера", () => {
+    const sale: TradeEvent = {
+      id: 1, occurredAt: "2026-08-29T12:00:00Z", partner: "Buyer",
+      platinumGiven: 0, platinumReceived: 130,
+      givenItems: [{ name: "Primed Flow", quantity: 1 }], receivedItems: [],
+      status: "pending", matchedOrderId: null, reconciliationJson: null,
+    };
+    const purchase: TradeEvent = {
+      id: 2, occurredAt: "2026-08-29T12:01:00Z", partner: "Seller",
+      platinumGiven: 40, platinumReceived: 0,
+      givenItems: [], receivedItems: [{ name: "Ash Prime Blueprint", quantity: 1 }],
+      status: "pending", matchedOrderId: null, reconciliationJson: null,
+    };
+    const barter: TradeEvent = {
+      id: 3, occurredAt: "2026-08-29T12:02:00Z", partner: "Trader",
+      platinumGiven: 0, platinumReceived: 0,
+      givenItems: [{ name: "Item A", quantity: 1 }],
+      receivedItems: [{ name: "Item B", quantity: 1 }],
+      status: "pending", matchedOrderId: null, reconciliationJson: null,
+    };
+
+    expect(pendingSaleEvents([sale, purchase, barter])).toEqual([sale]);
+    expect(visibleTradeHistory([barter, purchase, sale])).toEqual([barter, purchase]);
   });
 });

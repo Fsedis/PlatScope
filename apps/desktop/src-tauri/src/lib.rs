@@ -2653,7 +2653,6 @@ fn handle_trade_log_chunk(
     line_tail: &mut String,
     chunk: &str,
     now_ms: u64,
-    watcher_session: u128,
 ) {
     line_tail.push_str(chunk);
     let has_partial_line = !line_tail.ends_with('\n');
@@ -2671,7 +2670,7 @@ fn handle_trade_log_chunk(
             continue;
         };
         let fingerprint = format!(
-            "ee:{watcher_session}:{}:{}:{}:{}:{}:{}",
+            "ee:{}:{}:{}:{}:{}:{}",
             trade.log_stamp.as_deref().unwrap_or("no-stamp"),
             trade.partner.as_deref().unwrap_or("unknown"),
             trade.platinum_given,
@@ -2785,13 +2784,15 @@ fn spawn_reward_log_watcher(app_handle: AppHandle) {
         let mut trade_machine = trade_log::TradeMachine::default();
         let mut trade_line_tail = String::new();
         let watcher_started = Instant::now();
-        let watcher_session = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |duration| duration.as_nanos());
+        // Торги могли завершиться после запуска Warframe, но до запуска PlatScope.
+        // Дочитываем текущий EE.log с начала; стабильный fingerprint выше не даст
+        // повторно добавить те же сделки после перезапуска приложения.
+        let mut reward_live_from = None;
         loop {
             interval.tick().await;
             let Ok(metadata) = fs::metadata(&path) else {
                 offset = None;
+                reward_live_from = None;
                 tail.clear();
                 trade_machine = trade_log::TradeMachine::default();
                 trade_line_tail.clear();
@@ -2799,11 +2800,18 @@ fn spawn_reward_log_watcher(app_handle: AppHandle) {
             };
             let file_len = metadata.len();
             let Some(current_offset) = offset else {
-                offset = Some(file_len);
+                offset = Some(0);
+                reward_live_from = Some(file_len);
+                tracing::info!(
+                    event = "trade_log_backfill_started",
+                    bytes = file_len,
+                    "reading the current EE.log session for completed trades"
+                );
                 continue;
             };
             if file_len < current_offset {
                 offset = Some(0);
+                reward_live_from = Some(0);
                 tail.clear();
                 trade_machine = trade_log::TradeMachine::default();
                 trade_line_tail.clear();
@@ -2828,15 +2836,25 @@ fn spawn_reward_log_watcher(app_handle: AppHandle) {
                 &mut trade_line_tail,
                 &chunk,
                 now_ms,
-                watcher_session,
             );
-            handle_reward_markers(
-                &app_handle,
-                &chunk,
-                &mut tail,
-                &mut last_emitted,
-                &mut last_projection,
-            );
+            // Старые маркеры наград не должны повторно открывать OCR/оверлей при
+            // запуске PlatScope. В реальном времени обрабатываем только байты,
+            // дописанные после подключения наблюдателя.
+            let live_from = reward_live_from.unwrap_or(current_offset);
+            if new_offset > live_from {
+                let skip = usize::try_from(live_from.saturating_sub(current_offset))
+                    .unwrap_or(usize::MAX)
+                    .min(chunk.len());
+                if let Some(live_chunk) = chunk.get(skip..) {
+                    handle_reward_markers(
+                        &app_handle,
+                        live_chunk,
+                        &mut tail,
+                        &mut last_emitted,
+                        &mut last_projection,
+                    );
+                }
+            }
         }
     });
 }

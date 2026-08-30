@@ -594,20 +594,28 @@ fn resolve_group<S: BuildHasher>(
         .get(&lookup_key)
         .map(Vec::as_slice)
         .unwrap_or_default();
-    let (display_name_en, display_name_ru, tags, key, resolution) = match candidates {
+    let (display_name_en, display_name_ru, tags, key, subtype, resolution) = match candidates {
         [] => (
             None,
             None,
             Vec::new(),
             None,
+            group.subtype.clone(),
             InventoryResolution::UnknownItem,
         ),
         [catalog_item] => {
+            let subtype = group.subtype.clone().or_else(|| {
+                catalog_item
+                    .subtypes
+                    .iter()
+                    .any(|candidate| candidate == "regular")
+                    .then(|| "regular".to_owned())
+            });
             let key = MarketVariantKey::new(
                 catalog_item.slug.clone(),
                 platform,
                 group.rank,
-                group.subtype.clone(),
+                subtype.clone(),
             )
             .expect("validated inventory identity creates a valid market key");
             let resolution = if market_shape_available(available_variants, &key) {
@@ -620,6 +628,7 @@ fn resolve_group<S: BuildHasher>(
                 catalog_item.display_name_ru.clone(),
                 catalog_item.tags.clone(),
                 Some(key),
+                subtype,
                 resolution,
             )
         }
@@ -628,6 +637,7 @@ fn resolve_group<S: BuildHasher>(
             None,
             Vec::new(),
             None,
+            group.subtype.clone(),
             InventoryResolution::AmbiguousItem,
         ),
     };
@@ -646,7 +656,7 @@ fn resolve_group<S: BuildHasher>(
         tags,
         key,
         rank: group.rank,
-        subtype: group.subtype,
+        subtype,
         owned_quantity: quantities.owned,
         tradeable_quantity: quantities.tradeable,
         untradeable_quantity: quantities.untradeable,
@@ -664,7 +674,8 @@ fn market_shape_available<S: BuildHasher>(
     available_variants.iter().any(|candidate| {
         candidate.slug == key.slug
             && candidate.rank == key.rank
-            && candidate.subtype == key.subtype
+            && (candidate.subtype == key.subtype
+                || (key.subtype.as_deref() == Some("regular") && candidate.subtype.is_none()))
             && candidate.amber_stars == key.amber_stars
             && candidate.cyan_stars == key.cyan_stars
     })
@@ -838,6 +849,42 @@ mod tests {
             InventoryResolution::ExactVariantUnavailable
         );
         assert_eq!(unresolved.items[0].sellable_quantity, 0);
+    }
+
+    #[test]
+    fn resolver_maps_missing_inventory_subtype_to_regular_market_variant() {
+        let source = inventory(vec![InventoryItem {
+            canonical_game_id: "/Lotus/Upgrades/Mods/PrimedFlow".into(),
+            quantity: 2,
+            rank: Some(5),
+            subtype: None,
+            tradeability: Tradeability::Tradeable,
+            leveled: true,
+        }]);
+        let mut item_catalog = catalog();
+        item_catalog.items[0].subtypes = vec!["regular".into(), "atragraph".into()];
+        let legacy_market_variant =
+            MarketVariantKey::new("primed_flow", Platform::Pc, Some(5), None::<String>)
+                .expect("legacy key");
+
+        let resolved = resolve_inventory(
+            &source,
+            &item_catalog,
+            &HashSet::from([legacy_market_variant]),
+            Platform::Pc,
+            0,
+        );
+
+        assert_eq!(resolved.items[0].subtype.as_deref(), Some("regular"));
+        assert_eq!(
+            resolved.items[0]
+                .key
+                .as_ref()
+                .and_then(|key| key.subtype.as_deref()),
+            Some("regular")
+        );
+        assert_eq!(resolved.items[0].resolution, InventoryResolution::Resolved);
+        assert_eq!(resolved.items[0].sellable_quantity, 2);
     }
 
     #[test]

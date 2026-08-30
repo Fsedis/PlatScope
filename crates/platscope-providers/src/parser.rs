@@ -241,7 +241,8 @@ pub fn normalize_market_dump(
             let subtype = object
                 .get("subtype")
                 .and_then(Value::as_str)
-                .map(str::to_owned);
+                .map(str::to_owned)
+                .or_else(|| implicit_regular_subtype(item));
             let amber_stars = optional_u16(object, "amber_stars")?;
             let cyan_stars = optional_u16(object, "cyan_stars")?;
             if subtype.as_ref().is_some_and(|subtype| {
@@ -311,6 +312,13 @@ pub fn normalize_market_dump(
         },
         records,
     })
+}
+
+fn implicit_regular_subtype(item: &CatalogItem) -> Option<String> {
+    item.subtypes
+        .iter()
+        .any(|subtype| subtype == "regular")
+        .then(|| "regular".to_owned())
 }
 
 pub(crate) fn extract_source_date(body: &[u8]) -> Result<NaiveDate, ProviderError> {
@@ -436,12 +444,14 @@ mod tests {
     const CATALOG: &[u8] = br#"[
       {"id":"normal","slug":"normal_item","gameRef":"/Normal","tags":["weapon"],"i18n":{"en":{"name":"Normal Item","thumb":"items/images/en/thumbs/normal.png"},"ru":{"name":"\u041e\u0431\u044b\u0447\u043d\u044b\u0439 \u043f\u0440\u0435\u0434\u043c\u0435\u0442","thumb":"items/images/ru/thumbs/normal.png"}}},
       {"id":"ranked","slug":"ranked_mod","tags":["mod"],"bulkTradable":true,"maxRank":10,"i18n":{"en":{"name":"Ranked Mod"}}},
+      {"id":"variant-ranked","slug":"variant_ranked_mod","tags":["mod"],"maxRank":5,"subtypes":["regular","atragraph"],"i18n":{"en":{"name":"Variant Ranked Mod"}}},
       {"id":"relic","slug":"axi_test_relic","tags":["relic"],"subtypes":["intact","radiant"],"i18n":{"en":{"name":"Axi Test Relic"}}}
     ]"#;
 
     const PRICES: &[u8] = br#"{
       "Normal Item":[{"datetime":"2026-08-26T00:00:00Z","volume":"9","min_price":25,"max_price":33,"avg_price":29,"median":"30","item_id":"normal","order_type":"closed"}],
       "Ranked Mod":[{"datetime":"2026-08-26T00:00:00Z","volume":3,"median":12,"mod_rank":10,"item_id":"ranked","order_type":"sell"}],
+      "Variant Ranked Mod":[{"datetime":"2026-08-26T00:00:00Z","volume":2,"median":10,"mod_rank":5,"item_id":"variant-ranked","order_type":"closed"}],
       "Axi Test Relic":[{"datetime":"2026-08-26T00:00:00Z","volume":4,"median":7,"subtype":"radiant","item_id":"relic","order_type":"buy"}]
     }"#;
 
@@ -523,7 +533,7 @@ mod tests {
         )
         .expect("fixture prices");
 
-        assert_eq!(snapshot.records.len(), 3);
+        assert_eq!(snapshot.records.len(), 4);
         let normal = snapshot
             .records
             .iter()
@@ -542,6 +552,11 @@ mod tests {
                 .iter()
                 .any(|record| record.key.subtype.as_deref() == Some("radiant"))
         );
+        assert!(snapshot.records.iter().any(|record| {
+            record.key.slug == "variant_ranked_mod"
+                && record.key.rank == Some(5)
+                && record.key.subtype.as_deref() == Some("regular")
+        }));
     }
 
     #[test]

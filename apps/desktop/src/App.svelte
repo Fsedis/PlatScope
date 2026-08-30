@@ -690,7 +690,7 @@
         {/if}
       </section>
 
-      <aside class="detail-panel" aria-labelledby="detail-heading">
+      <aside class="detail-panel market-detail" aria-labelledby="detail-heading">
         {#if selectedRow && activeRecommendation}
           <div class="detail-heading">
             {#if selectedRow.imageUrl}<img class="detail-art" src={selectedRow.imageUrl} alt="" decoding="async" />{/if}

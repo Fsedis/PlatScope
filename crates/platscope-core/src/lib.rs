@@ -12,10 +12,10 @@ use platscope_account::{CredentialStore, OsCredentialStore, WfmAccountClient};
 use platscope_domain::{
     GameMetadataSnapshot, GameMetadataSnapshotMetadata, InventoryResolution,
     InventorySnapshotMetadata, InventorySource, ItemCatalog, LiveOrder, LiveOrderBook,
-    LiveOrderSide, MarketHistoryPoint, MarketItemKind, MarketVariantKey, Platform, PlayerInventory,
-    PrimePartMetadata, PrimeSetComponentDefinition, PrimeSetDefinition, ProviderId,
-    RelicDefinition, RelicRewardDefinition, ResolvedInventoryItem, ResolvedInventorySnapshot,
-    UserStatus, VaultStatus,
+    LiveOrderSide, MarketHistoryPoint, MarketItemKind, MarketRecord, MarketVariantKey, Platform,
+    PlayerInventory, PrimePartMetadata, PrimeSetComponentDefinition, PrimeSetDefinition,
+    ProviderId, RelicDefinition, RelicRewardDefinition, ResolvedInventoryItem,
+    ResolvedInventorySnapshot, UserStatus, VaultStatus,
 };
 use platscope_insights::{
     DucatEfficiency, RelicExpectedValue, RelicRewardInput, SetComparison, SetComparisonInput,
@@ -400,7 +400,7 @@ impl PricingService {
         let Some(snapshot) = database.current_market_snapshot()? else {
             return Ok(None);
         };
-        let records = database.current_market_records(key)?;
+        let records = current_market_records_with_regular_fallback(&database, key)?;
         Ok(Some(recommend(PricingContext {
             key,
             item_kind,
@@ -412,6 +412,38 @@ impl PricingService {
             live_order_book,
         })))
     }
+}
+
+fn current_market_records_with_regular_fallback(
+    database: &Database,
+    key: &MarketVariantKey,
+) -> Result<Vec<MarketRecord>, CoreError> {
+    let records = database.current_market_records(key)?;
+    if !records.is_empty() || key.subtype.as_deref() != Some("regular") {
+        return Ok(records);
+    }
+    let mut legacy_key = key.clone();
+    legacy_key.subtype = None;
+    let mut legacy_records = database.current_market_records(&legacy_key)?;
+    for record in &mut legacy_records {
+        record.key = key.clone();
+    }
+    Ok(legacy_records)
+}
+
+fn market_history_with_regular_fallback(
+    database: &Database,
+    key: &MarketVariantKey,
+    days: u16,
+    as_of: NaiveDate,
+) -> Result<Vec<MarketHistoryPoint>, CoreError> {
+    let points = database.market_history(key, days, as_of)?;
+    if !points.is_empty() || key.subtype.as_deref() != Some("regular") {
+        return Ok(points);
+    }
+    let mut legacy_key = key.clone();
+    legacy_key.subtype = None;
+    Ok(database.market_history(&legacy_key, days, as_of)?)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -688,22 +720,9 @@ impl MarketBrowserService {
         };
         let mut bundles =
             database.search_current_market_variants(query, limit.saturating_add(1))?;
-        let image_by_item_id: HashMap<String, String> = database
-            .load_current_catalog()?
-            .map(|catalog| {
-                catalog
-                    .items
-                    .into_iter()
-                    .filter_map(|item| {
-                        let thumb = match language {
-                            Language::Russian => item.thumb_ru.or(item.thumb),
-                            Language::English => item.thumb,
-                        };
-                        thumb.map(|thumb| (item.item_id, thumb))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        let catalog = database.load_current_catalog()?;
+        let (image_by_item_id, implicit_regular_slugs) =
+            market_search_catalog_context(catalog.as_ref(), language);
         let component_images = database
             .load_current_game_metadata()?
             .as_ref()
@@ -714,6 +733,15 @@ impl MarketBrowserService {
         let rows = bundles
             .into_iter()
             .map(|mut bundle| {
+                if bundle.key.subtype.is_none() && implicit_regular_slugs.contains(&bundle.key.slug)
+                {
+                    bundle.key.subtype = Some("regular".to_owned());
+                    for record in &mut bundle.records {
+                        if record.key.subtype.is_none() {
+                            record.key.subtype = Some("regular".to_owned());
+                        }
+                    }
+                }
                 // Catalog and daily bulk data are currently PC-backed. Retarget only the
                 // requested identity: exact-key pricing refuses PC records on another
                 // platform while an explicit live request uses that platform.
@@ -757,6 +785,33 @@ impl MarketBrowserService {
             snapshot,
         })
     }
+}
+
+fn market_search_catalog_context(
+    catalog: Option<&ItemCatalog>,
+    language: Language,
+) -> (HashMap<String, String>, HashSet<String>) {
+    let Some(catalog) = catalog else {
+        return (HashMap::new(), HashSet::new());
+    };
+    let images = catalog
+        .items
+        .iter()
+        .filter_map(|item| {
+            let thumb = match language {
+                Language::Russian => item.thumb_ru.as_ref().or(item.thumb.as_ref()),
+                Language::English => item.thumb.as_ref(),
+            };
+            thumb.map(|thumb| (item.item_id.clone(), thumb.clone()))
+        })
+        .collect();
+    let implicit_regular_slugs = catalog
+        .items
+        .iter()
+        .filter(|item| item.subtypes.iter().any(|subtype| subtype == "regular"))
+        .map(|item| item.slug.clone())
+        .collect();
+    (images, implicit_regular_slugs)
 }
 
 impl InventoryService {
@@ -829,6 +884,12 @@ impl InventoryService {
             settings.platform,
             settings.keep_inventory_copies,
         );
+        let resolved = relink_implicit_regular_inventory(
+            &resolved,
+            Some(&catalog),
+            &variants,
+            settings.platform,
+        );
         let resolved = relink_exact_relic_inventory(
             &resolved,
             Some(&catalog),
@@ -870,6 +931,12 @@ impl InventoryService {
         };
         snapshot
             .map(|snapshot| {
+                let snapshot = relink_implicit_regular_inventory(
+                    &snapshot,
+                    catalog.as_ref(),
+                    &variants,
+                    settings.platform,
+                );
                 let snapshot = relink_exact_relic_inventory(
                     &snapshot,
                     catalog.as_ref(),
@@ -1896,6 +1963,58 @@ fn market_item_kind_from_slug(tags: &[String], slug: &str) -> MarketItemKind {
     }
 }
 
+/// В старых рыночных снимках обычный вариант мода не имел subtype. Текущий WFM
+/// требует `regular` для предметов, у которых появился альтернативный вариант
+/// `atragraph`, поэтому восстанавливаем точную торговую идентичность из каталога.
+fn relink_implicit_regular_inventory(
+    snapshot: &ResolvedInventorySnapshot,
+    catalog: Option<&ItemCatalog>,
+    available_variants: &HashSet<MarketVariantKey>,
+    platform: Platform,
+) -> ResolvedInventorySnapshot {
+    let Some(catalog) = catalog else {
+        return snapshot.clone();
+    };
+    let implicit_regular_slugs: HashSet<&str> = catalog
+        .items
+        .iter()
+        .filter(|item| item.subtypes.iter().any(|subtype| subtype == "regular"))
+        .map(|item| item.slug.as_str())
+        .collect();
+    let mut repaired = snapshot.clone();
+    for item in &mut repaired.items {
+        let Some(key) = item.key.as_mut() else {
+            continue;
+        };
+        if key.subtype.is_some() || !implicit_regular_slugs.contains(key.slug.as_str()) {
+            continue;
+        }
+        key.platform = platform;
+        key.subtype = Some("regular".to_owned());
+        item.subtype = Some("regular".to_owned());
+        item.resolution = if market_variant_available(available_variants, key) {
+            InventoryResolution::Resolved
+        } else {
+            InventoryResolution::ExactVariantUnavailable
+        };
+    }
+    apply_keep_copies(&repaired, repaired.keep_copies)
+}
+
+fn market_variant_available(
+    available_variants: &HashSet<MarketVariantKey>,
+    key: &MarketVariantKey,
+) -> bool {
+    available_variants.iter().any(|candidate| {
+        candidate.slug == key.slug
+            && candidate.rank == key.rank
+            && (candidate.subtype == key.subtype
+                || (key.subtype.as_deref() == Some("regular") && candidate.subtype.is_none()))
+            && candidate.amber_stars == key.amber_stars
+            && candidate.cyan_stars == key.cyan_stars
+    })
+}
+
 /// Восстанавливает точный рыночный вариант реликвии по неизменяемому игровому пути WFCD.
 ///
 /// `warframe.market` хранит одну карточку реликвии с subtype, а read-only inventory отдаёт
@@ -2149,7 +2268,8 @@ fn enrich_inventory_view(
             continue;
         }
         item.closed_median_48h = if let Some(as_of) = market_source_date {
-            let points = lock_database(database)?.market_history(key, 2, as_of)?;
+            let database_guard = lock_database(database)?;
+            let points = market_history_with_regular_fallback(&database_guard, key, 2, as_of)?;
             weighted_closed_median(&points)
         } else {
             None
@@ -2419,7 +2539,8 @@ impl HistoryService {
         let as_of = database
             .current_market_snapshot()?
             .map_or_else(|| Utc::now().date_naive(), |snapshot| snapshot.source_date);
-        let all_points = database.market_history(key, HISTORY_TARGET_DAYS, as_of)?;
+        let all_points =
+            market_history_with_regular_fallback(&database, key, HISTORY_TARGET_DAYS, as_of)?;
         let first_date = as_of - ChronoDuration::days(i64::from(requested_days - 1));
         let points = all_points
             .iter()
@@ -2893,6 +3014,79 @@ mod tests {
         }));
     }
 
+    #[test]
+    fn persisted_ranked_mod_is_relinked_to_required_regular_subtype() {
+        let legacy_key =
+            MarketVariantKey::new("animal_instinct", Platform::Pc, Some(5), None::<String>)
+                .expect("legacy key");
+        let snapshot = ResolvedInventorySnapshot {
+            metadata: InventorySnapshotMetadata {
+                source: InventorySource::ReadOnlyScan,
+                observed_at: Utc::now(),
+                schema_version: 1,
+                item_count: 1,
+                checksum_sha256: "inventory".into(),
+            },
+            keep_copies: 1,
+            items: vec![ResolvedInventoryItem {
+                canonical_game_id: "/Lotus/Upgrades/Mods/Sentinel/AnimalInstinct".into(),
+                display_name_en: Some("Animal Instinct".into()),
+                display_name_ru: Some("Животный Инстинкт".into()),
+                tags: vec!["mod".into()],
+                key: Some(legacy_key.clone()),
+                rank: Some(5),
+                subtype: None,
+                owned_quantity: 3,
+                tradeable_quantity: 3,
+                untradeable_quantity: 0,
+                unknown_quantity: 0,
+                leveled_quantity: 3,
+                sellable_quantity: 2,
+                resolution: InventoryResolution::Resolved,
+            }],
+        };
+        let catalog = ItemCatalog {
+            metadata: CatalogMetadata {
+                provider: ProviderId::WarframeMarket,
+                fetched_at: Utc::now(),
+                schema_version: CURRENT_CATALOG_SCHEMA_VERSION,
+                item_count: 1,
+                checksum_sha256: "catalog".into(),
+            },
+            items: vec![CatalogItem {
+                item_id: "559dacd3e779897ba8819969".into(),
+                slug: "animal_instinct".into(),
+                display_name_en: "Animal Instinct".into(),
+                display_name_ru: Some("Животный Инстинкт".into()),
+                thumb: None,
+                thumb_ru: None,
+                game_ref: None,
+                bulk_tradable: false,
+                max_rank: Some(5),
+                subtypes: vec!["regular".into(), "atragraph".into()],
+                tags: vec!["mod".into()],
+            }],
+        };
+
+        let repaired = relink_implicit_regular_inventory(
+            &snapshot,
+            Some(&catalog),
+            &HashSet::from([legacy_key]),
+            Platform::Pc,
+        );
+
+        assert_eq!(repaired.items[0].subtype.as_deref(), Some("regular"));
+        assert_eq!(
+            repaired.items[0]
+                .key
+                .as_ref()
+                .and_then(|key| key.subtype.as_deref()),
+            Some("regular")
+        );
+        assert_eq!(repaired.items[0].resolution, InventoryResolution::Resolved);
+        assert_eq!(repaired.items[0].sellable_quantity, 2);
+    }
+
     fn relic_refinement_fixtures() -> [(
         platscope_domain::RelicRefinement,
         &'static str,
@@ -3263,6 +3457,99 @@ mod tests {
         assert_eq!(xbox.rows[0].recommendation.key.platform, Platform::Xbox);
         assert_eq!(xbox.rows[0].recommendation.fair_price, None);
         assert_eq!(xbox.rows[0].recommendation.closed_volume, None);
+    }
+
+    #[test]
+    fn regular_mod_variant_reuses_legacy_bulk_price_without_losing_order_subtype() {
+        let database = Mutex::new(Database::open_in_memory().expect("database opens"));
+        let observed_at = chrono::DateTime::parse_from_rfc3339("2026-08-29T08:00:00Z")
+            .expect("valid timestamp")
+            .with_timezone(&Utc);
+        let legacy_key =
+            MarketVariantKey::new("animal_instinct", Platform::Pc, Some(5), None::<String>)
+                .expect("legacy key");
+        let regular_key =
+            MarketVariantKey::new("animal_instinct", Platform::Pc, Some(5), Some("regular"))
+                .expect("regular key");
+        let catalog = ItemCatalog {
+            metadata: CatalogMetadata {
+                provider: ProviderId::WarframeMarket,
+                fetched_at: observed_at,
+                schema_version: CURRENT_CATALOG_SCHEMA_VERSION,
+                item_count: 1,
+                checksum_sha256: "catalog".into(),
+            },
+            items: vec![CatalogItem {
+                item_id: "559dacd3e779897ba8819969".into(),
+                slug: legacy_key.slug.clone(),
+                display_name_en: "Animal Instinct".into(),
+                display_name_ru: Some("Животный Инстинкт".into()),
+                thumb: None,
+                thumb_ru: None,
+                game_ref: None,
+                bulk_tradable: false,
+                max_rank: Some(5),
+                subtypes: vec!["regular".into(), "atragraph".into()],
+                tags: vec!["mod".into()],
+            }],
+        };
+        let snapshot = NormalizedMarketSnapshot {
+            metadata: SnapshotMetadata {
+                provider: ProviderId::RelicsRun,
+                source_date: observed_at.date_naive(),
+                fetched_at: observed_at,
+                schema_version: 1,
+                item_count: 1,
+                record_count: 1,
+                checksum_sha256: "snapshot".into(),
+            },
+            records: vec![MarketRecord {
+                key: legacy_key,
+                external_item_id: "559dacd3e779897ba8819969".into(),
+                display_name_en: "Animal Instinct".into(),
+                observed_at,
+                order_type: MarketOrderType::Closed,
+                median: Some(10.0),
+                average: Some(10.0),
+                min_price: Some(10.0),
+                max_price: Some(10.0),
+                volume: 5.0,
+                raw_json: "{}".into(),
+            }],
+        };
+        {
+            let mut database = database.lock().expect("database lock");
+            database
+                .promote_catalog(&catalog)
+                .expect("catalog promotion");
+            database
+                .promote_market_snapshot(&snapshot)
+                .expect("snapshot promotion");
+        }
+
+        let recommendation = PricingService::price_current_variant(
+            &database,
+            &regular_key,
+            MarketItemKind::Standard,
+        )
+        .expect("pricing succeeds")
+        .expect("snapshot exists");
+        assert_eq!(recommendation.key.subtype.as_deref(), Some("regular"));
+        assert_eq!(recommendation.fair_price, Some(10.0));
+
+        let search = MarketBrowserService::search(
+            &database,
+            "animal instinct",
+            10,
+            Language::Russian,
+            Platform::Pc,
+        )
+        .expect("market search succeeds");
+        assert_eq!(
+            search.rows[0].recommendation.key.subtype.as_deref(),
+            Some("regular")
+        );
+        assert_eq!(search.rows[0].recommendation.fair_price, Some(10.0));
     }
 
     #[test]

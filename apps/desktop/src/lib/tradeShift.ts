@@ -40,6 +40,25 @@ export interface TradeEvent {
   reconciliationJson: string | null;
 }
 
+export function isSaleTrade(event: TradeEvent): boolean {
+  return event.platinumReceived > 0
+    && event.platinumGiven === 0
+    && event.givenItems.length > 0;
+}
+
+export function pendingSaleEvents(events: readonly TradeEvent[]): TradeEvent[] {
+  return events.filter((event) => isSaleTrade(event) && event.status === "pending");
+}
+
+export function visibleTradeHistory(
+  events: readonly TradeEvent[],
+  limit = 8,
+): TradeEvent[] {
+  return events
+    .filter((event) => !isSaleTrade(event) || event.status !== "pending")
+    .slice(0, Math.max(0, limit));
+}
+
 export interface TradeShiftRow {
   order: AccountOrder;
   item: AccountOrderItem | null;

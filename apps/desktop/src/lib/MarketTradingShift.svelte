@@ -15,10 +15,13 @@
   import { formatPlatinum, type LivePricingResult, type PriceRecommendation } from "./market";
   import {
     buildTradeShiftRows,
+    isSaleTrade,
     normalizeTradeName,
+    pendingSaleEvents,
     planTradeReconciliation,
     recommendationIdentity,
     updateInput,
+    visibleTradeHistory,
     type OrderHealth,
     type TradeEvent,
     type TradeReconciliationAction,
@@ -63,11 +66,9 @@
   $: visibleRows = rows;
   $: actionableRows = rows.filter((row) => row.needsAction && rowChange(row) !== null);
   $: selectedRows = actionableRows.filter((row) => selectedIds.has(row.order.id));
-  $: saleEvents = events.filter(
-    (event) => event.platinumReceived > 0 && event.platinumGiven === 0 && event.givenItems.length > 0,
-  );
-  $: pendingEvents = saleEvents.filter((event) => event.status === "pending");
-  $: historyEvents = saleEvents.filter((event) => event.status !== "pending").slice(0, 8);
+  $: saleEvents = events.filter(isSaleTrade);
+  $: pendingEvents = pendingSaleEvents(events);
+  $: historyEvents = visibleTradeHistory(events);
   $: reconciledSales = saleEvents.filter((event) => event.status === "reconciled");
   $: earnedPlatinum = reconciledSales.reduce((total, event) => total + event.platinumReceived, 0);
   $: attentionCount = rows.filter((row) => row.needsAction).length + pendingEvents.length;
@@ -126,7 +127,7 @@
   async function loadEvents(announce = false): Promise<void> {
     try {
       events = await invoke<TradeEvent[]>("trade_events");
-      if (announce) actionMessage = "Игра подтвердила сделку. Проверьте изменение ордера.";
+      if (announce) actionMessage = "Сделка записана. Для продажи проверьте ордер.";
     } catch {
       if (announce) actionMessage = "Сделка обнаружена, но журнал пока не открылся. Обновите ордера.";
     }
@@ -509,6 +510,16 @@
     return event.givenItems.map((item) => `${localizedTradeName(item.name)} ×${item.quantity}`).join(", ") || "без предметов";
   }
 
+  function receivedItems(event: TradeEvent): string {
+    return event.receivedItems.map((item) => `${localizedTradeName(item.name)} ×${item.quantity}`).join(", ") || "без предметов";
+  }
+
+  function eventItems(event: TradeEvent): string {
+    if (isSaleTrade(event)) return soldItems(event);
+    if (event.platinumGiven > 0 && event.platinumReceived === 0) return receivedItems(event);
+    return `Отдано: ${soldItems(event)} · Получено: ${receivedItems(event)}`;
+  }
+
   function localizedTradeName(name: string): string {
     const matched = Object.values(account?.orderItems ?? {}).find(
       (item) => normalizeTradeName(item.displayNameEn) === normalizeTradeName(name),
@@ -593,7 +604,7 @@
     {#if pendingEvents.length}
       <section class="priority-panel" aria-labelledby="pending-sales-heading">
         <header class="section-heading">
-          <div><p class="section-kicker">Требуют подтверждения</p><h3 id="pending-sales-heading">Сделки из игры</h3></div>
+          <div><p class="section-kicker">Требуют подтверждения</p><h3 id="pending-sales-heading">Продажи из игры</h3></div>
           <span class="count-badge">{pendingEvents.length}</span>
         </header>
         <p class="section-hint">PlatScope ничего не меняет автоматически. Подтвердите совпавший ордер или пропустите событие.</p>
@@ -747,18 +758,18 @@
         </div>
       </details>
 
-      <details class="trade-history">
-        <summary>История сделок <span>{historyEvents.length ? `${historyEvents.length} последних` : "пока пусто"}</span></summary>
+      <details class="trade-history" open>
+        <summary>Завершённые сделки <span>{historyEvents.length ? `${historyEvents.length} последних` : "пока пусто"}</span></summary>
         <div class="trade-events">
           {#each historyEvents as event (event.id)}
             <article>
-              <div class="trade-event__copy"><strong>{eventTitle(event)}</strong><span>{soldItems(event)}{event.partner ? ` · ${event.partner}` : ""}</span><small>{new Date(event.occurredAt).toLocaleString("ru-RU")}</small></div>
+              <div class="trade-event__copy"><strong>{eventTitle(event)}</strong><span>{eventItems(event)}{event.partner ? ` · ${event.partner}` : ""}</span><small>{new Date(event.occurredAt).toLocaleString("ru-RU")}</small></div>
               <div class="trade-event__actions">
-                {#if event.status === "reconciled" && event.reconciliationJson}<span class="done">Ордер обновлён</span><button class="text-button compact" type="button" onclick={() => (tradeToUndo = event)}>Отменить</button>{:else}<span class="done">Пропущено</span><button class="text-button compact" type="button" onclick={() => restoreTradeEvent(event)}>Вернуть</button>{/if}
+                {#if event.status === "reconciled" && event.reconciliationJson}<span class="done">Ордер обновлён</span><button class="text-button compact" type="button" onclick={() => (tradeToUndo = event)}>Отменить</button>{:else if event.status === "ignored" && isSaleTrade(event)}<span class="done">Без изменения ордера</span><button class="text-button compact" type="button" onclick={() => restoreTradeEvent(event)}>Вернуть</button>{:else}<span class="done">Записано</span>{/if}
               </div>
             </article>
           {:else}
-            <p class="history-empty">Подтверждённые и пропущенные сделки появятся здесь.</p>
+            <p class="history-empty">Завершённые обмены текущей игровой сессии появятся здесь. Более ранние сессии Warframe восстановить нельзя.</p>
           {/each}
         </div>
       </details>

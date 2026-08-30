@@ -97,6 +97,41 @@ describe("account listing drafts", () => {
     });
   });
 
+  it("sends the required regular subtype for ranked market mods", () => {
+    const item = {
+      ...inventoryItem(),
+      key: { ...row.recommendation.key, rank: 5, subtype: "regular" },
+      rank: 5,
+      subtype: "regular",
+    };
+    expect(createListingInputFromInventory(item, 10, 1, true, null)).toMatchObject({
+      rank: 5,
+      subtype: "regular",
+    });
+
+    const account: AccountView = {
+      connected: true,
+      profile: null,
+      orders: [{
+        id: "ranked-regular",
+        itemId: "wfm-item-id",
+        type: "sell",
+        platinum: 10,
+        quantity: 1,
+        perTrade: null,
+        rank: 5,
+        charges: null,
+        subtype: "regular",
+        amberStars: null,
+        cyanStars: null,
+        visible: true,
+        createdAt: "2026-08-30T00:00:00Z",
+        updatedAt: "2026-08-30T00:00:00Z",
+      }],
+    };
+    expect(matchingSellOrder(item, account)?.id).toBe("ranked-regular");
+  });
+
   it("turns known WFM failures into a useful instruction", () => {
     expect(accountActionErrorMessage("field perTrade is required", "ru"))
       .toContain("от 1 до 6");
