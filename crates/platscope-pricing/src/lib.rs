@@ -87,7 +87,7 @@ pub fn recommend(context: PricingContext<'_>) -> PriceRecommendation {
         push_reason(
             &mut reasons,
             PriceReasonCode::FallbackProvider,
-            "Использован резервный источник данных; уверенность понижена.",
+            "Использован резервный источник. Проверьте текущие ордера перед публикацией.",
         );
     }
     if context.item_kind == MarketItemKind::Riven {
@@ -264,7 +264,7 @@ fn fair_price(
             reasons,
             PriceReasonCode::SellOnlyFallback,
             format!(
-                "Closed signal отсутствует; использован sell median {sell_median:.2}p с низкой уверенностью."
+                "Завершённых сделок недостаточно; ориентир {sell_median:.2}p рассчитан по ордерам продавцов."
             ),
         );
         return (Some(sell_median), FairBasis::SellFallback);

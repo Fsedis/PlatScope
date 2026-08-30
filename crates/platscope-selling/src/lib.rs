@@ -105,7 +105,7 @@ fn explain(input: SellPriorityInput, factors: &SellPriorityFactors, score: u8) -
         return vec!["Нет подтверждённого количества для продажи; priority равен 0.".into()];
     }
     if trusted_positive(input.fair_price).is_none() {
-        return vec!["Надёжной fair price нет; предмет не поднимается в очереди продажи.".into()];
+        return vec!["Цена не рассчитана; предмет не поднимается в очереди продажи.".into()];
     }
     vec![
         format!(
@@ -119,7 +119,7 @@ fn explain(input: SellPriorityInput, factors: &SellPriorityFactors, score: u8) -
             factors.liquidity * 100.0
         ),
         format!(
-            "Confidence и timing применены как множители {:.0}% и {:.0}%; итоговый ranking score {score}/100.",
+            "Полнота рыночных данных и момент продажи учтены с весом {:.0}% и {:.0}%; итоговая очерёдность {score}/100.",
             factors.confidence_multiplier * 100.0,
             factors.timing_multiplier * 100.0
         ),

@@ -22,7 +22,7 @@ export interface PriceReason {
 export function priceReasonMessage(reason: PriceReason, locale: UiLocale = "ru"): string {
   const messages: Record<string, string> = locale === "ru" ? {
     trusted_closed_trades: "Цена подтверждается завершёнными сделками именно для этого варианта.",
-    closed_volume_too_low: "Сделок пока мало, поэтому оценка менее надёжна.",
+    closed_volume_too_low: "Сделок пока мало, поэтому цена рассчитана осторожно.",
     conservative_sell_adjustment: "Рекомендуемая цена немного снижена, чтобы повысить шанс продажи.",
     sell_only_fallback: "Есть только ордера на продажу; подтверждённых сделок недостаточно.",
     relic_sell_ignored: "Ордера на продажу реликвии не использовались как подтверждённая цена.",
@@ -32,7 +32,7 @@ export function priceReasonMessage(reason: PriceReason, locale: UiLocale = "ru")
     live_cluster_shift: "Несколько текущих ордеров показывают, что цена рынка изменилась.",
     thin_market_protection: "Из-за малого числа сделок рекомендация рассчитана осторожнее.",
     live_market_agreement: "Текущие ордера совпадают с оценкой по завершённым сделкам.",
-    live_market_disagreement: "Текущие ордера расходятся с историей сделок, поэтому надёжность оценки снижена.",
+    live_market_disagreement: "Текущие ордера расходятся с историей сделок. Проверьте цену перед публикацией.",
     live_top_buy: "Лучшая покупка сейчас взята из самой высокой активной заявки покупателя.",
     no_live_top_buy: "Активных заявок покупателей нет, поэтому мгновенную цену показать нельзя.",
     source_fresh: "Цена рассчитана по свежим данным.",
@@ -41,12 +41,12 @@ export function priceReasonMessage(reason: PriceReason, locale: UiLocale = "ru")
     source_date_invalid: "Не удалось определить дату цены.",
     fallback_provider: "Основной источник недоступен, поэтому показаны последние доступные данные.",
     riven_pricing_unsupported: "Цена конкретного мода разлома зависит от его характеристик и здесь не рассчитывается.",
-    insufficient_signal: "Надёжных сделок недостаточно для расчёта цены.",
+    insufficient_signal: "Сделок недостаточно для расчёта цены.",
   } : {
     trusted_closed_trades: "Fair price is supported by exact-variant closed trades.",
     closed_volume_too_low: "Closed-trade volume is too low for a strong signal.",
     conservative_sell_adjustment: "The sell estimate was adjusted conservatively.",
-    sell_only_fallback: "Only sell-side data is available, so confidence is limited.",
+    sell_only_fallback: "Only sell orders are available; completed trades are insufficient.",
     relic_sell_ignored: "Sell-only relic data was not used as fair value.",
     no_exact_variant: "No data exists for the exact market variant.",
     live_book_variant_mismatch: "Live orders for other variants were ignored.",
@@ -54,7 +54,7 @@ export function priceReasonMessage(reason: PriceReason, locale: UiLocale = "ru")
     live_cluster_shift: "A coherent live cluster indicates a market shift.",
     thin_market_protection: "Thin-market protection limits the recommendation.",
     live_market_agreement: "Live orders agree with the bulk estimate.",
-    live_market_disagreement: "Live orders disagree with the bulk estimate, reducing confidence.",
+    live_market_disagreement: "Live orders disagree with completed trades. Check the price before listing.",
     live_top_buy: "Quick Sell uses the best active buy order for the exact variant.",
     no_live_top_buy: "No active exact-variant buy order is available for Quick Sell.",
     source_fresh: "The bulk snapshot is fresh.",
@@ -161,16 +161,9 @@ export function liveUserStatusLabel(
   })[value];
 }
 
-export type MarketSortKey = "name" | "fair" | "volume" | "confidence";
+export type MarketSortKey = "name" | "fair" | "volume";
 export type SortDirection = "asc" | "desc";
 export type PriceFilter = "all" | "priced" | "unpriced";
-
-const confidenceOrder: Record<PriceConfidence, number> = {
-  high: 3,
-  medium: 2,
-  low: 1,
-  unknown: 0,
-};
 
 export function formatPlatinum(value: number | null, locale: UiLocale = "ru"): string {
   if (value === null) return "—";
@@ -180,20 +173,6 @@ export function formatPlatinum(value: number | null, locale: UiLocale = "ru"): s
 export function formatVolume(value: number | null, locale: UiLocale = "ru"): string {
   if (value === null) return "—";
   return new Intl.NumberFormat(localeCode(locale), { maximumFractionDigits: 0 }).format(value);
-}
-
-export function confidenceLabel(value: PriceConfidence, locale: UiLocale = "ru"): string {
-  return (locale === "en" ? {
-    high: "High",
-    medium: "Medium",
-    low: "Low",
-    unknown: "Not rated",
-  } : {
-    high: "Высокая",
-    medium: "Средняя",
-    low: "Низкая",
-    unknown: "Нет оценки",
-  })[value];
 }
 
 export function freshnessLabel(value: PriceFreshness, locale: UiLocale = "ru"): string {
@@ -260,11 +239,6 @@ export function filterAndSortRows(
           left.recommendation.closedVolume,
           right.recommendation.closedVolume,
         );
-        break;
-      case "confidence":
-        comparison =
-          confidenceOrder[left.recommendation.confidence] -
-          confidenceOrder[right.recommendation.confidence];
         break;
     }
     return comparison === 0

@@ -43,7 +43,7 @@ const MARKET_KEY = "platscope.market-view.v1";
 const SELL_NOW_KEY = "platscope.sell-now-view.v1";
 
 const priceFilters = ["all", "priced", "unpriced"] as const;
-const marketSortKeys = ["name", "fair", "volume", "confidence"] as const;
+const marketSortKeys = ["name", "fair", "volume"] as const;
 const sortDirections = ["asc", "desc"] as const;
 const sellNowPresets = [
   "sellable",

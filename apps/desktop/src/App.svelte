@@ -26,7 +26,6 @@
     type TrendSummary,
   } from "./lib/history";
   import {
-    confidenceLabel,
     filterAndSortRows,
     formatPlatinum,
     formatVolume,
@@ -66,10 +65,10 @@
       account: "Warframe Market",
       diagnostics: "Состояние данных",
       settings: "Настройки",
-      marketLede: "Исследование цены, истории и текущих ордеров любого предмета.",
+      marketLede: "Мои продажи, актуальность ордеров и поиск цены в одном рабочем месте.",
       inventoryLede: "Торговый инвентарь, момент продажи и ордера Warframe Market в одном месте.",
       insightsLede: "Как выгоднее распорядиться предметами: открыть реликвии, дособрать или продать сет.",
-      accountLede: "Подключение аккаунта и управление выставленными ордерами.",
+      accountLede: "Подключение аккаунта Warframe Market и состояние доступа.",
       diagnosticsLede: "Что загружено, что устарело и где возникла ошибка.",
       settingsLede: "Язык, платформа и обновление данных.",
       searching: "Ищем в сохранённых данных…", shown: (visible: number, total: number) => `${visible} из ${total} вариантов показано`,
@@ -81,12 +80,13 @@
       refreshing: "Обновляем данные…", refresh: "Обновить данные", openingStorage: "Открываем сохранённые данные…", validatingSnapshot: "Загружаем и проверяем новые цены…", providersUnavailable: "Источники временно недоступны. Показываем последние сохранённые данные.", checkStorage: "Проверить данные",
       noSnapshot: "Данные рынка ещё не загружены", loadMarket: "Загрузите цены рынка", loadMarketBody: "Обновление цен и 90-дневной истории находится в настройках.", loadingMarket: "Загружаем данные…", loadData: "Открыть настройки обновления",
       marketFilters: "Поиск и фильтры рынка", searchItem: "Поиск предмета", searchExample: "Например, Никс Прайм или nyx prime", clear: "Очистить", shortcut: "Быстрый доступ:", priceAvailability: "Наличие цены", allVariants: "Все варианты", priced: "С надёжной ценой", unpriced: "Без надёжной цены",
-      results: "Результаты", snapshot: "Данные от", marketCaption: "Предметы, цены и спрос", item: "Предмет", trades: "Сделки", confidence: "Надёжность цены", freshness: "Актуальность",
+      results: "Результаты", snapshot: "Данные от", marketCaption: "Предметы, цены, продажи и актуальность данных", item: "Предмет", trades: "Сделки", freshness: "Актуальность",
       first60: "Показаны первые 60 вариантов. Уточните запрос, чтобы сократить список.", noQuery: (query: string) => `По запросу «${query}» ничего не найдено`, noFilter: "Для этого фильтра ничего не найдено", checkSpelling: "Проверьте название предмета.", choosePriceFilter: "Выберите другой фильтр цены.", clearSearch: "Очистить поиск",
       relic: "Реликвия", riven: "Мод разлома", marketItem: "Предмет рынка", gettingLive: "Получаем текущие цены…", updateLive: "Обновить текущие цены", getLive: "Проверить текущие цены", liveHint: "Покажет активные ордера для выбранного варианта.", dataDate: "Цена рассчитана по данным от", masteryRequirement: "Ранг мастерства", whyPrice: "Как рассчитана цена?",
       marketData: "Данные рынка", dataReady: "Загружены", dataMissing: "Не загружены",
       fair: "Цена", fairPrice: "Оценка рынка", listPrice: "Ориентир размещения", closedVolume: "Закрытые сделки", lowestAsk: "Минимальная цена продажи", depthThree: "Средняя цена до 3 шт.", depthPrice: "Средняя цена до 5 шт.", quickSell: "Лучшая заявка на покупку", sell: "продажа", buy: "покупка", currentOrders: "Активные ордера", side: "Тип", price: "Цена", quantityLot: "Количество · лот", playerStatus: "Статус", sellOrder: "Продажа", buyOrder: "Покупка", noActiveOrders: "Для этого варианта нет активных ордеров.",
       priceHistory: "История цены", historyRange: "Период", dayShort: "д", loadingHistory: "Загружаем историю…", historyCoverage: (points: number, coverage: number) => `${points} дней · доступно ${coverage} дней истории`, selectForHistory: "Выберите строку, чтобы посмотреть историю цены.", median: "Медиана", change: "Изменение", averageVolume: "Средний объём", insufficientChart: "Пока недостаточно данных для графика. История накопится после обновлений рынка.", itemDetails: "Подробности предмета", selectItem: "Выберите предмет в таблице, чтобы увидеть цену и расчёт.",
+      marketModeLabel: "Режим рынка", mySales: "Мои продажи", marketSearch: "Поиск рынка",
     },
     en: {
       skip: "Skip to content",
@@ -97,10 +97,10 @@
       account: "Warframe Market",
       diagnostics: "Data status",
       settings: "Settings",
-      marketLede: "Research price, history, and current orders for any market item.",
+      marketLede: "Your sales, order health, and price research in one workspace.",
       inventoryLede: "Market inventory, sell timing, and Warframe Market orders in one place.",
       insightsLede: "Use owned relics, finish profitable sets, or list complete ones.",
-      accountLede: "Connect your account and manage listed orders.",
+      accountLede: "Warframe Market account connection and access status.",
       diagnosticsLede: "Provider, local cache, and data coverage status without reading terminal logs.",
       settingsLede: "Language, market platform, and data refresh controls.",
       searching: "Searching saved data…", shown: (visible: number, total: number) => `${visible} of ${total} variants shown`,
@@ -112,12 +112,13 @@
       refreshing: "Refreshing data…", refresh: "Refresh data", openingStorage: "Opening saved data…", validatingSnapshot: "Downloading and checking new prices…", providersUnavailable: "Sources are temporarily unavailable. Showing the latest saved data.", checkStorage: "Check data",
       noSnapshot: "Market data has not been loaded", loadMarket: "Load market prices", loadMarketBody: "Price and 90-day history updates are available in Settings.", loadingMarket: "Loading data…", loadData: "Open update settings",
       marketFilters: "Market search and filters", searchItem: "Search items", searchExample: "For example, Nyx Prime or nyx prime", clear: "Clear", shortcut: "Shortcut:", priceAvailability: "Price availability", allVariants: "All variants", priced: "Reliable price", unpriced: "No reliable price",
-      results: "Results", snapshot: "Data from", marketCaption: "Market items, prices, and demand", item: "Item", trades: "Trades", confidence: "Price reliability", freshness: "Freshness",
+      results: "Results", snapshot: "Data from", marketCaption: "Market items, prices, sales, and data freshness", item: "Item", trades: "Trades", freshness: "Freshness",
       first60: "Showing the first 60 variants. Refine the query to narrow the list.", noQuery: (query: string) => `No results for “${query}”`, noFilter: "No variants match this filter", checkSpelling: "Check the spelling or use a canonical slug.", choosePriceFilter: "Choose a different price filter.", clearSearch: "Clear search",
       relic: "Relic", riven: "Riven mod", marketItem: "Market item", gettingLive: "Getting current prices…", updateLive: "Refresh current prices", getLive: "Check current prices", liveHint: "Shows active orders for the selected variant.", dataDate: "Price data from", masteryRequirement: "Mastery rank", whyPrice: "How is this price calculated?",
       marketData: "Market data", dataReady: "Loaded", dataMissing: "Not loaded",
       fair: "Fair", fairPrice: "Fair price", listPrice: "List price", closedVolume: "Closed volume", lowestAsk: "Lowest ask", depthThree: "Up to 3 units average", depthPrice: "Up to 5 units average", quickSell: "Quick Sell", sell: "sell", buy: "buy", currentOrders: "Current active orders", side: "Side", price: "Price", quantityLot: "Quantity · lot", playerStatus: "Player status", sellOrder: "Sell", buyOrder: "Buy", noActiveOrders: "No active orders are available for the exact variant.",
       priceHistory: "Price history", historyRange: "History range", dayShort: "d", loadingHistory: "Loading local aggregates…", historyCoverage: (points: number, coverage: number) => `${points} days for this variant · ${coverage} local days covered`, selectForHistory: "Select a row to open compact history for the exact variant.", median: "Median", change: "Change", averageVolume: "Average volume", insufficientChart: "Not enough points for a chart. Background bootstrap adds up to seven days per launch.", itemDetails: "Item details", selectItem: "Select an item in the table to see its calculation and explanation.",
+      marketModeLabel: "Market mode", mySales: "My sales", marketSearch: "Market search",
     },
   } as const;
 
@@ -138,8 +139,10 @@
     | "account"
     | "diagnostics"
     | "settings";
+  type MarketWorkspace = "sales" | "browse";
 
   let activeScreen: AppScreen = "inventory";
+  let marketWorkspace: MarketWorkspace = "sales";
   let pageHeading: HTMLHeadingElement;
   let selectedIdentity = "";
   let query = "";
@@ -416,8 +419,12 @@
       keyboardNavigation = true;
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
-        searchInput?.focus();
-        searchInput?.select();
+        activeScreen = "market";
+        marketWorkspace = "browse";
+        void tick().then(() => {
+          searchInput?.focus();
+          searchInput?.select();
+        });
       }
     };
     const handlePointer = (): void => {
@@ -544,12 +551,28 @@
     </div>
   {/if}
 
-  <MarketTradingShift
-    onOpenAccount={() => navigateTo("account")}
-    onOpenInventory={() => navigateTo("inventory")}
-  />
+  <section class="market-workspace-switch" aria-label={shell.marketModeLabel}>
+    <div class="market-workspace-switch__controls" role="group" aria-label={shell.marketModeLabel}>
+      <button
+        type="button"
+        aria-pressed={marketWorkspace === "sales"}
+        onclick={() => (marketWorkspace = "sales")}
+      >{shell.mySales}</button>
+      <button
+        type="button"
+        aria-pressed={marketWorkspace === "browse"}
+        onclick={() => (marketWorkspace = "browse")}
+      >{shell.marketSearch}</button>
+    </div>
+  </section>
 
-  {#if !loading && !status?.marketSnapshot}
+  {#if marketWorkspace === "sales"}
+    <MarketTradingShift
+      onOpenAccount={() => navigateTo("account")}
+      onOpenInventory={() => navigateTo("inventory")}
+      onBrowseMarket={() => (marketWorkspace = "browse")}
+    />
+  {:else if !loading && !status?.marketSnapshot}
     <section class="empty-panel" aria-labelledby="empty-heading">
       <p class="empty-panel__label">{shell.noSnapshot}</p>
       <h2 id="empty-heading">{shell.loadMarket}</h2>
@@ -630,11 +653,6 @@
                       {shell.trades} <span aria-hidden="true">{sortMarker("volume", sortKey, sortDirection)}</span>
                     </button>
                   </th>
-                  <th scope="col" aria-sort={sortAria("confidence", sortKey, sortDirection)}>
-                    <button type="button" onclick={() => changeSort("confidence")}>
-                      {shell.confidence} <span aria-hidden="true">{sortMarker("confidence", sortKey, sortDirection)}</span>
-                    </button>
-                  </th>
                   <th scope="col">{shell.freshness}</th>
                 </tr>
               </thead>
@@ -657,11 +675,6 @@
                     </td>
                     <td class="numeric" data-label={shell.trades}>
                       {formatVolume(row.recommendation.closedVolume, $locale)}
-                    </td>
-                    <td data-label={shell.confidence}>
-                      <span class={`confidence confidence--${row.recommendation.confidence}`}>
-                        {confidenceLabel(row.recommendation.confidence, $locale)}
-                      </span>
                     </td>
                     <td data-label={shell.freshness}>
                       <span class={`freshness freshness--${row.recommendation.freshness}`}>
@@ -764,10 +777,6 @@
 
           <div class="detail-meta">
             <div>
-              <span>{shell.confidence}</span>
-              <strong>{confidenceLabel(activeRecommendation.confidence, $locale)}</strong>
-            </div>
-            <div>
               <span>{shell.freshness}</span>
               <strong>{freshnessLabel(activeRecommendation.freshness, $locale)}</strong>
             </div>
@@ -855,7 +864,7 @@
       onOpenAccount={() => navigateTo("account")}
     />
   {:else if activeScreen === "account"}
-    <AccountScreen onOpenSellQueue={() => navigateTo("inventory")} />
+    <AccountScreen onOpenMarketSales={() => { marketWorkspace = "sales"; navigateTo("market"); }} />
   {:else if activeScreen === "diagnostics"}
     <DiagnosticsScreen />
   {:else if activeScreen === "settings"}

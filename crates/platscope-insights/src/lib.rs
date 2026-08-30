@@ -247,7 +247,7 @@ fn explain_set(
     }
     if let (Some(set), Some(parts)) = (set_adjusted, parts_adjusted) {
         reasons.push(format!(
-            "После confidence/liquidity: set {set:.1}, parts {parts:.1}."
+            "С учётом полноты цен и числа сделок: комплект {set:.1}p, детали {parts:.1}p."
         ));
     }
     reasons.push(match mode {

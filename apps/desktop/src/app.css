@@ -451,6 +451,46 @@ h3 {
   line-height: 1.55;
 }
 
+.market-workspace-switch {
+  display: flex;
+  align-items: center;
+  margin-block-end: 0.65rem;
+  border-block-end: 1px solid var(--border);
+  padding: 0 0.1rem 0.6rem;
+}
+
+.market-workspace-switch__controls {
+  display: inline-flex;
+  flex: none;
+  gap: 0.2rem;
+  border: 1px solid var(--border);
+  border-radius: 0.55rem;
+  padding: 0.2rem;
+  background: var(--surface-2);
+}
+
+.market-workspace-switch__controls button {
+  min-height: 1.9rem;
+  border-color: transparent;
+  padding-inline: 0.65rem;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
+.market-workspace-switch__controls button:hover {
+  border-color: var(--border);
+  background: var(--surface-1);
+  color: var(--text);
+}
+
+.market-workspace-switch__controls button[aria-pressed="true"] {
+  border-color: var(--border-strong);
+  background: var(--surface-1);
+  color: var(--accent-strong);
+  box-shadow: var(--shadow-sm);
+}
+
 .market-toolbar {
   display: grid;
   grid-template-columns: minmax(18rem, 1fr) minmax(11rem, auto);
@@ -611,20 +651,16 @@ td {
 }
 
 th:first-child {
-  width: 38%;
+  width: 46%;
 }
 
 th:nth-child(2),
 th:nth-child(3) {
-  width: 12%;
+  width: 16%;
 }
 
 th:nth-child(4) {
-  width: 18%;
-}
-
-th:nth-child(5) {
-  width: 20%;
+  width: 22%;
 }
 
 thead {
@@ -737,7 +773,6 @@ td {
   font-weight: 750;
 }
 
-.confidence,
 .freshness {
   display: inline-flex;
   align-items: center;
@@ -749,25 +784,21 @@ td {
   white-space: nowrap;
 }
 
-.confidence--high,
 .freshness--fresh {
   background: #153728;
   color: #93ddb0;
 }
 
-.confidence--medium,
 .freshness--aging {
   background: #3c3219;
   color: #edd17c;
 }
 
-.confidence--low,
 .freshness--stale {
   background: #43252a;
   color: #ffb4b5;
 }
 
-.confidence--unknown,
 .freshness--unknown {
   background: #28353b;
   color: #b7c5ca;
@@ -2202,7 +2233,6 @@ td,
 }
 
 .inventory-card__owned,
-.confidence--high,
 .freshness--fresh,
 .resolution--resolved,
 .wfm-order-heading > span.published {
@@ -2210,7 +2240,6 @@ td,
   color: oklch(0.37 0.08 145);
 }
 
-.confidence--medium,
 .freshness--aging,
 .timing-pill--peak,
 .priority--high,
@@ -2221,12 +2250,10 @@ td,
   color: oklch(0.43 0.075 68);
 }
 
-.sell-table .stacked-cell > .confidence--medium,
 .sell-table .stacked-cell > .timing-pill--peak {
   color: oklch(0.43 0.075 68);
 }
 
-.sell-table .confidence,
 .sell-table .timing-pill {
   display: inline-flex;
   width: fit-content;
@@ -2278,13 +2305,11 @@ td,
   color: var(--text-subtle);
 }
 
-.confidence--low,
 .freshness--stale {
   background: var(--danger-soft);
   color: var(--danger);
 }
 
-.confidence--unknown,
 .freshness--unknown,
 .timing-pill--hold,
 .priority--medium,
@@ -2294,7 +2319,6 @@ td,
   color: var(--text-muted);
 }
 
-.sell-table .stacked-cell > .confidence--unknown,
 .sell-table .stacked-cell > .timing-pill--hold {
   color: var(--text-muted);
 }
@@ -2463,6 +2487,15 @@ td,
     padding: 0.8rem;
   }
 
+  .market-workspace-switch {
+    align-items: stretch;
+  }
+
+  .market-workspace-switch__controls {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .market-toolbar,
   .market-layout,
   .inventory-toolbar,
@@ -2603,7 +2636,6 @@ td,
     grid-column: 1 / -1;
   }
 
-  .confidence,
   .freshness,
   .timing-pill,
   .priority {

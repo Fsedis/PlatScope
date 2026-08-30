@@ -5,6 +5,7 @@
 
   import {
     accountActionErrorMessage,
+    validateListingNumbers,
     type AccountOrder,
     type AccountView,
     type CreateListingInput,
@@ -25,6 +26,7 @@
 
   export let onOpenAccount: () => void;
   export let onOpenInventory: () => void;
+  export let onBrowseMarket: () => void;
 
   let account: AccountView | null = null;
   let inventory: InventoryView | null = null;
@@ -44,6 +46,13 @@
   let tradeToUndo: TradeEvent | null = null;
   let applying = false;
   let applyProgress = "";
+  let editingOrder: AccountOrder | null = null;
+  let editPlatinum = 1;
+  let editQuantity = 1;
+  let editVisible = false;
+  let editError = "";
+  let manualReviewOpen = false;
+  let orderToRemove: AccountOrder | null = null;
 
   $: rows = account
     ? buildTradeShiftRows(account, inventory, recommendations)
@@ -51,7 +60,14 @@
   $: visibleRows = showAll ? rows : rows.filter((row) => row.health !== "healthy");
   $: actionableRows = rows.filter((row) => row.needsAction && rowChange(row) !== null);
   $: selectedRows = actionableRows.filter((row) => selectedIds.has(row.order.id));
-  $: pendingEvents = events.filter((event) => event.status === "pending");
+  $: saleEvents = events.filter(
+    (event) => event.platinumReceived > 0 && event.platinumGiven === 0 && event.givenItems.length > 0,
+  );
+  $: pendingEvents = saleEvents.filter((event) => event.status === "pending");
+  $: historyEvents = saleEvents.filter((event) => event.status !== "pending").slice(0, 8);
+  $: reconciledSales = saleEvents.filter((event) => event.status === "reconciled");
+  $: earnedPlatinum = reconciledSales.reduce((total, event) => total + event.platinumReceived, 0);
+  $: attentionCount = rows.filter((row) => row.needsAction).length + pendingEvents.length;
   $: summary = summarize(rows);
 
   onMount(() => {
@@ -59,7 +75,7 @@
     const unlisteners: UnlistenFn[] = [];
     void loadAll();
     void Promise.all([
-      listen("trade-detected", () => void loadEvents()),
+      listen("trade-detected", () => void loadEvents(true)),
       listen("inventory-updated", () => void loadInventoryAndPrices()),
     ]).then((items) => {
       if (disposed) items.forEach((unlisten) => unlisten());
@@ -104,12 +120,12 @@
     }
   }
 
-  async function loadEvents(): Promise<void> {
+  async function loadEvents(announce = false): Promise<void> {
     try {
       events = await invoke<TradeEvent[]>("trade_events");
-      actionMessage = "Игра подтвердила сделку. Проверьте изменение ордера.";
+      if (announce) actionMessage = "Игра подтвердила сделку. Проверьте изменение ордера.";
     } catch {
-      actionMessage = "Сделка обнаружена, но журнал пока не открылся.";
+      if (announce) actionMessage = "Сделка обнаружена, но журнал пока не открылся. Обновите ордера.";
     }
   }
 
@@ -222,6 +238,67 @@
     reviewOpen = false;
     applyProgress = "";
     await reloadAccount();
+  }
+
+  function beginManualEdit(row: TradeShiftRow): void {
+    editingOrder = row.order;
+    editPlatinum = row.order.platinum;
+    editQuantity = row.order.quantity;
+    editVisible = row.order.visible;
+    editError = "";
+    manualReviewOpen = false;
+  }
+
+  function reviewManualEdit(event: SubmitEvent): void {
+    event.preventDefault();
+    editError = validateListingNumbers(editPlatinum, editQuantity, null, "ru") ?? "";
+    if (!editError) manualReviewOpen = true;
+  }
+
+  async function applyManualEdit(): Promise<void> {
+    if (!editingOrder || applying) return;
+    applying = true;
+    errorMessage = "";
+    try {
+      await invoke<AccountOrder>("account_update_listing", {
+        id: editingOrder.id,
+        input: updateInput({
+          platinum: editPlatinum,
+          quantity: editQuantity,
+          visible: editVisible,
+        }),
+        confirmed: true,
+      });
+      actionMessage = `Ордер «${manualOrderName(editingOrder)}» обновлён.`;
+      editingOrder = null;
+      manualReviewOpen = false;
+      await reloadAccount();
+    } catch (error) {
+      editError = accountActionErrorMessage(String(error));
+      manualReviewOpen = false;
+    } finally {
+      applying = false;
+    }
+  }
+
+  async function removeManualOrder(): Promise<void> {
+    if (!orderToRemove || applying) return;
+    applying = true;
+    errorMessage = "";
+    try {
+      await invoke<AccountOrder>("account_delete_listing", {
+        id: orderToRemove.id,
+        confirmed: true,
+      });
+      actionMessage = `Ордер «${manualOrderName(orderToRemove)}» снят.`;
+      if (editingOrder?.id === orderToRemove.id) editingOrder = null;
+      orderToRemove = null;
+      await reloadAccount();
+    } catch (error) {
+      errorMessage = accountActionErrorMessage(String(error));
+    } finally {
+      applying = false;
+    }
   }
 
   async function applyVisibility(): Promise<void> {
@@ -373,6 +450,10 @@
     } satisfies Record<OrderHealth, string>)[health];
   }
 
+  function manualOrderName(order: AccountOrder): string {
+    return rows.find((row) => row.order.id === order.id)?.item?.displayName ?? "Ордер";
+  }
+
   function eventTitle(event: TradeEvent): string {
     if (event.platinumReceived > 0 && event.platinumGiven === 0) return `Продажа · +${event.platinumReceived}p`;
     if (event.platinumGiven > 0 && event.platinumReceived === 0) return `Покупка · −${event.platinumGiven}p`;
@@ -400,26 +481,23 @@
     return {
       total: source.length,
       visible: source.filter((row) => row.order.visible).length,
-      price: source.filter((row) => row.health === "overpriced" || row.health === "underpriced" || row.health === "stale").length,
-      inventory: source.filter((row) => row.health === "inventory_mismatch").length,
     };
   }
 </script>
 
-<section class="shift" aria-labelledby="shift-heading" aria-busy={loading || applying}>
-  <header class="shift__header">
+<section class="sales-workspace" aria-labelledby="sales-heading" aria-busy={loading || applying}>
+  <header class="sales-header">
     <div>
-      <p class="eyebrow">Перед торговлей</p>
-      <h2 id="shift-heading">Торговая смена</h2>
-      <p>Проблемные ордера и подтверждённые игрой сделки — без повторного просмотра всего списка.</p>
+      <h2 id="sales-heading">Мои продажи</h2>
+      <p>Сначала сделки и ордера, которые требуют решения. Исправные ордера можно раскрыть ниже.</p>
     </div>
     {#if account?.connected}
-      <div class="shift__actions">
+      <div class="sales-header__actions">
         <button class="secondary compact" type="button" disabled={loading || applying} onclick={loadAll}>Обновить ордера</button>
         {#if refreshingLive}
-          <button class="secondary compact" type="button" onclick={() => (stopLiveRefresh = true)}>Остановить</button>
+          <button class="secondary compact" type="button" onclick={() => (stopLiveRefresh = true)}>Остановить проверку</button>
         {:else}
-          <button class="compact" type="button" disabled={!rows.length} onclick={refreshCurrentPrices}>Проверить цены сейчас</button>
+          <button class="compact" type="button" disabled={!rows.length} onclick={refreshCurrentPrices}>Проверить цены</button>
         {/if}
       </div>
     {/if}
@@ -428,146 +506,203 @@
   <div class="status-line" aria-live="polite">
     {#if liveProgress}{liveProgress}{:else if actionMessage}{actionMessage}{/if}
   </div>
-
   {#if errorMessage}<p class="inline-error" role="alert">{errorMessage}</p>{/if}
 
   {#if loading}
-    <p class="shift__empty">Собираем ордера, остатки и цены…</p>
+    <p class="sales-empty">Загружаем ордера, остатки и последние сделки…</p>
   {:else if !account?.connected}
-    <div class="shift__empty">
-      <strong>Подключите Warframe Market</strong>
-      <span>После подключения здесь появятся только ордера, которым действительно нужно внимание.</span>
-      <button class="compact" type="button" onclick={onOpenAccount}>Подключить аккаунт</button>
+    <div class="sales-empty sales-empty--action">
+      <div><strong>Подключите Warframe Market</strong><span>После подключения здесь появятся ваши ордера и подтверждённые игрой продажи.</span></div>
+      <button class="compact" type="button" onclick={onOpenAccount}>Подключить WFM</button>
     </div>
   {:else}
-    <dl class="shift-summary">
-      <div><dt>Ордеров на продажу</dt><dd>{summary.total}</dd></div>
-      <div><dt>Опубликовано</dt><dd>{summary.visible}</dd></div>
-      <div class:attention={summary.price > 0}><dt>Проверить цену</dt><dd>{summary.price}</dd></div>
-      <div class:attention={summary.inventory > 0}><dt>Не сходится остаток</dt><dd>{summary.inventory}</dd></div>
-      <div class:attention={pendingEvents.length > 0}><dt>Сделки ждут сверки</dt><dd>{pendingEvents.length}</dd></div>
+    <dl class="sales-summary">
+      <div class:attention={attentionCount > 0}><dt>Требуют действий</dt><dd>{attentionCount}</dd></div>
+      <div><dt>Активные ордера</dt><dd>{summary.visible} <small>из {summary.total}</small></dd></div>
+      <div><dt>Получено по продажам</dt><dd>{earnedPlatinum ? `${earnedPlatinum}p` : "—"}</dd></div>
     </dl>
 
-    <div class="shift-toolbar">
-      <label class="compact-check"><input type="checkbox" bind:checked={showAll} /> Показать исправные</label>
-      <span>{showAll ? `${visibleRows.length} ордеров` : `${visibleRows.length} требуют внимания`}</span>
-      <div class="shift-toolbar__actions">
-        <button class="secondary compact" type="button" disabled={!summary.visible || applying} onclick={() => (visibilityIntent = false)}>Скрыть все</button>
-        <button class="secondary compact" type="button" disabled={summary.visible === summary.total || applying} onclick={() => (visibilityIntent = true)}>Опубликовать все</button>
-        <button class="compact" type="button" disabled={!selectedRows.length || applying} onclick={() => (reviewOpen = true)}>Проверить изменения ({selectedRows.length})</button>
-      </div>
-    </div>
-
-    {#if visibleRows.length}
-      <div class="shift-table-wrap">
-        <table class="shift-table">
-          <caption class="sr-only">Состояние ордеров Warframe Market</caption>
-          <colgroup><col class="col-check" /><col class="col-item" /><col class="col-order" /><col class="col-market" /><col class="col-stock" /><col class="col-status" /></colgroup>
-          <thead><tr><th class="check-column"><span class="sr-only">Выбрать</span></th><th>Предмет</th><th>Ордер</th><th>Рынок</th><th>Остаток</th><th>Статус</th></tr></thead>
-          <tbody>
-            {#each visibleRows as row (row.order.id)}
-              <tr class:row-attention={row.needsAction}>
-                <td>
-                  {#if rowChange(row)}
-                    <input aria-label={`Выбрать ${row.item?.displayName ?? "ордер"}`} type="checkbox" checked={selectedIds.has(row.order.id)} onchange={() => toggleSelected(row.order.id)} />
-                  {/if}
-                </td>
-                <th scope="row">
-                  <span class="item-cell">
-                    {#if row.item?.imageUrl}<img src={row.item.imageUrl} alt="" loading="lazy" />{/if}
-                    <span><strong>{row.item?.displayName ?? "Неизвестный предмет"}</strong><small>{row.order.visible ? "опубликован" : "скрыт"}</small></span>
-                  </span>
-                </th>
-                <td><strong>{formatPlatinum(row.order.platinum)}</strong><small>×{row.order.quantity}</small></td>
-                <td>
-                  {#if row.suggestedPrice !== null && row.suggestedPrice !== row.order.platinum}
-                    <strong class="suggestion">→ {formatPlatinum(row.suggestedPrice)}</strong>
-                  {:else}
-                    <span>{formatPlatinum(row.recommendation?.listPrice ?? null)}</span>
-                  {/if}
-                </td>
-                <td>
-                  {#if inventory}
-                    <strong class:mismatch={row.inventory && row.order.quantity > row.inventory.sellableQuantity}>{row.inventory?.sellableQuantity ?? 0}</strong>
-                    <small>можно продать</small>
-                  {:else}
-                    <button class="text-button compact" type="button" onclick={onOpenInventory}>Нет снимка</button>
-                  {/if}
-                </td>
-                <td><span class={`health health--${row.health}`}>{row.health === "inventory_mismatch" && inventory ? `Остаток ${row.inventory?.sellableQuantity ?? 0}, в ордере ${row.order.quantity}` : healthLabel(row.health)}</span></td>
-              </tr>
-            {/each}
-          </tbody>
-        </table>
-      </div>
-    {:else}
-      <p class="all-good">Все опубликованные ордера совпадают с остатками и сохранённой оценкой рынка.</p>
+    {#if !account.profile?.verification}
+      <div class="verification-note" role="note"><span>Аккаунт WFM не подтверждён: ордера доступны для просмотра, но менять их нельзя.</span><button class="text-button compact" type="button" onclick={onOpenAccount}>Проверить подключение</button></div>
     {/if}
 
-    {#if reviewOpen}
-      <section class="confirm-panel" aria-labelledby="batch-heading">
-        <h3 id="batch-heading">Проверьте изменения</h3>
-        <ul>
-          {#each selectedRows as row}
-            {@const change = rowChange(row)}
-            <li><strong>{row.item?.displayName ?? "Ордер"}</strong>: {change?.delete ? "закрыть ордер — доступный остаток равен нулю" : `${change?.price !== null ? `${row.order.platinum}p → ${change?.price}p` : "цена без изменений"}${change?.quantity !== null ? `, ${row.order.quantity} → ${change?.quantity} шт.` : ""}`}</li>
-          {/each}
-        </ul>
-        <p>PlatScope отправит только показанные изменения. При первой ошибке пакет остановится.</p>
-        <div class="confirm-actions"><button type="button" disabled={applying} onclick={applySelectedChanges}>Применить ({selectedRows.length})</button><button class="secondary" type="button" disabled={applying} onclick={() => (reviewOpen = false)}>Отмена</button></div>
-        {#if applyProgress}<span class="status-line">{applyProgress}</span>{/if}
-      </section>
-    {/if}
-
-    {#if visibilityIntent !== null}
-      <section class="confirm-panel" aria-labelledby="visibility-heading">
-        <h3 id="visibility-heading">{visibilityIntent ? "Опубликовать" : "Скрыть"} все sell-ордера?</h3>
-        <p>{visibilityIntent ? "Ордера снова станут видны покупателям." : "Цены и количество сохранятся; покупатели временно не увидят ордера."}</p>
-        <div class="confirm-actions"><button type="button" disabled={applying} onclick={applyVisibility}>{visibilityIntent ? "Опубликовать" : "Скрыть"}</button><button class="secondary" type="button" disabled={applying} onclick={() => (visibilityIntent = null)}>Отмена</button></div>
-      </section>
-    {/if}
-
-    <details class="trade-log" open={pendingEvents.length > 0}>
-      <summary>Сделки из игры <span>{pendingEvents.length ? `${pendingEvents.length} ждут сверки` : "всё сверено"}</span></summary>
-      <p class="trade-log__hint">EE.log читается только вперёд. Ордер меняется лишь после вашего подтверждения.</p>
-      <div class="trade-events">
-        {#each events.slice(0, 8) as event (event.id)}
-          <article class:pending={event.status === "pending"}>
-            <div class="trade-event__copy">
-              <strong>{eventTitle(event)}</strong>
-              <span>{soldItems(event)}{event.partner ? ` · ${event.partner}` : ""}</span>
-              <small>{new Date(event.occurredAt).toLocaleString("ru-RU")}</small>
-            </div>
-            <div class="trade-event__actions">
-              {#if event.status === "pending"}
+    {#if pendingEvents.length}
+      <section class="priority-panel" aria-labelledby="pending-sales-heading">
+        <header class="section-heading">
+          <div><p class="section-kicker">Требуют подтверждения</p><h3 id="pending-sales-heading">Сделки из игры</h3></div>
+          <span class="count-badge">{pendingEvents.length}</span>
+        </header>
+        <p class="section-hint">PlatScope ничего не меняет автоматически. Подтвердите совпавший ордер или пропустите событие.</p>
+        <div class="trade-events">
+          {#each pendingEvents as event (event.id)}
+            <article class="pending">
+              <div class="trade-event__copy">
+                <strong>{eventTitle(event)}</strong>
+                <span>{soldItems(event)}{event.partner ? ` · ${event.partner}` : ""}</span>
+                <small>{new Date(event.occurredAt).toLocaleString("ru-RU")}</small>
+              </div>
+              <div class="trade-event__actions">
                 {#if eventCanApply(event)}
-                  <button class="compact" type="button" onclick={() => (tradeToApply = event)}>Отразить в ордере</button>
+                  <button class="compact" type="button" onclick={() => (tradeToApply = event)}>Обновить ордер</button>
                 {:else}
-                  <span class="manual">Нужна ручная сверка</span>
+                  <span class="manual">Ордер не найден однозначно</span>
                 {/if}
-                <button class="text-button compact" type="button" onclick={() => ignoreTrade(event)}>Не учитывать</button>
-              {:else if event.status === "reconciled" && event.reconciliationJson}
-                <span class="done">Отражено</span>
-                <button class="text-button compact" type="button" onclick={() => (tradeToUndo = event)}>Отменить</button>
-              {:else}
-                <span class="done">Пропущено</span>
-                <button class="text-button compact" type="button" onclick={() => restoreTradeEvent(event)}>Вернуть</button>
-              {/if}
-            </div>
-          </article>
-        {:else}
-          <p class="all-good">Новых сделок в этой сессии ещё нет.</p>
-        {/each}
-      </div>
-    </details>
+                <button class="text-button compact" type="button" onclick={() => ignoreTrade(event)}>Пропустить</button>
+              </div>
+            </article>
+          {/each}
+        </div>
+      </section>
+    {/if}
 
     {#if tradeToApply}
       {@const plan = account ? planTradeReconciliation(tradeToApply, account) : null}
       <section class="confirm-panel" aria-labelledby="trade-apply-heading">
-        <h3 id="trade-apply-heading">Отразить продажу в ордере?</h3>
+        <h3 id="trade-apply-heading">Обновить ордер после продажи?</h3>
         <ul>{#each plan?.actions ?? [] as action}<li><strong>{action.itemName}</strong>: {action.kind === "delete" ? "закрыть ордер" : `${action.before.quantity} → ${action.before.quantity - action.soldQuantity} шт.`}</li>{/each}</ul>
-        <p>Это меняет только ваш ордер WFM. Инвентарь обновится своим обычным источником.</p>
-        <div class="confirm-actions"><button type="button" disabled={applying} onclick={() => tradeToApply && applyTrade(tradeToApply)}>Подтвердить</button><button class="secondary" type="button" disabled={applying} onclick={() => (tradeToApply = null)}>Отмена</button></div>
+        <p>Изменится только ордер WFM. Инвентарь обновится из своего источника.</p>
+        <div class="confirm-actions"><button type="button" disabled={applying} onclick={() => tradeToApply && applyTrade(tradeToApply)}>Обновить ордер</button><button class="secondary" type="button" disabled={applying} onclick={() => (tradeToApply = null)}>Отмена</button></div>
+      </section>
+    {/if}
+
+    <section class="orders-panel" aria-labelledby="orders-heading">
+      <header class="orders-toolbar">
+        <div>
+          <h3 id="orders-heading">Ордера на продажу</h3>
+          <span>{showAll ? `${visibleRows.length} всего` : `${visibleRows.length} требуют внимания`}</span>
+        </div>
+        <div class="orders-toolbar__actions">
+          <label class="compact-check"><input type="checkbox" bind:checked={showAll} /> Показать исправные</label>
+          <button class="compact" type="button" disabled={!selectedRows.length || applying} onclick={() => (reviewOpen = true)}>Посмотреть изменения ({selectedRows.length})</button>
+        </div>
+      </header>
+
+      {#if visibleRows.length}
+        <div class="shift-table-wrap">
+          <table class="shift-table">
+            <caption class="sr-only">Состояние ордеров Warframe Market</caption>
+            <colgroup><col class="col-check" /><col class="col-item" /><col class="col-order" /><col class="col-market" /><col class="col-stock" /><col class="col-status" /></colgroup>
+            <thead><tr><th class="check-column"><span class="sr-only">Выбрать</span></th><th>Предмет</th><th>В ордере</th><th>Рекомендуется</th><th>Можно продать</th><th>Что сделать</th></tr></thead>
+            <tbody>
+              {#each visibleRows as row (row.order.id)}
+                <tr class:row-attention={row.needsAction}>
+                  <td>
+                    {#if rowChange(row)}
+                      <input aria-label={`Выбрать изменение для ${row.item?.displayName ?? "ордера"}`} type="checkbox" checked={selectedIds.has(row.order.id)} onchange={() => toggleSelected(row.order.id)} />
+                    {/if}
+                  </td>
+                  <th scope="row">
+                    <span class="item-cell">
+                      {#if row.item?.imageUrl}<img src={row.item.imageUrl} alt="" loading="lazy" />{/if}
+                      <span><strong>{row.item?.displayName ?? "Неизвестный предмет"}</strong><small>{row.order.visible ? "виден покупателям" : "скрыт"}</small></span>
+                    </span>
+                  </th>
+                  <td><strong>{formatPlatinum(row.order.platinum)}</strong><small>×{row.order.quantity}</small></td>
+                  <td>
+                    {#if row.suggestedPrice !== null && row.suggestedPrice !== row.order.platinum}
+                      <strong class="suggestion">{formatPlatinum(row.suggestedPrice)}</strong>
+                    {:else}
+                      <span>{formatPlatinum(row.recommendation?.listPrice ?? null)}</span>
+                    {/if}
+                  </td>
+                  <td>
+                    {#if inventory}
+                      <strong class:mismatch={row.inventory && row.order.quantity > row.inventory.sellableQuantity}>{row.inventory?.sellableQuantity ?? 0}</strong>
+                    {:else}
+                      <button class="text-button compact" type="button" onclick={onOpenInventory}>Загрузить</button>
+                    {/if}
+                  </td>
+                  <td><span class="order-action-cell"><span class={`health health--${row.health}`}>{row.health === "inventory_mismatch" && inventory ? `Поставить ${row.inventory?.sellableQuantity ?? 0} шт.` : healthLabel(row.health)}</span><button class="text-button compact" type="button" disabled={!account.profile?.verification} onclick={() => beginManualEdit(row)}>Изменить</button></span></td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
+      {:else if summary.total}
+        <div class="all-good"><strong>С ордерами всё в порядке</strong><span>Цены и количество не требуют изменений.</span><button class="text-button compact" type="button" onclick={() => (showAll = true)}>Показать все</button></div>
+      {:else}
+        <div class="sales-empty sales-empty--action"><div><strong>Нет ордеров на продажу</strong><span>Найдите предмет, проверьте цену и выставьте его из раздела «Мои предметы».</span></div><button class="secondary compact" type="button" onclick={onBrowseMarket}>Найти предмет</button></div>
+      {/if}
+
+      {#if editingOrder}
+        <form class="order-editor" aria-labelledby="order-editor-heading" onsubmit={reviewManualEdit}>
+          <div class="order-editor__heading">
+            <div><h3 id="order-editor-heading">Изменить ордер</h3><p>{manualOrderName(editingOrder)}</p></div>
+            <button class="text-button compact" type="button" onclick={() => { editingOrder = null; manualReviewOpen = false; }}>Закрыть</button>
+          </div>
+          <div class="order-editor__fields">
+            <label>Цена, платина<input type="number" inputmode="numeric" bind:value={editPlatinum} min="1" max="900000" step="1" required /></label>
+            <label>Количество<input type="number" inputmode="numeric" bind:value={editQuantity} min="1" max="9999" step="1" required /></label>
+            <label class="compact-check"><input type="checkbox" bind:checked={editVisible} /> Видно покупателям</label>
+          </div>
+          {#if editError}<p class="editor-error" role="alert">{editError}</p>{/if}
+          <div class="order-editor__actions"><button class="compact" type="submit" disabled={applying}>Проверить изменения</button><button class="danger-secondary compact" type="button" disabled={applying} onclick={() => (orderToRemove = editingOrder)}>Снять ордер</button></div>
+        </form>
+      {/if}
+
+      {#if manualReviewOpen && editingOrder}
+        <section class="confirm-panel" aria-labelledby="manual-review-heading">
+          <h3 id="manual-review-heading">Сохранить изменения?</h3>
+          <p><strong>{manualOrderName(editingOrder)}</strong>: {editingOrder.platinum}p → {editPlatinum}p, {editingOrder.quantity} → {editQuantity} шт., {editVisible ? "показывать покупателям" : "скрыть от покупателей"}.</p>
+          <div class="confirm-actions"><button type="button" disabled={applying} onclick={applyManualEdit}>Сохранить</button><button class="secondary" type="button" disabled={applying} onclick={() => (manualReviewOpen = false)}>Вернуться</button></div>
+        </section>
+      {/if}
+
+      {#if orderToRemove}
+        <section class="confirm-panel confirm-panel--danger" aria-labelledby="remove-order-heading">
+          <h3 id="remove-order-heading">Снять ордер?</h3>
+          <p>«{manualOrderName(orderToRemove)}» исчезнет с Warframe Market. Вернуть ордер можно будет только новой публикацией.</p>
+          <div class="confirm-actions"><button class="danger-primary" type="button" disabled={applying} onclick={removeManualOrder}>Снять ордер</button><button class="secondary" type="button" disabled={applying} onclick={() => (orderToRemove = null)}>Отмена</button></div>
+        </section>
+      {/if}
+
+      {#if reviewOpen}
+        <section class="confirm-panel" aria-labelledby="batch-heading">
+          <h3 id="batch-heading">Проверьте изменения перед отправкой</h3>
+          <ul>
+            {#each selectedRows as row}
+              {@const change = rowChange(row)}
+              <li><strong>{row.item?.displayName ?? "Ордер"}</strong>: {change?.delete ? "закрыть ордер — доступный остаток равен нулю" : `${change?.price !== null ? `${row.order.platinum}p → ${change?.price}p` : "цена без изменений"}${change?.quantity !== null ? `, ${row.order.quantity} → ${change?.quantity} шт.` : ""}`}</li>
+            {/each}
+          </ul>
+          <p>PlatScope отправит только перечисленные изменения и остановится при первой ошибке.</p>
+          <div class="confirm-actions"><button type="button" disabled={applying} onclick={applySelectedChanges}>Применить ({selectedRows.length})</button><button class="secondary" type="button" disabled={applying} onclick={() => (reviewOpen = false)}>Отмена</button></div>
+          {#if applyProgress}<span class="status-line">{applyProgress}</span>{/if}
+        </section>
+      {/if}
+    </section>
+
+    <div class="secondary-sections">
+      <details class="management-panel">
+        <summary>Видимость ордеров <span>{summary.visible} из {summary.total} опубликовано</span></summary>
+        <div class="management-panel__body">
+          <p>Одним действием скройте ордера, когда не готовы торговать, или опубликуйте их снова.</p>
+          <div class="management-panel__actions"><button class="secondary compact" type="button" disabled={!summary.visible || applying} onclick={() => (visibilityIntent = false)}>Скрыть все</button><button class="secondary compact" type="button" disabled={summary.visible === summary.total || applying} onclick={() => (visibilityIntent = true)}>Опубликовать все</button></div>
+        </div>
+      </details>
+
+      <details class="trade-history">
+        <summary>История сделок <span>{historyEvents.length ? `${historyEvents.length} последних` : "пока пусто"}</span></summary>
+        <div class="trade-events">
+          {#each historyEvents as event (event.id)}
+            <article>
+              <div class="trade-event__copy"><strong>{eventTitle(event)}</strong><span>{soldItems(event)}{event.partner ? ` · ${event.partner}` : ""}</span><small>{new Date(event.occurredAt).toLocaleString("ru-RU")}</small></div>
+              <div class="trade-event__actions">
+                {#if event.status === "reconciled" && event.reconciliationJson}<span class="done">Ордер обновлён</span><button class="text-button compact" type="button" onclick={() => (tradeToUndo = event)}>Отменить</button>{:else}<span class="done">Пропущено</span><button class="text-button compact" type="button" onclick={() => restoreTradeEvent(event)}>Вернуть</button>{/if}
+              </div>
+            </article>
+          {:else}
+            <p class="history-empty">Подтверждённые и пропущенные сделки появятся здесь.</p>
+          {/each}
+        </div>
+      </details>
+    </div>
+
+    {#if visibilityIntent !== null}
+      <section class="confirm-panel" aria-labelledby="visibility-heading">
+        <h3 id="visibility-heading">{visibilityIntent ? "Опубликовать" : "Скрыть"} все ордера на продажу?</h3>
+        <p>{visibilityIntent ? "Ордера снова станут видны покупателям." : "Цены и количество сохранятся, но покупатели временно не увидят ордера."}</p>
+        <div class="confirm-actions"><button type="button" disabled={applying} onclick={applyVisibility}>{visibilityIntent ? "Опубликовать" : "Скрыть"}</button><button class="secondary" type="button" disabled={applying} onclick={() => (visibilityIntent = null)}>Отмена</button></div>
       </section>
     {/if}
 
@@ -575,50 +710,58 @@
       <section class="confirm-panel" aria-labelledby="trade-undo-heading">
         <h3 id="trade-undo-heading">Вернуть состояние ордера до сделки?</h3>
         <p>Используйте отмену, только если PlatScope неверно сопоставил предмет или количество.</p>
-        <div class="confirm-actions"><button type="button" disabled={applying} onclick={() => tradeToUndo && undoTrade(tradeToUndo)}>Вернуть</button><button class="secondary" type="button" disabled={applying} onclick={() => (tradeToUndo = null)}>Отмена</button></div>
+        <div class="confirm-actions"><button type="button" disabled={applying} onclick={() => tradeToUndo && undoTrade(tradeToUndo)}>Вернуть ордер</button><button class="secondary" type="button" disabled={applying} onclick={() => (tradeToUndo = null)}>Отмена</button></div>
       </section>
     {/if}
   {/if}
 </section>
 
 <style>
-  .shift { border: 1px solid var(--border); border-radius: .7rem; margin-block-end: .8rem; background: var(--surface-1); box-shadow: var(--shadow-sm); overflow: clip; }
-  .shift__header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; padding: .8rem .9rem .65rem; }
-  .shift__header h2 { margin-bottom: .15rem; font-size: 1.08rem; }
-  .shift__header p:not(.eyebrow) { margin: 0; color: var(--text-muted); font-size: .78rem; }
-  .eyebrow { margin: 0 0 .15rem; color: var(--accent); font-size: .65rem; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
-  .shift__actions, .shift-toolbar__actions, .confirm-actions, .trade-event__actions { display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; }
+  .sales-workspace { display: grid; gap: .65rem; }
+  .sales-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; padding: .1rem; }
+  .sales-header h2 { margin-bottom: .12rem; font-size: 1.08rem; }
+  .sales-header p { max-width: 65ch; margin: 0; color: var(--text-muted); font-size: .76rem; }
+  .sales-header__actions, .orders-toolbar__actions, .confirm-actions, .trade-event__actions, .management-panel__actions { display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; }
   button.compact { min-height: 1.8rem; padding: .22rem .5rem; font-size: .75rem; }
-  .status-line { min-height: 1rem; padding: 0 .9rem .35rem; color: var(--text-muted); font-size: .72rem; }
-  .inline-error { margin: 0 .9rem .55rem; border-radius: .4rem; padding: .45rem .55rem; background: var(--danger-soft); color: var(--danger); font-size: .76rem; font-weight: 650; }
-  .shift__empty { display: flex; align-items: center; gap: .65rem; margin: 0; padding: .9rem; border-top: 1px solid var(--border); color: var(--text-muted); font-size: .8rem; }
-  .shift__empty strong { color: var(--text); }
-  .shift-summary { display: grid; grid-template-columns: repeat(5, minmax(7rem, 1fr)); margin: 0; border-block: 1px solid var(--border); background: var(--surface-2); }
-  .shift-summary div { min-width: 0; padding: .55rem .7rem; border-inline-end: 1px solid var(--border); }
-  .shift-summary div:last-child { border-inline-end: 0; }
-  .shift-summary dt { color: var(--text-muted); font-size: .65rem; }
-  .shift-summary dd { margin: .1rem 0 0; font-size: 1.05rem; font-weight: 800; font-variant-numeric: tabular-nums; }
-  .shift-summary .attention dd { color: var(--danger); }
-  .shift-toolbar { display: flex; align-items: center; gap: .7rem; padding: .55rem .7rem; }
-  .shift-toolbar > span { color: var(--text-muted); font-size: .72rem; }
-  .shift-toolbar__actions { margin-inline-start: auto; }
-  .compact-check { display: inline-flex; align-items: center; gap: .35rem; font-size: .75rem; font-weight: 650; }
+  .status-line { min-height: .9rem; padding: 0 .1rem; color: var(--text-muted); font-size: .7rem; }
+  .status-line:empty { display: none; }
+  .inline-error { margin: 0; border-radius: .45rem; padding: .5rem .6rem; background: var(--danger-soft); color: var(--danger); font-size: .75rem; font-weight: 650; }
+  .sales-empty { margin: 0; border: 1px solid var(--border); border-radius: .6rem; padding: .85rem; background: var(--surface-1); color: var(--text-muted); font-size: .78rem; }
+  .sales-empty--action { display: flex; align-items: center; justify-content: space-between; gap: .8rem; }
+  .sales-empty strong, .sales-empty span { display: block; }
+  .sales-empty strong { margin-bottom: .12rem; color: var(--text); font-size: .85rem; }
+  .sales-summary { display: grid; grid-template-columns: repeat(3, minmax(8rem, 1fr)); margin: 0; border: 1px solid var(--border); border-radius: .6rem; background: var(--surface-1); box-shadow: var(--shadow-sm); overflow: clip; }
+  .sales-summary div { min-width: 0; padding: .55rem .7rem; border-inline-end: 1px solid var(--border); }
+  .sales-summary div:last-child { border-inline-end: 0; }
+  .sales-summary dt { color: var(--text-muted); font-size: .65rem; }
+  .sales-summary dd { margin: .08rem 0 0; font-size: 1rem; font-weight: 800; font-variant-numeric: tabular-nums; }
+  .sales-summary dd small { color: var(--text-muted); font-size: .65rem; font-weight: 600; }
+  .sales-summary .attention dd { color: var(--danger); }
+  .verification-note { display: flex; align-items: center; justify-content: space-between; gap: .6rem; border: 1px solid color-mix(in oklch, var(--gold), var(--border) 55%); border-radius: .5rem; padding: .45rem .6rem; background: var(--accent-soft); color: var(--accent-strong); font-size: .7rem; font-weight: 650; }
+  .priority-panel, .orders-panel { border: 1px solid var(--border); border-radius: .6rem; background: var(--surface-1); box-shadow: var(--shadow-sm); overflow: clip; }
+  .priority-panel { border-color: color-mix(in oklch, var(--gold), var(--border) 55%); }
+  .section-heading, .orders-toolbar { display: flex; align-items: center; justify-content: space-between; gap: .75rem; padding: .55rem .7rem; background: var(--surface-2); }
+  .section-heading h3, .orders-toolbar h3 { margin: 0; font-size: .9rem; }
+  .section-kicker { margin: 0 0 .05rem; color: var(--accent-strong); font-size: .61rem; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; }
+  .count-badge { min-width: 1.55rem; border-radius: 999px; padding: .16rem .42rem; background: var(--accent); color: var(--surface-1); font-size: .68rem; font-weight: 800; text-align: center; }
+  .section-hint { margin: 0; border-block-start: 1px solid var(--border); padding: .45rem .7rem; color: var(--text-muted); font-size: .7rem; }
+  .orders-toolbar > div:first-child span { color: var(--text-muted); font-size: .68rem; }
+  .compact-check { display: inline-flex; align-items: center; gap: .35rem; min-height: 1.8rem; font-size: .72rem; font-weight: 650; }
   .compact-check input, .shift-table input { width: 1rem; height: 1rem; accent-color: var(--accent); }
-  .shift-table-wrap { max-height: 23rem; overflow: auto; border-top: 1px solid var(--border); }
-  .shift-table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: .76rem; }
+  .shift-table-wrap { max-height: 26rem; overflow: auto; border-top: 1px solid var(--border); }
+  .shift-table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: .75rem; }
   .shift-table .col-check { width: 2.2rem; }
   .shift-table .col-item { width: 31%; }
   .shift-table .col-order { width: 12%; }
-  .shift-table .col-market { width: 12%; }
-  .shift-table .col-stock { width: 15%; }
-  .shift-table .col-status { width: 23%; }
+  .shift-table .col-market { width: 14%; }
+  .shift-table .col-stock { width: 13%; }
+  .shift-table .col-status { width: 24%; }
   .shift-table th, .shift-table td { border-bottom: 1px solid var(--border); padding: .42rem .55rem; text-align: start; vertical-align: middle; }
   .shift-table th:nth-child(5), .shift-table td:nth-child(5) { display: table-cell; }
-  .shift-table thead th { position: sticky; top: 0; z-index: 1; background: var(--surface-2); color: var(--text-muted); font-size: .63rem; letter-spacing: .05em; text-transform: uppercase; }
+  .shift-table thead th { position: sticky; top: 0; z-index: 1; background: var(--surface-2); color: var(--text-muted); font-size: .61rem; letter-spacing: .04em; text-transform: uppercase; }
   .shift-table tbody tr:hover { background: var(--surface-hover); }
-  .shift-table .check-column { width: 2.1rem; }
   .shift-table td strong, .shift-table td small { display: block; font-variant-numeric: tabular-nums; }
-  .shift-table td small { margin-top: .08rem; color: var(--text-subtle); font-size: .65rem; }
+  .shift-table td small { margin-top: .08rem; color: var(--text-subtle); font-size: .64rem; }
   .item-cell { display: flex; align-items: center; gap: .45rem; min-width: 0; }
   .item-cell > span { min-width: 0; }
   .item-cell img { width: 2rem; height: 2rem; border: 1px solid var(--border); border-radius: .35rem; object-fit: contain; background: var(--surface-2); }
@@ -627,30 +770,50 @@
   .item-cell small { margin-top: .1rem; color: var(--text-subtle); font-size: .64rem; font-weight: 500; }
   .suggestion { color: var(--success); }
   .mismatch { color: var(--danger); }
-  .health { display: inline-flex; border: 1px solid var(--border); border-radius: 999px; padding: .16rem .42rem; background: var(--surface-2); font-size: .65rem; font-weight: 750; white-space: nowrap; }
+  .health { display: inline-flex; border: 1px solid var(--border); border-radius: 999px; padding: .16rem .42rem; background: var(--surface-2); font-size: .64rem; font-weight: 750; white-space: nowrap; }
   .health--inventory_mismatch, .health--underpriced { border-color: color-mix(in oklch, var(--danger), var(--border) 60%); background: var(--danger-soft); color: var(--danger); }
   .health--overpriced, .health--stale { border-color: color-mix(in oklch, var(--gold), var(--border) 55%); background: var(--accent-soft); color: var(--accent-strong); }
   .health--healthy { border-color: color-mix(in oklch, var(--success), var(--border) 60%); background: var(--success-soft); color: var(--success); }
-  .all-good { margin: 0; padding: .8rem .9rem; border-top: 1px solid var(--border); color: var(--success); font-size: .78rem; font-weight: 650; }
-  .confirm-panel { margin: .55rem .7rem .7rem; border: 1px solid var(--accent); border-radius: .55rem; padding: .7rem; background: var(--accent-soft); }
-  .confirm-panel h3 { font-size: .9rem; }
-  .confirm-panel p, .confirm-panel li { font-size: .75rem; line-height: 1.4; }
-  .confirm-panel ul { margin: .45rem 0; padding-inline-start: 1.2rem; }
-  .confirm-panel .status-line { padding: .4rem 0 0; }
-  .trade-log { border-top: 1px solid var(--border); }
-  .trade-log summary { padding: .65rem .8rem; cursor: pointer; font-size: .8rem; font-weight: 800; }
-  .trade-log summary span { margin-inline-start: .35rem; color: var(--text-muted); font-size: .68rem; font-weight: 600; }
-  .trade-log__hint { margin: -.2rem .8rem .55rem; color: var(--text-muted); font-size: .7rem; }
-  .trade-events article { display: flex; align-items: center; justify-content: space-between; gap: .8rem; padding: .55rem .8rem; border-top: 1px solid var(--border); }
+  .order-action-cell { display: flex; align-items: center; justify-content: space-between; gap: .35rem; }
+  .order-editor { display: grid; gap: .55rem; margin: .55rem; border: 1px solid var(--border-strong); border-radius: .5rem; padding: .65rem; background: var(--surface-2); }
+  .order-editor__heading { display: flex; align-items: flex-start; justify-content: space-between; gap: .6rem; }
+  .order-editor__heading h3, .order-editor__heading p { margin: 0; }
+  .order-editor__heading h3 { font-size: .86rem; }
+  .order-editor__heading p { margin-top: .08rem; color: var(--text-muted); font-size: .7rem; }
+  .order-editor__fields { display: grid; grid-template-columns: minmax(7rem, 10rem) minmax(7rem, 10rem) minmax(10rem, 1fr); align-items: end; gap: .5rem; }
+  .order-editor__fields > label:not(.compact-check) { display: grid; gap: .2rem; color: var(--text-muted); font-size: .66rem; font-weight: 650; }
+  .order-editor__fields input[type="number"] { min-height: 2rem; width: 100%; }
+  .order-editor__actions { display: flex; align-items: center; gap: .4rem; }
+  .editor-error { margin: 0; color: var(--danger); font-size: .72rem; font-weight: 650; }
+  .all-good { display: flex; align-items: center; gap: .65rem; margin: 0; padding: .7rem; border-top: 1px solid var(--border); color: var(--text-muted); font-size: .75rem; }
+  .all-good strong { color: var(--success); }
+  .all-good button { margin-inline-start: auto; }
+  .confirm-panel { margin: 0; border: 1px solid var(--accent); border-radius: .55rem; padding: .7rem; background: var(--accent-soft); }
+  .confirm-panel--danger { border-color: var(--danger); background: var(--danger-soft); }
+  .orders-panel .confirm-panel { margin: .55rem; }
+  .confirm-panel h3 { margin-bottom: .25rem; font-size: .9rem; }
+  .confirm-panel p, .confirm-panel li { font-size: .74rem; line-height: 1.4; }
+  .confirm-panel ul { margin: .4rem 0; padding-inline-start: 1.2rem; }
+  .confirm-panel .status-line { padding: .35rem 0 0; }
+  .trade-events article { display: flex; align-items: center; justify-content: space-between; gap: .8rem; padding: .55rem .7rem; border-top: 1px solid var(--border); }
   .trade-events article.pending { background: color-mix(in oklch, var(--accent-soft), transparent 55%); }
+  .trade-event__copy { min-width: 0; }
   .trade-event__copy strong, .trade-event__copy span, .trade-event__copy small { display: block; }
   .trade-event__copy strong { font-size: .78rem; }
-  .trade-event__copy span { margin-top: .1rem; font-size: .72rem; }
-  .trade-event__copy small { margin-top: .12rem; color: var(--text-subtle); font-size: .64rem; }
+  .trade-event__copy span { margin-top: .1rem; font-size: .71rem; overflow-wrap: anywhere; }
+  .trade-event__copy small { margin-top: .12rem; color: var(--text-subtle); font-size: .63rem; }
   .manual { color: var(--danger); font-size: .68rem; font-weight: 700; }
   .done { color: var(--success); font-size: .68rem; font-weight: 700; }
-  @media (max-width: 70rem) { .shift-summary { grid-template-columns: repeat(3, 1fr); } .shift-summary div { border-bottom: 1px solid var(--border); } }
-  @media (max-width: 50rem) { .shift__header, .shift-toolbar { align-items: stretch; flex-direction: column; } .shift-toolbar__actions { margin-inline-start: 0; } .shift-summary { grid-template-columns: repeat(2, 1fr); } .shift-table-wrap { max-height: none; } .trade-events article { align-items: flex-start; flex-direction: column; } }
+  .secondary-sections { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .65rem; }
+  .management-panel, .trade-history { min-width: 0; border: 1px solid var(--border); border-radius: .55rem; background: var(--surface-1); }
+  .management-panel summary, .trade-history summary { min-height: 2.2rem; padding: .55rem .65rem; cursor: pointer; font-size: .77rem; font-weight: 800; }
+  .management-panel summary span, .trade-history summary span { margin-inline-start: .3rem; color: var(--text-muted); font-size: .65rem; font-weight: 600; }
+  .management-panel__body { border-top: 1px solid var(--border); padding: .6rem .7rem; }
+  .management-panel__body p { margin-bottom: .5rem; color: var(--text-muted); font-size: .7rem; }
+  .trade-history .trade-events { max-height: 16rem; overflow: auto; }
+  .history-empty { margin: 0; border-top: 1px solid var(--border); padding: .7rem; color: var(--text-muted); font-size: .72rem; }
+  @media (max-width: 60rem) { .secondary-sections { grid-template-columns: minmax(0, 1fr); } }
+  @media (max-width: 50rem) { .sales-header, .orders-toolbar, .sales-empty--action, .verification-note { align-items: stretch; flex-direction: column; } .sales-summary, .order-editor__fields { grid-template-columns: minmax(0, 1fr); } .sales-summary div { border-inline-end: 0; border-block-end: 1px solid var(--border); } .sales-summary div:last-child { border-block-end: 0; } .shift-table-wrap { max-height: none; } .trade-events article { align-items: flex-start; flex-direction: column; } }
   @media (max-width: 46rem) {
     .shift-table, .shift-table tbody { display: block; }
     .shift-table colgroup, .shift-table thead { display: none; }

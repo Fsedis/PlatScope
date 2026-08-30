@@ -72,6 +72,15 @@ describe("saved working views", () => {
       preset: "everything",
     }));
     expect(loadSellNowViewPreferences(invalid)).toEqual(DEFAULT_SELL_NOW_VIEW);
+
+    const removedConfidenceSort = new MemoryStorage();
+    removedConfidenceSort.values.set("platscope.market-view.v1", JSON.stringify({
+      version: 1,
+      priceFilter: "all",
+      sortKey: "confidence",
+      sortDirection: "desc",
+    }));
+    expect(loadMarketViewPreferences(removedConfidenceSort).sortKey).toBe("volume");
   });
 
   it("does not throw when storage is unavailable", () => {
