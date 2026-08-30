@@ -5,6 +5,7 @@ import type { PriceRecommendation } from "./market";
 import {
   filterAndSortSellNowRows,
   priorityReasonMessages,
+  sellPriorityRanks,
   sellNowRowIdentity,
   type SellNowFilters,
   type SellNowRow,
@@ -114,6 +115,20 @@ describe("sell now presentation", () => {
       filters,
     );
     expect(result.map((item) => item.inventory.canonicalGameId)).toEqual(["high", "low"]);
+  });
+
+  it("shows a stable queue position instead of collapsing scores into one band", () => {
+    const first = row("first", 48, 40, "sell");
+    const tied = row("tied", 48, 35, "sell");
+    const third = row("third", 41, 30, "sell");
+    const unavailable = row("unavailable", 0, null, null);
+
+    const ranks = sellPriorityRanks([third, unavailable, tied, first]);
+
+    expect(ranks.get(sellNowRowIdentity(first))).toBe(1);
+    expect(ranks.get(sellNowRowIdentity(tied))).toBe(1);
+    expect(ranks.get(sellNowRowIdentity(third))).toBe(3);
+    expect(ranks.has(sellNowRowIdentity(unavailable))).toBe(false);
   });
 
   it("sorts trend by the robust 90-day price change", () => {
@@ -246,7 +261,13 @@ describe("sell now presentation", () => {
   it("builds English priority explanations from typed factors", () => {
     const result = priorityReasonMessages(row("flow", 70, 40, "sell"), "en");
     expect(result).toHaveLength(4);
-    expect(result.join(" ")).toContain("helps choose what to review first");
+    expect(result.join(" ")).toContain("shows listing order");
     expect(result.join(" ")).not.toContain("70/100");
+  });
+
+  it("explains the visible queue position", () => {
+    const result = priorityReasonMessages(row("flow", 48, 40, "sell"), "ru", 1);
+    expect(result[0]).toContain("№1");
+    expect(result[0]).toContain("Чем меньше номер");
   });
 });

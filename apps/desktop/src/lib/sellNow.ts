@@ -138,6 +138,27 @@ export function sellNowRowIdentity(row: SellNowRow): string {
     : row.inventory.canonicalGameId;
 }
 
+/** Возвращает устойчивое место предмета в общей очереди продажи. */
+export function sellPriorityRanks(rows: SellNowRow[]): Map<string, number> {
+  const ranked = rows
+    .filter((row) => row.inventory.sellableQuantity > 0 && row.priority.score > 0)
+    .sort((left, right) =>
+      right.priority.score - left.priority.score
+      || left.inventory.displayName.localeCompare(right.inventory.displayName, "ru")
+    );
+  const result = new Map<string, number>();
+  let lastScore: number | null = null;
+  let currentRank = 0;
+  for (const [index, row] of ranked.entries()) {
+    if (row.priority.score !== lastScore) {
+      currentRank = index + 1;
+      lastScore = row.priority.score;
+    }
+    result.set(sellNowRowIdentity(row), currentRank);
+  }
+  return result;
+}
+
 export function priorityLabel(band: SellPriorityBand, locale: UiLocale = "ru"): string {
   switch (band) {
     case "high":
@@ -151,23 +172,30 @@ export function priorityLabel(band: SellPriorityBand, locale: UiLocale = "ru"): 
   }
 }
 
-export function priorityReasonMessages(row: SellNowRow, locale: UiLocale = "ru"): string[] {
+export function priorityReasonMessages(
+  row: SellNowRow,
+  locale: UiLocale = "ru",
+  rank: number | null = null,
+): string[] {
   if (row.inventory.sellableQuantity === 0) return [locale === "ru"
     ? "Нет подтверждённых копий для продажи, поэтому предмет не поднимается в очереди."
     : "There are no confirmed copies to sell, so the item does not move up the queue."];
   if (row.recommendation?.fairPrice == null) return [locale === "ru"
     ? "Нет надёжной цены, поэтому предмет не поднимается в очереди."
     : "There is no reliable price, so the item does not move up the queue."];
-  return locale === "ru" ? [
+  const position = rank === null ? [] : [locale === "ru"
+    ? `№${rank} — место предмета среди всех оценённых позиций. Чем меньше номер, тем раньше его стоит выставить.`
+    : `No. ${rank} is this item's place among all evaluated listings. A lower number should be listed earlier.`];
+  return locale === "ru" ? [...position,
     `Можно выставить ${row.inventory.sellableQuantity} шт. Количество повышает позицию в очереди, но после пяти копий влияние не растёт.`,
     "Цена и число завершённых сделок повышают позицию предмета.",
     "Тренд цены за 90 дней и положение текущей цены формируют рекомендацию: продавать или ждать.",
-    "Очередность помогает выбрать, что проверить первым; она не обещает быструю продажу.",
-  ] : [
+    "Приоритет показывает порядок выставления, но не гарантирует скорость продажи.",
+  ] : [...position,
     `${row.inventory.sellableQuantity} can be listed. Quantity raises the item in the queue, with no extra weight after five copies.`,
     "Price and completed trades raise the item's position.",
     "The 90-day price trend and current price position determine whether to sell or wait.",
-    "The queue helps choose what to review first; it does not promise a quick sale.",
+    "Priority shows listing order; it does not promise a quick sale.",
   ];
 }
 

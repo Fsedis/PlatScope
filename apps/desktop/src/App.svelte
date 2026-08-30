@@ -861,7 +861,6 @@
     <SellNowScreen
       onInventoryChange={() => void loadStatus()}
       onOpenMarketSales={openMarketSales}
-      onOpenEquippedMods={() => navigateTo("equipped_mods")}
     />
   {:else if activeScreen === "equipped_mods"}
     <EquippedModsScreen onInventoryChange={() => void loadStatus()} />

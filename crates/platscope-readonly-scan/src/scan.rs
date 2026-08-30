@@ -16,6 +16,7 @@ use crate::poison::{read_guard, write_guard};
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, RwLock};
 use sysinfo::System;
+use zeroize::Zeroize;
 
 /// The session secrets + build metadata scraped out of the running game.
 ///
@@ -28,6 +29,13 @@ pub struct SessionInfo {
     pub ct: String,
     pub cred_hits: usize,
     pub distinct_creds: usize,
+}
+
+impl Drop for SessionInfo {
+    fn drop(&mut self) {
+        self.account_id.zeroize();
+        self.nonce.zeroize();
+    }
 }
 
 pub fn find_wf_pid() -> Option<u32> {

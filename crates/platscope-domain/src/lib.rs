@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+use std::collections::HashMap;
+
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -315,6 +317,83 @@ pub struct GameItemDefinition {
     pub mastery_requirement: u8,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GameItemLocalization {
+    pub game_ref: String,
+    pub display_name_ru: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyndicateOfferDefinition {
+    pub syndicate: String,
+    pub required_title: String,
+    pub slug: String,
+    pub game_ref: String,
+    pub display_name_en: String,
+    pub display_name_ru: Option<String>,
+    pub image_url: Option<String>,
+    pub standing_cost: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NightwaveOfferDefinition {
+    pub slug: String,
+    pub game_ref: String,
+    pub display_name_en: String,
+    pub display_name_ru: Option<String>,
+    pub image_url: Option<String>,
+    pub cred_cost: u32,
+}
+
+/// Точный товар из текущей недельной ротации магазина Норы.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NightwaveVendorOffer {
+    pub game_ref: String,
+    pub cred_cost: u32,
+}
+
+/// Последний подтверждённый игрой ассортимент магазина Ночной волны.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NightwaveVendorSnapshot {
+    pub observed_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+    pub season_tag: String,
+    pub vendor_type: String,
+    pub offers: Vec<NightwaveVendorOffer>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArcaneDissolutionDefinition {
+    pub slug: String,
+    pub game_ref: String,
+    pub display_name_en: String,
+    pub display_name_ru: Option<String>,
+    pub image_url: Option<String>,
+    pub vosfor: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArcanePackComponentDefinition {
+    pub game_ref: String,
+    pub rarity: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArcanePackDefinition {
+    pub key: String,
+    pub display_name_ru: String,
+    pub rolls: Vec<HashMap<String, f64>>,
+    pub components: Vec<ArcanePackComponentDefinition>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GameMetadataSnapshot {
@@ -326,6 +405,16 @@ pub struct GameMetadataSnapshot {
     pub riven_dispositions: Vec<RivenDispositionDefinition>,
     #[serde(default)]
     pub item_definitions: Vec<GameItemDefinition>,
+    #[serde(default)]
+    pub item_localizations: Vec<GameItemLocalization>,
+    #[serde(default)]
+    pub syndicate_offers: Vec<SyndicateOfferDefinition>,
+    #[serde(default)]
+    pub nightwave_offers: Vec<NightwaveOfferDefinition>,
+    #[serde(default)]
+    pub arcane_dissolutions: Vec<ArcaneDissolutionDefinition>,
+    #[serde(default)]
+    pub arcane_packs: Vec<ArcanePackDefinition>,
 }
 
 impl MarketRecord {
@@ -472,6 +561,14 @@ pub struct EquippedModInstance {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SyndicateStanding {
+    pub tag: String,
+    pub standing: i64,
+    pub title: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PlayerInventory {
     pub metadata: InventorySnapshotMetadata,
     pub items: Vec<InventoryItem>,
@@ -479,6 +576,10 @@ pub struct PlayerInventory {
     pub mod_usage_scanned: bool,
     #[serde(default)]
     pub equipped_mods: Vec<EquippedModInstance>,
+    #[serde(default)]
+    pub credits: Option<u64>,
+    #[serde(default)]
+    pub syndicates: Vec<SyndicateStanding>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -525,6 +626,10 @@ pub struct ResolvedInventorySnapshot {
     pub keep_copies: u32,
     #[serde(default)]
     pub mod_usage_scanned: bool,
+    #[serde(default)]
+    pub credits: Option<u64>,
+    #[serde(default)]
+    pub syndicates: Vec<SyndicateStanding>,
     pub items: Vec<ResolvedInventoryItem>,
 }
 

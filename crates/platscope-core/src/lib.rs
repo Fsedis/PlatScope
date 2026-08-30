@@ -10,12 +10,13 @@ use chrono::{Duration as ChronoDuration, NaiveDate, Utc};
 pub use platscope_account::{AccountOrder, AccountProfile, CreateListingInput, UpdateListingInput};
 use platscope_account::{CredentialStore, OsCredentialStore, WfmAccountClient};
 use platscope_domain::{
-    EquipmentKind, GameMetadataSnapshot, GameMetadataSnapshotMetadata, InventoryResolution,
-    InventorySnapshotMetadata, InventorySource, ItemCatalog, LiveOrder, LiveOrderBook,
-    LiveOrderSide, MarketHistoryPoint, MarketItemKind, MarketRecord, MarketVariantKey, Platform,
-    PlayerInventory, PrimePartMetadata, PrimeSetComponentDefinition, PrimeSetDefinition,
-    ProviderId, RelicDefinition, RelicRewardDefinition, ResolvedInventoryItem,
-    ResolvedInventorySnapshot, UserStatus, VaultStatus,
+    ArcanePackDefinition, CatalogItem, EquipmentKind, GameMetadataSnapshot,
+    GameMetadataSnapshotMetadata, InventoryResolution, InventorySnapshotMetadata, InventorySource,
+    ItemCatalog, LiveOrder, LiveOrderBook, LiveOrderSide, MarketHistoryPoint, MarketItemKind,
+    MarketRecord, MarketVariantKey, NightwaveVendorSnapshot, Platform, PlayerInventory,
+    PriceConfidence, PriceFreshness, PrimePartMetadata, PrimeSetComponentDefinition,
+    PrimeSetDefinition, ProviderId, RelicDefinition, RelicRewardDefinition, ResolvedInventoryItem,
+    ResolvedInventorySnapshot, SyndicateStanding, UserStatus, VaultStatus,
 };
 use platscope_insights::{
     DucatEfficiency, RelicExpectedValue, RelicRewardInput, SetComparison, SetComparisonInput,
@@ -28,9 +29,10 @@ use platscope_inventory::{
 pub use platscope_pricing::PriceRecommendation;
 use platscope_pricing::{PricingContext, recommend};
 use platscope_providers::{
-    BulkMarketProvider, FrameForgeMirrorProvider, GameMetadataProvider, HistoricalMarketProvider,
-    LiveMarketProvider, MetadataProvider, ProviderError, ProviderErrorCode, RelicsRunProvider,
-    WarframeMarketProvider, WfcdMetadataProvider,
+    BulkMarketProvider, DailyMarketState, FrameForgeMirrorProvider, GameMetadataProvider,
+    HistoricalMarketProvider, LiveMarketProvider, MetadataProvider, ProviderError,
+    ProviderErrorCode, RelicsRunProvider, WarframeMarketProvider, WarframeWorldstateProvider,
+    WfcdMetadataProvider,
 };
 use platscope_selling::{SellPriorityInput, SellPriorityScore, calculate_priority, nominal_value};
 use platscope_storage::{Database, HistoryCoverage, MarketSnapshotSummary};
@@ -41,6 +43,7 @@ use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::EnvFilter;
 
 pub const SETTINGS_KEY: &str = "app.settings";
+pub const NIGHTWAVE_VENDOR_CACHE_KEY: &str = "nightwave.vendor_snapshot";
 pub const DEFAULT_LIVE_QUOTE_TTL_SECONDS: u64 = 90;
 const MINIMUM_RELATIVE_SNAPSHOT_PERCENT: u128 = 20;
 pub const HISTORY_TARGET_DAYS: u16 = 90;
@@ -49,7 +52,7 @@ const HISTORY_FETCH_ATTEMPTS: u8 = 3;
 pub const DEFAULT_KEEP_COPIES: u32 = 1;
 pub const DEFAULT_REWARD_OVERLAY_SCALE_PERCENT: u16 = 100;
 pub const DEFAULT_REWARD_OVERLAY_OFFSET_PERCENT: i16 = 0;
-const CURRENT_GAME_METADATA_SCHEMA_VERSION: u32 = 4;
+const CURRENT_GAME_METADATA_SCHEMA_VERSION: u32 = 6;
 const CURRENT_CATALOG_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -154,6 +157,11 @@ pub struct GameMetadataService {
 
 pub struct InsightsService;
 
+pub struct ResourceConverterService {
+    provider: WarframeWorldstateProvider,
+    cache: tokio::sync::Mutex<Option<(Instant, DailyMarketState)>>,
+}
+
 pub struct AccountService {
     client: WfmAccountClient,
     credentials: Arc<dyn CredentialStore>,
@@ -255,6 +263,114 @@ pub struct InsightsView {
     pub sets: Vec<SetInsightRow>,
     pub relics: Vec<RelicInsightRow>,
     pub ducats: Vec<DucatInsightRow>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResourceSource {
+    Syndicate,
+    Nightwave,
+    VoidTrader,
+    SteelPath,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResourceCurrency {
+    Standing,
+    NightwaveCred,
+    Ducat,
+    SteelEssence,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResourceRouteStatus {
+    Ready,
+    Conditional,
+    Waiting,
+    Unavailable,
+    NeedsData,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceConversionAction {
+    pub vendor_name: String,
+    pub currency: ResourceCurrency,
+    pub balance: u64,
+    pub cost: u64,
+    pub item_slug: String,
+    pub item_name: String,
+    pub image_url: Option<String>,
+    pub quantity: u32,
+    pub unit_price: f64,
+    pub estimated_platinum: f64,
+    pub included_in_total: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceConversionRoute {
+    pub source: ResourceSource,
+    pub status: ResourceRouteStatus,
+    pub reason: String,
+    pub actions: Vec<ResourceConversionAction>,
+    pub available_at: Option<chrono::DateTime<Utc>>,
+    pub available_until: Option<chrono::DateTime<Utc>>,
+    pub location: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArcaneDecisionKind {
+    Sell,
+    Dissolve,
+    Hold,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArcaneConversionDecision {
+    pub decision: ArcaneDecisionKind,
+    pub slug: String,
+    pub display_name: String,
+    pub image_url: Option<String>,
+    pub rank: u16,
+    pub quantity: u32,
+    pub market_price_each: Option<f64>,
+    pub vosfor_each: u32,
+    pub vosfor_total: u64,
+    pub equivalent_platinum_each: f64,
+    pub estimated_platinum: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArcaneConversionSummary {
+    pub available: bool,
+    pub reason: String,
+    pub best_pack_name: Option<String>,
+    pub pack_expected_platinum: Option<f64>,
+    pub price_coverage_percent: f64,
+    pub sell: Vec<ArcaneConversionDecision>,
+    pub dissolve: Vec<ArcaneConversionDecision>,
+    pub hold: Vec<ArcaneConversionDecision>,
+    pub direct_sale_platinum: f64,
+    pub dissolution_expected_platinum: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceConverterView {
+    pub fetched_at: chrono::DateTime<Utc>,
+    pub inventory_observed_at: chrono::DateTime<Utc>,
+    pub market_source_date: Option<NaiveDate>,
+    pub confirmed_platinum: f64,
+    pub expected_vosfor_platinum: f64,
+    pub routes: Vec<ResourceConversionRoute>,
+    pub arcanes: ArcaneConversionSummary,
+    pub unavailable_sources: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1169,6 +1285,1135 @@ impl InsightsService {
             ducats,
         }))
     }
+}
+
+const RESOURCE_WORLDSTATE_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
+const SYNDICATE_MOD_COST: u64 = 25_000;
+const VOSFOR_PACK_COST: f64 = 200.0;
+const CONVERTER_PRICE_MARGIN: f64 = 0.10;
+
+impl ResourceConverterService {
+    /// Создаёт сервис конвертации валют с коротким кэшем публичного worldstate.
+    ///
+    /// # Errors
+    ///
+    /// Возвращает [`CoreError`], если сетевой провайдер не удалось инициализировать.
+    pub fn production() -> Result<Self, CoreError> {
+        Ok(Self {
+            provider: WarframeWorldstateProvider::production()?,
+            cache: tokio::sync::Mutex::new(None),
+        })
+    }
+
+    /// Сопоставляет текущий read-only инвентарь, продавцов и надёжные рыночные цены.
+    ///
+    /// # Errors
+    ///
+    /// Возвращает [`CoreError`] при недоступной БД, повреждённом LKG или ошибке worldstate.
+    pub async fn view(
+        &self,
+        database: &Mutex<Database>,
+        settings: &AppSettings,
+    ) -> Result<Option<ResourceConverterView>, CoreError> {
+        let (metadata, inventory, catalog, market_source_date, nightwave_vendor) = {
+            let database = lock_database(database)?;
+            let Some(metadata) = database.load_current_game_metadata()? else {
+                return Ok(None);
+            };
+            let Some(inventory) = database.current_inventory_snapshot()? else {
+                return Ok(None);
+            };
+            let Some(catalog) = database.load_current_catalog()? else {
+                return Ok(None);
+            };
+            let market_source_date = database
+                .current_market_snapshot()?
+                .map(|row| row.source_date);
+            let nightwave_vendor =
+                database.get_setting::<NightwaveVendorSnapshot>(NIGHTWAVE_VENDOR_CACHE_KEY)?;
+            (
+                metadata,
+                inventory,
+                catalog,
+                market_source_date,
+                nightwave_vendor,
+            )
+        };
+        let daily = self.daily_state().await?;
+        let context = ResourceConverterBuildContext {
+            metadata: &metadata,
+            inventory: &inventory,
+            catalog: &catalog,
+            daily: &daily,
+            nightwave_vendor: nightwave_vendor.as_ref(),
+            market_source_date,
+            now: Utc::now(),
+        };
+        build_resource_converter_view(database, settings, &context).map(Some)
+    }
+
+    /// Сохраняет уже проверенный read-only сканером ассортимент Норы.
+    ///
+    /// # Errors
+    ///
+    /// Возвращает [`CoreError`] при недоступной БД.
+    pub fn cache_nightwave_vendor(
+        database: &Mutex<Database>,
+        snapshot: &NightwaveVendorSnapshot,
+    ) -> Result<(), CoreError> {
+        lock_database(database)?.set_setting(NIGHTWAVE_VENDOR_CACHE_KEY, snapshot)?;
+        Ok(())
+    }
+
+    async fn daily_state(&self) -> Result<DailyMarketState, CoreError> {
+        let mut cache = self.cache.lock().await;
+        if let Some((stored_at, state)) = cache.as_ref()
+            && stored_at.elapsed() <= RESOURCE_WORLDSTATE_CACHE_TTL
+        {
+            return Ok(state.clone());
+        }
+        let state = self.provider.fetch().await?;
+        *cache = Some((Instant::now(), state.clone()));
+        Ok(state)
+    }
+}
+
+fn build_resource_converter_view(
+    database: &Mutex<Database>,
+    settings: &AppSettings,
+    context: &ResourceConverterBuildContext<'_>,
+) -> Result<ResourceConverterView, CoreError> {
+    let catalog_by_ref: HashMap<&str, &CatalogItem> = context
+        .catalog
+        .items
+        .iter()
+        .filter_map(|item| item.game_ref.as_deref().map(|game_ref| (game_ref, item)))
+        .collect();
+    let routes = vec![
+        build_syndicate_route(database, settings, context.metadata, context.inventory)?,
+        build_nightwave_route(database, settings, context)?,
+        build_void_trader_route(
+            database,
+            settings,
+            context.inventory,
+            context.catalog,
+            context.daily,
+            context.now,
+        )?,
+        build_steel_path_route(
+            database,
+            settings,
+            context.inventory,
+            context.catalog,
+            context.daily,
+            context.now,
+        )?,
+    ];
+    let arcanes = build_arcane_conversion(
+        database,
+        settings,
+        context.metadata,
+        context.inventory,
+        &catalog_by_ref,
+    )?;
+    let route_platinum = routes
+        .iter()
+        .flat_map(|route| &route.actions)
+        .filter(|action| action.included_in_total)
+        .map(|action| action.estimated_platinum)
+        .sum::<f64>();
+    Ok(ResourceConverterView {
+        fetched_at: context.daily.fetched_at,
+        inventory_observed_at: context.inventory.metadata.observed_at,
+        market_source_date: context.market_source_date,
+        confirmed_platinum: route_platinum + arcanes.direct_sale_platinum,
+        expected_vosfor_platinum: arcanes.dissolution_expected_platinum,
+        routes,
+        arcanes,
+        unavailable_sources: context.daily.unavailable_sources.clone(),
+    })
+}
+
+struct ResourceConverterBuildContext<'a> {
+    metadata: &'a GameMetadataSnapshot,
+    inventory: &'a ResolvedInventorySnapshot,
+    catalog: &'a ItemCatalog,
+    daily: &'a DailyMarketState,
+    nightwave_vendor: Option<&'a NightwaveVendorSnapshot>,
+    market_source_date: Option<NaiveDate>,
+    now: chrono::DateTime<Utc>,
+}
+
+fn build_syndicate_route(
+    database: &Mutex<Database>,
+    settings: &AppSettings,
+    metadata: &GameMetadataSnapshot,
+    inventory: &ResolvedInventorySnapshot,
+) -> Result<ResourceConversionRoute, CoreError> {
+    if inventory.syndicates.is_empty() {
+        return Ok(empty_resource_route(
+            ResourceSource::Syndicate,
+            ResourceRouteStatus::NeedsData,
+            "refresh_inventory",
+        ));
+    }
+    if metadata.syndicate_offers.is_empty() {
+        return Ok(empty_resource_route(
+            ResourceSource::Syndicate,
+            ResourceRouteStatus::NeedsData,
+            "refresh_item_data",
+        ));
+    }
+    let mut actions = Vec::new();
+    for standing in &inventory.syndicates {
+        let Some(syndicate) = syndicate_from_affiliation(standing) else {
+            continue;
+        };
+        let Ok(balance) = u64::try_from(standing.standing.max(0)) else {
+            continue;
+        };
+        if balance < SYNDICATE_MOD_COST {
+            continue;
+        }
+        let quantity = u32::try_from(balance / SYNDICATE_MOD_COST).unwrap_or(u32::MAX);
+        let mut best: Option<ResourceConversionAction> = None;
+        for offer in metadata.syndicate_offers.iter().filter(|offer| {
+            offer.syndicate == syndicate
+                && syndicate_offer_accessible(standing, offer.required_title.as_str())
+        }) {
+            let Some(unit_price) = converter_price(
+                database,
+                &offer.slug,
+                settings.platform,
+                Some(0),
+                MarketItemKind::Standard,
+            )?
+            else {
+                continue;
+            };
+            let action = ResourceConversionAction {
+                vendor_name: syndicate_name_ru(syndicate).to_owned(),
+                currency: ResourceCurrency::Standing,
+                balance,
+                cost: u64::from(offer.standing_cost),
+                item_slug: offer.slug.clone(),
+                item_name: localized_name(
+                    offer.display_name_ru.as_deref(),
+                    &offer.display_name_en,
+                    settings.language,
+                ),
+                image_url: offer.image_url.clone(),
+                quantity,
+                unit_price,
+                estimated_platinum: unit_price * f64::from(quantity),
+                included_in_total: true,
+            };
+            if best
+                .as_ref()
+                .is_none_or(|current| action.estimated_platinum > current.estimated_platinum)
+            {
+                best = Some(action);
+            }
+        }
+        if let Some(best) = best {
+            actions.push(best);
+        }
+    }
+    actions.sort_by(|left, right| right.estimated_platinum.total_cmp(&left.estimated_platinum));
+    Ok(ResourceConversionRoute {
+        source: ResourceSource::Syndicate,
+        status: if actions.is_empty() {
+            ResourceRouteStatus::Unavailable
+        } else {
+            ResourceRouteStatus::Ready
+        },
+        reason: if actions.is_empty() {
+            "no_accessible_priced_mod".to_owned()
+        } else {
+            "confirmed".to_owned()
+        },
+        actions,
+        available_at: None,
+        available_until: None,
+        location: None,
+    })
+}
+
+fn build_nightwave_route(
+    database: &Mutex<Database>,
+    settings: &AppSettings,
+    context: &ResourceConverterBuildContext<'_>,
+) -> Result<ResourceConversionRoute, CoreError> {
+    let Some(nightwave) = context.daily.nightwave.as_ref() else {
+        return Ok(empty_resource_route(
+            ResourceSource::Nightwave,
+            ResourceRouteStatus::NeedsData,
+            "worldstate_unavailable",
+        ));
+    };
+    if context.now < nightwave.activation || context.now > nightwave.expiry {
+        return Ok(ResourceConversionRoute {
+            source: ResourceSource::Nightwave,
+            status: ResourceRouteStatus::Waiting,
+            reason: "season_inactive".to_owned(),
+            actions: Vec::new(),
+            available_at: Some(nightwave.activation),
+            available_until: Some(nightwave.expiry),
+            location: None,
+        });
+    }
+    let Some(currency_ref) = nightwave_currency_ref(&nightwave.tag) else {
+        return Ok(empty_resource_route(
+            ResourceSource::Nightwave,
+            ResourceRouteStatus::NeedsData,
+            "currency_not_resolved",
+        ));
+    };
+    let balance = inventory_quantity(context.inventory, &currency_ref);
+    if balance == 0 {
+        return Ok(empty_resource_route(
+            ResourceSource::Nightwave,
+            ResourceRouteStatus::Unavailable,
+            "no_currency",
+        ));
+    }
+
+    let exact_vendor = context.nightwave_vendor.filter(|snapshot| {
+        snapshot.expires_at > context.now
+            && compact_nightwave_tag(&snapshot.season_tag) == compact_nightwave_tag(&nightwave.tag)
+    });
+    if let Some(vendor) = exact_vendor {
+        return build_confirmed_nightwave_route(
+            database,
+            settings,
+            context.catalog,
+            vendor,
+            balance,
+        );
+    }
+    build_unconfirmed_nightwave_route(
+        database,
+        settings,
+        context.metadata,
+        balance,
+        nightwave.activation,
+        nightwave.expiry,
+    )
+}
+
+fn build_confirmed_nightwave_route(
+    database: &Mutex<Database>,
+    settings: &AppSettings,
+    catalog: &ItemCatalog,
+    vendor: &NightwaveVendorSnapshot,
+    balance: u64,
+) -> Result<ResourceConversionRoute, CoreError> {
+    let catalog_by_ref: HashMap<&str, &CatalogItem> = catalog
+        .items
+        .iter()
+        .filter_map(|item| item.game_ref.as_deref().map(|game_ref| (game_ref, item)))
+        .collect();
+    let mut best: Option<ResourceConversionAction> = None;
+    for offer in &vendor.offers {
+        let cost = u64::from(offer.cred_cost);
+        let Some(item) = catalog_by_ref.get(offer.game_ref.as_str()).copied() else {
+            continue;
+        };
+        if cost == 0 || balance < cost {
+            continue;
+        }
+        let Some(unit_price) = converter_price(
+            database,
+            &item.slug,
+            settings.platform,
+            Some(0),
+            MarketItemKind::Standard,
+        )?
+        else {
+            continue;
+        };
+        let quantity = u32::try_from(balance / cost).unwrap_or(u32::MAX);
+        let action = ResourceConversionAction {
+            vendor_name: "Нора Найт".to_owned(),
+            currency: ResourceCurrency::NightwaveCred,
+            balance,
+            cost,
+            item_slug: item.slug.clone(),
+            item_name: localized_name(
+                item.display_name_ru.as_deref(),
+                &item.display_name_en,
+                settings.language,
+            ),
+            image_url: catalog_item_image(item, settings.language),
+            quantity,
+            unit_price,
+            estimated_platinum: unit_price * f64::from(quantity),
+            included_in_total: true,
+        };
+        if best
+            .as_ref()
+            .is_none_or(|current| action.estimated_platinum > current.estimated_platinum)
+        {
+            best = Some(action);
+        }
+    }
+    Ok(ResourceConversionRoute {
+        source: ResourceSource::Nightwave,
+        status: if best.is_some() {
+            ResourceRouteStatus::Ready
+        } else {
+            ResourceRouteStatus::Unavailable
+        },
+        reason: if best.is_some() {
+            "nightwave_stock_confirmed".to_owned()
+        } else {
+            "no_priced_offer".to_owned()
+        },
+        actions: best.into_iter().collect(),
+        available_at: None,
+        available_until: Some(vendor.expires_at),
+        location: None,
+    })
+}
+
+fn build_unconfirmed_nightwave_route(
+    database: &Mutex<Database>,
+    settings: &AppSettings,
+    metadata: &GameMetadataSnapshot,
+    balance: u64,
+    activation: chrono::DateTime<Utc>,
+    expiry: chrono::DateTime<Utc>,
+) -> Result<ResourceConversionRoute, CoreError> {
+    let mut best: Option<ResourceConversionAction> = None;
+    for offer in &metadata.nightwave_offers {
+        let cost = u64::from(offer.cred_cost);
+        if cost == 0 || balance < cost {
+            continue;
+        }
+        let Some(unit_price) = converter_price(
+            database,
+            &offer.slug,
+            settings.platform,
+            Some(0),
+            MarketItemKind::Standard,
+        )?
+        else {
+            continue;
+        };
+        let quantity = u32::try_from(balance / cost).unwrap_or(u32::MAX);
+        let action = ResourceConversionAction {
+            vendor_name: "Нора Найт".to_owned(),
+            currency: ResourceCurrency::NightwaveCred,
+            balance,
+            cost,
+            item_slug: offer.slug.clone(),
+            item_name: localized_name(
+                offer.display_name_ru.as_deref(),
+                &offer.display_name_en,
+                settings.language,
+            ),
+            image_url: offer.image_url.clone(),
+            quantity,
+            unit_price,
+            estimated_platinum: unit_price * f64::from(quantity),
+            included_in_total: false,
+        };
+        if best
+            .as_ref()
+            .is_none_or(|current| action.estimated_platinum > current.estimated_platinum)
+        {
+            best = Some(action);
+        }
+    }
+    Ok(ResourceConversionRoute {
+        source: ResourceSource::Nightwave,
+        status: if best.is_some() {
+            ResourceRouteStatus::Conditional
+        } else {
+            ResourceRouteStatus::Unavailable
+        },
+        reason: if best.is_some() {
+            "refresh_nightwave_stock".to_owned()
+        } else {
+            "no_priced_offer".to_owned()
+        },
+        actions: best.into_iter().collect(),
+        available_at: Some(activation),
+        available_until: Some(expiry),
+        location: None,
+    })
+}
+
+fn compact_nightwave_tag(tag: &str) -> String {
+    tag.chars()
+        .filter(|character| !character.is_whitespace())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+fn build_void_trader_route(
+    database: &Mutex<Database>,
+    settings: &AppSettings,
+    inventory: &ResolvedInventorySnapshot,
+    catalog: &ItemCatalog,
+    daily: &DailyMarketState,
+    now: chrono::DateTime<Utc>,
+) -> Result<ResourceConversionRoute, CoreError> {
+    let Some(trader) = daily.void_trader.as_ref() else {
+        return Ok(empty_resource_route(
+            ResourceSource::VoidTrader,
+            ResourceRouteStatus::NeedsData,
+            "worldstate_unavailable",
+        ));
+    };
+    if now < trader.activation {
+        return Ok(ResourceConversionRoute {
+            source: ResourceSource::VoidTrader,
+            status: ResourceRouteStatus::Waiting,
+            reason: "trader_not_arrived".to_owned(),
+            actions: Vec::new(),
+            available_at: Some(trader.activation),
+            available_until: Some(trader.expiry),
+            location: Some(trader.location.clone()),
+        });
+    }
+    if now > trader.expiry {
+        return Ok(empty_resource_route(
+            ResourceSource::VoidTrader,
+            ResourceRouteStatus::Waiting,
+            "trader_left",
+        ));
+    }
+    let ducats = inventory_quantity(inventory, "/Lotus/Types/Items/MiscItems/PrimeBucks");
+    let Some(credits) = inventory.credits else {
+        return Ok(empty_resource_route(
+            ResourceSource::VoidTrader,
+            ResourceRouteStatus::NeedsData,
+            "refresh_inventory_for_credits",
+        ));
+    };
+    let mut best: Option<ResourceConversionAction> = None;
+    for offered in &trader.inventory {
+        if offered.ducats == 0 || offered.credits == 0 {
+            continue;
+        }
+        let Some(item) = catalog_item_by_name(catalog, &offered.name) else {
+            continue;
+        };
+        let quantity_by_ducats = ducats / u64::from(offered.ducats);
+        let quantity_by_credits = credits / offered.credits;
+        let quantity =
+            u32::try_from(quantity_by_ducats.min(quantity_by_credits)).unwrap_or(u32::MAX);
+        if quantity == 0 {
+            continue;
+        }
+        let rank = item.max_rank.map(|_| 0);
+        let Some(unit_price) = converter_price(
+            database,
+            &item.slug,
+            settings.platform,
+            rank,
+            MarketItemKind::Standard,
+        )?
+        else {
+            continue;
+        };
+        let action = ResourceConversionAction {
+            vendor_name: "Баро Ки’Тиир".to_owned(),
+            currency: ResourceCurrency::Ducat,
+            balance: ducats,
+            cost: u64::from(offered.ducats),
+            item_slug: item.slug.clone(),
+            item_name: catalog_name(item, settings.language),
+            image_url: catalog_item_image(item, settings.language),
+            quantity,
+            unit_price,
+            estimated_platinum: unit_price * f64::from(quantity),
+            included_in_total: true,
+        };
+        if best
+            .as_ref()
+            .is_none_or(|current| action.estimated_platinum > current.estimated_platinum)
+        {
+            best = Some(action);
+        }
+    }
+    Ok(ResourceConversionRoute {
+        source: ResourceSource::VoidTrader,
+        status: if best.is_some() {
+            ResourceRouteStatus::Ready
+        } else {
+            ResourceRouteStatus::Unavailable
+        },
+        reason: if best.is_some() {
+            "confirmed".to_owned()
+        } else if trader.inventory.is_empty() {
+            "inventory_not_published".to_owned()
+        } else {
+            "no_affordable_priced_offer".to_owned()
+        },
+        actions: best.into_iter().collect(),
+        available_at: Some(trader.activation),
+        available_until: Some(trader.expiry),
+        location: Some(trader.location.clone()),
+    })
+}
+
+fn build_steel_path_route(
+    database: &Mutex<Database>,
+    settings: &AppSettings,
+    inventory: &ResolvedInventorySnapshot,
+    catalog: &ItemCatalog,
+    daily: &DailyMarketState,
+    now: chrono::DateTime<Utc>,
+) -> Result<ResourceConversionRoute, CoreError> {
+    let Some(steel_path) = daily.steel_path.as_ref() else {
+        return Ok(empty_resource_route(
+            ResourceSource::SteelPath,
+            ResourceRouteStatus::NeedsData,
+            "worldstate_unavailable",
+        ));
+    };
+    if now < steel_path.activation || now > steel_path.expiry {
+        return Ok(ResourceConversionRoute {
+            source: ResourceSource::SteelPath,
+            status: ResourceRouteStatus::Waiting,
+            reason: "rotation_inactive".to_owned(),
+            actions: Vec::new(),
+            available_at: Some(steel_path.activation),
+            available_until: Some(steel_path.expiry),
+            location: None,
+        });
+    }
+    let balance = inventory_quantity(inventory, "/Lotus/Types/Items/MiscItems/SteelEssence");
+    let reward = &steel_path.current_reward;
+    let Some(item) = catalog_item_by_name(catalog, &reward.name) else {
+        return Ok(ResourceConversionRoute {
+            source: ResourceSource::SteelPath,
+            status: ResourceRouteStatus::Unavailable,
+            reason: "reward_not_tradeable".to_owned(),
+            actions: Vec::new(),
+            available_at: Some(steel_path.activation),
+            available_until: Some(steel_path.expiry),
+            location: None,
+        });
+    };
+    if reward.cost == 0 || balance < u64::from(reward.cost) {
+        return Ok(ResourceConversionRoute {
+            source: ResourceSource::SteelPath,
+            status: ResourceRouteStatus::Unavailable,
+            reason: "insufficient_balance".to_owned(),
+            actions: Vec::new(),
+            available_at: Some(steel_path.activation),
+            available_until: Some(steel_path.expiry),
+            location: None,
+        });
+    }
+    let item_kind = if item.tags.iter().any(|tag| tag == "riven") {
+        MarketItemKind::Riven
+    } else {
+        MarketItemKind::Standard
+    };
+    if item_kind == MarketItemKind::Riven {
+        return Ok(ResourceConversionRoute {
+            source: ResourceSource::SteelPath,
+            status: ResourceRouteStatus::Unavailable,
+            reason: "reward_uses_auction_price".to_owned(),
+            actions: Vec::new(),
+            available_at: Some(steel_path.activation),
+            available_until: Some(steel_path.expiry),
+            location: None,
+        });
+    }
+    let rank = item.max_rank.map(|_| 0);
+    let Some(unit_price) =
+        converter_price(database, &item.slug, settings.platform, rank, item_kind)?
+    else {
+        return Ok(ResourceConversionRoute {
+            source: ResourceSource::SteelPath,
+            status: ResourceRouteStatus::Unavailable,
+            reason: "no_reliable_price".to_owned(),
+            actions: Vec::new(),
+            available_at: Some(steel_path.activation),
+            available_until: Some(steel_path.expiry),
+            location: None,
+        });
+    };
+    let quantity = u32::try_from(balance / u64::from(reward.cost)).unwrap_or(u32::MAX);
+    Ok(ResourceConversionRoute {
+        source: ResourceSource::SteelPath,
+        status: ResourceRouteStatus::Ready,
+        reason: "confirmed".to_owned(),
+        actions: vec![ResourceConversionAction {
+            vendor_name: "Тешин".to_owned(),
+            currency: ResourceCurrency::SteelEssence,
+            balance,
+            cost: u64::from(reward.cost),
+            item_slug: item.slug.clone(),
+            item_name: catalog_name(item, settings.language),
+            image_url: catalog_item_image(item, settings.language),
+            quantity,
+            unit_price,
+            estimated_platinum: unit_price * f64::from(quantity),
+            included_in_total: true,
+        }],
+        available_at: Some(steel_path.activation),
+        available_until: Some(steel_path.expiry),
+        location: None,
+    })
+}
+
+fn build_arcane_conversion(
+    database: &Mutex<Database>,
+    settings: &AppSettings,
+    metadata: &GameMetadataSnapshot,
+    inventory: &ResolvedInventorySnapshot,
+    catalog_by_ref: &HashMap<&str, &CatalogItem>,
+) -> Result<ArcaneConversionSummary, CoreError> {
+    if metadata.arcane_dissolutions.is_empty() || metadata.arcane_packs.is_empty() {
+        return Ok(empty_arcane_summary("refresh_item_data"));
+    }
+    let Some((best_pack_name, pack_expected_platinum, coverage)) =
+        best_arcane_pack(database, settings, &metadata.arcane_packs, catalog_by_ref)?
+    else {
+        return Ok(empty_arcane_summary("pack_prices_missing"));
+    };
+    let definitions: HashMap<&str, _> = metadata
+        .arcane_dissolutions
+        .iter()
+        .map(|definition| (definition.game_ref.as_str(), definition))
+        .collect();
+    let mut decisions = ArcaneDecisionBuckets::default();
+    for item in &inventory.items {
+        let Some(definition) = definitions.get(item.canonical_game_id.as_str()).copied() else {
+            continue;
+        };
+        let rank = item.rank.unwrap_or(0);
+        let vosfor_each = definition
+            .vosfor
+            .saturating_mul(arcane_rank_copy_count(rank));
+        let equivalent_each = pack_expected_platinum * f64::from(vosfor_each) / VOSFOR_PACK_COST;
+        let market_price = converter_price(
+            database,
+            &definition.slug,
+            settings.platform,
+            Some(rank),
+            MarketItemKind::Standard,
+        )?;
+        let input = ArcaneDecisionInput {
+            definition,
+            display_name: localized_name(
+                definition.display_name_ru.as_deref(),
+                &definition.display_name_en,
+                settings.language,
+            ),
+            rank,
+            market_price_each: market_price,
+            vosfor_each,
+            equivalent_platinum_each: equivalent_each,
+        };
+        append_arcane_decisions(item, inventory.keep_copies, &input, &mut decisions);
+    }
+    for rows in [
+        &mut decisions.sell,
+        &mut decisions.dissolve,
+        &mut decisions.hold,
+    ] {
+        rows.sort_by(|left, right| right.estimated_platinum.total_cmp(&left.estimated_platinum));
+    }
+    let direct_sale_platinum = decisions
+        .sell
+        .iter()
+        .map(|row| row.estimated_platinum)
+        .sum();
+    let dissolution_expected_platinum = decisions
+        .dissolve
+        .iter()
+        .map(|row| row.estimated_platinum)
+        .sum();
+    Ok(ArcaneConversionSummary {
+        available: true,
+        reason: "calculated".to_owned(),
+        best_pack_name: Some(best_pack_name),
+        pack_expected_platinum: Some(pack_expected_platinum),
+        price_coverage_percent: coverage,
+        sell: decisions.sell,
+        dissolve: decisions.dissolve,
+        hold: decisions.hold,
+        direct_sale_platinum,
+        dissolution_expected_platinum,
+    })
+}
+
+fn best_arcane_pack(
+    database: &Mutex<Database>,
+    settings: &AppSettings,
+    packs: &[ArcanePackDefinition],
+    catalog_by_ref: &HashMap<&str, &CatalogItem>,
+) -> Result<Option<(String, f64, f64)>, CoreError> {
+    let mut prices = HashMap::<String, Option<f64>>::new();
+    let mut best: Option<(String, f64, f64)> = None;
+    for pack in packs {
+        let mut pack_expected = 0.0;
+        let mut pack_coverage = 0.0;
+        for roll in &pack.rolls {
+            let mut roll_expected = 0.0;
+            let mut roll_coverage = 0.0;
+            for (rarity, weight) in roll {
+                if *weight <= 0.0 {
+                    continue;
+                }
+                let components = pack
+                    .components
+                    .iter()
+                    .filter(|component| component.rarity == *rarity)
+                    .collect::<Vec<_>>();
+                if components.is_empty() {
+                    continue;
+                }
+                let mut priced_sum = 0.0;
+                let mut priced_count = 0usize;
+                for component in &components {
+                    let price = if let Some(price) = prices.get(&component.game_ref) {
+                        *price
+                    } else {
+                        let price =
+                            if let Some(item) = catalog_by_ref.get(component.game_ref.as_str()) {
+                                converter_price(
+                                    database,
+                                    &item.slug,
+                                    settings.platform,
+                                    Some(0),
+                                    MarketItemKind::Standard,
+                                )?
+                            } else {
+                                None
+                            };
+                        prices.insert(component.game_ref.clone(), price);
+                        price
+                    };
+                    if let Some(price) = price {
+                        priced_sum += price;
+                        priced_count += 1;
+                    }
+                }
+                let count = bounded_count(components.len());
+                roll_expected += weight * (priced_sum / count);
+                roll_coverage += weight * (bounded_count(priced_count) / count);
+            }
+            pack_expected += roll_expected;
+            pack_coverage += roll_coverage;
+        }
+        let coverage = if pack.rolls.is_empty() {
+            0.0
+        } else {
+            100.0 * pack_coverage / bounded_count(pack.rolls.len())
+        };
+        if coverage < 80.0 {
+            continue;
+        }
+        if best
+            .as_ref()
+            .is_none_or(|(_, expected, _)| pack_expected > *expected)
+        {
+            best = Some((pack.display_name_ru.clone(), pack_expected, coverage));
+        }
+    }
+    Ok(best)
+}
+
+#[derive(Default)]
+struct ArcaneDecisionBuckets {
+    sell: Vec<ArcaneConversionDecision>,
+    dissolve: Vec<ArcaneConversionDecision>,
+    hold: Vec<ArcaneConversionDecision>,
+}
+
+struct ArcaneDecisionInput<'a> {
+    definition: &'a platscope_domain::ArcaneDissolutionDefinition,
+    display_name: String,
+    rank: u16,
+    market_price_each: Option<f64>,
+    vosfor_each: u32,
+    equivalent_platinum_each: f64,
+}
+
+fn append_arcane_decisions(
+    item: &ResolvedInventoryItem,
+    keep_copies: u32,
+    input: &ArcaneDecisionInput<'_>,
+    decisions: &mut ArcaneDecisionBuckets,
+) {
+    let spare = item
+        .owned_quantity
+        .saturating_sub(keep_copies.min(item.owned_quantity));
+    if spare == 0 {
+        return;
+    }
+    if input.market_price_each.is_some_and(|price| {
+        price >= input.equivalent_platinum_each * (1.0 + CONVERTER_PRICE_MARGIN)
+    }) {
+        let sell_quantity = item.sellable_quantity.min(spare);
+        if sell_quantity > 0 {
+            decisions.sell.push(arcane_decision(
+                ArcaneDecisionKind::Sell,
+                input,
+                sell_quantity,
+            ));
+        }
+        let dissolve_quantity = spare.saturating_sub(sell_quantity);
+        if dissolve_quantity > 0 {
+            decisions.dissolve.push(arcane_decision(
+                ArcaneDecisionKind::Dissolve,
+                input,
+                dissolve_quantity,
+            ));
+        }
+    } else if input.market_price_each.is_none_or(|price| {
+        input.equivalent_platinum_each >= price * (1.0 + CONVERTER_PRICE_MARGIN)
+    }) {
+        decisions
+            .dissolve
+            .push(arcane_decision(ArcaneDecisionKind::Dissolve, input, spare));
+    } else {
+        decisions
+            .hold
+            .push(arcane_decision(ArcaneDecisionKind::Hold, input, spare));
+    }
+}
+
+fn arcane_decision(
+    decision: ArcaneDecisionKind,
+    input: &ArcaneDecisionInput<'_>,
+    quantity: u32,
+) -> ArcaneConversionDecision {
+    let estimated_each = if decision == ArcaneDecisionKind::Sell {
+        input.market_price_each.unwrap_or_default()
+    } else {
+        input.equivalent_platinum_each
+    };
+    ArcaneConversionDecision {
+        decision,
+        slug: input.definition.slug.clone(),
+        display_name: input.display_name.clone(),
+        image_url: input.definition.image_url.clone(),
+        rank: input.rank,
+        quantity,
+        market_price_each: input.market_price_each,
+        vosfor_each: input.vosfor_each,
+        vosfor_total: u64::from(input.vosfor_each) * u64::from(quantity),
+        equivalent_platinum_each: input.equivalent_platinum_each,
+        estimated_platinum: estimated_each * f64::from(quantity),
+    }
+}
+
+fn bounded_count(value: usize) -> f64 {
+    f64::from(u32::try_from(value).unwrap_or(u32::MAX))
+}
+
+const fn arcane_rank_copy_count(rank: u16) -> u32 {
+    match rank {
+        0 => 1,
+        1 => 3,
+        2 => 6,
+        3 => 10,
+        4 => 15,
+        _ => 21,
+    }
+}
+
+fn empty_arcane_summary(reason: &str) -> ArcaneConversionSummary {
+    ArcaneConversionSummary {
+        available: false,
+        reason: reason.to_owned(),
+        best_pack_name: None,
+        pack_expected_platinum: None,
+        price_coverage_percent: 0.0,
+        sell: Vec::new(),
+        dissolve: Vec::new(),
+        hold: Vec::new(),
+        direct_sale_platinum: 0.0,
+        dissolution_expected_platinum: 0.0,
+    }
+}
+
+fn empty_resource_route(
+    source: ResourceSource,
+    status: ResourceRouteStatus,
+    reason: &str,
+) -> ResourceConversionRoute {
+    ResourceConversionRoute {
+        source,
+        status,
+        reason: reason.to_owned(),
+        actions: Vec::new(),
+        available_at: None,
+        available_until: None,
+        location: None,
+    }
+}
+
+fn converter_price(
+    database: &Mutex<Database>,
+    slug: &str,
+    platform: Platform,
+    rank: Option<u16>,
+    item_kind: MarketItemKind,
+) -> Result<Option<f64>, CoreError> {
+    let key = MarketVariantKey::new(slug, platform, rank, None::<String>).map_err(|error| {
+        CoreError::MetadataData(format!("invalid converter market identity: {error}"))
+    })?;
+    let recommendation = PricingService::price_current_variant(database, &key, item_kind)?;
+    Ok(recommendation.and_then(|recommendation| {
+        let credible = matches!(
+            recommendation.confidence,
+            PriceConfidence::High | PriceConfidence::Medium
+        ) && matches!(
+            recommendation.freshness,
+            PriceFreshness::Fresh | PriceFreshness::Aging
+        );
+        credible.then_some(recommendation.fair_price).flatten()
+    }))
+}
+
+fn inventory_quantity(inventory: &ResolvedInventorySnapshot, game_ref: &str) -> u64 {
+    inventory
+        .items
+        .iter()
+        .filter(|item| item.canonical_game_id == game_ref)
+        .map(|item| u64::from(item.owned_quantity))
+        .sum()
+}
+
+fn syndicate_from_affiliation(standing: &SyndicateStanding) -> Option<&'static str> {
+    let normalized = standing
+        .tag
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .flat_map(char::to_lowercase)
+        .collect::<String>();
+    if normalized.contains("steelmeridian") {
+        Some("Steel Meridian")
+    } else if normalized.contains("arbiters") {
+        Some("Arbiters of Hexis")
+    } else if normalized.contains("cephalonsuda") {
+        Some("Cephalon Suda")
+    } else if normalized.contains("perrin") {
+        Some("The Perrin Sequence")
+    } else if normalized.contains("redveil") {
+        Some("Red Veil")
+    } else if normalized.contains("newloka") {
+        Some("New Loka")
+    } else {
+        None
+    }
+}
+
+fn syndicate_offer_accessible(standing: &SyndicateStanding, required_title: &str) -> bool {
+    let Some(title) = standing.title.as_deref() else {
+        return false;
+    };
+    if title.eq_ignore_ascii_case(required_title) {
+        return true;
+    }
+    let Some(syndicate) = syndicate_from_affiliation(standing) else {
+        return false;
+    };
+    title.eq_ignore_ascii_case(syndicate_max_title(syndicate))
+}
+
+fn syndicate_max_title(syndicate: &str) -> &'static str {
+    match syndicate {
+        "Steel Meridian" => "General",
+        "Arbiters of Hexis" => "Maxim",
+        "Cephalon Suda" => "Genius",
+        "The Perrin Sequence" => "Partner",
+        "Red Veil" => "Exalted",
+        "New Loka" => "Flawless",
+        _ => "",
+    }
+}
+
+fn syndicate_name_ru(syndicate: &str) -> &'static str {
+    match syndicate {
+        "Steel Meridian" => "Стальной Меридиан",
+        "Arbiters of Hexis" => "Арбитры Гексиса",
+        "Cephalon Suda" => "Цефалон Суда",
+        "The Perrin Sequence" => "Последовательность Перрина",
+        "Red Veil" => "Красная Вуаль",
+        "New Loka" => "Новая Лока",
+        _ => "Синдикат",
+    }
+}
+
+fn nightwave_currency_ref(tag: &str) -> Option<String> {
+    let marker = "Intermission";
+    let suffix = tag.split_once(marker)?.1;
+    let digits = suffix
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect::<String>();
+    let number: u8 = digits.parse().ok()?;
+    let word = match number {
+        1 => "One",
+        2 => "Two",
+        3 => "Three",
+        4 => "Four",
+        5 => "Five",
+        6 => "Six",
+        7 => "Seven",
+        8 => "Eight",
+        9 => "Nine",
+        10 => "Ten",
+        11 => "Eleven",
+        12 => "Twelve",
+        13 => "Thirteen",
+        14 => "Fourteen",
+        15 => "Fifteen",
+        16 => "Sixteen",
+        17 => "Seventeen",
+        18 => "Eighteen",
+        19 => "Nineteen",
+        20 => "Twenty",
+        _ => return None,
+    };
+    Some(format!(
+        "/Lotus/Types/Items/MiscItems/NoraIntermission{word}Creds"
+    ))
+}
+
+fn catalog_item_by_name<'a>(catalog: &'a ItemCatalog, name: &str) -> Option<&'a CatalogItem> {
+    let normalized = name.trim();
+    catalog
+        .items
+        .iter()
+        .find(|item| item.display_name_en.eq_ignore_ascii_case(normalized))
+}
+
+fn localized_name(ru: Option<&str>, en: &str, language: Language) -> String {
+    match language {
+        Language::Russian => ru
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or(en)
+            .to_owned(),
+        Language::English => en.to_owned(),
+    }
+}
+
+fn catalog_name(item: &CatalogItem, language: Language) -> String {
+    localized_name(
+        item.display_name_ru.as_deref(),
+        &item.display_name_en,
+        language,
+    )
+}
+
+fn catalog_item_image(item: &CatalogItem, language: Language) -> Option<String> {
+    let thumb = match language {
+        Language::Russian => item.thumb_ru.as_ref().or(item.thumb.as_ref()),
+        Language::English => item.thumb.as_ref(),
+    }?;
+    Some(market_image_url(thumb))
 }
 
 impl AccountService {
@@ -2276,11 +3521,29 @@ fn enrich_inventory_view(
     let component_images = metadata
         .as_ref()
         .map_or_else(HashMap::new, component_image_urls_by_slug);
+    let equipment_names_ru: HashMap<&str, &str> = metadata
+        .as_ref()
+        .filter(|_| language == Language::Russian)
+        .map_or_else(HashMap::new, |snapshot| {
+            snapshot
+                .item_localizations
+                .iter()
+                .map(|item| (item.game_ref.as_str(), item.display_name_ru.as_str()))
+                .collect()
+        });
     let market_source_date = lock_database(database)?
         .current_market_snapshot()?
         .map(|snapshot| snapshot.source_date);
 
     for item in &mut view.items {
+        for placement in &mut item.equipped_placements {
+            let localized = equipment_names_ru
+                .get(placement.equipment_game_id.as_str())
+                .copied()
+                .or_else(|| russian_equipment_name_fallback(&placement.equipment_game_id));
+            placement.equipment_display_name =
+                clean_equipment_display_name(&placement.equipment_display_name, localized);
+        }
         if let Some(key) = item.key.as_ref()
             && let Some((item_id, display_name, thumb, bulk_tradable)) =
                 catalog_by_slug.get(&key.slug)
@@ -2318,6 +3581,61 @@ fn enrich_inventory_view(
         item.has_reliable_price = item.closed_median_48h.is_some();
     }
     Ok(view)
+}
+
+fn clean_equipment_display_name(current: &str, localized: Option<&str>) -> String {
+    let current = current.trim();
+    let (custom, fallback) = current
+        .split_once(" — ")
+        .map_or((None, current), |(custom, base)| {
+            (visible_equipment_custom_name(custom), base.trim())
+        });
+    let base = localized
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .unwrap_or(fallback);
+
+    if let Some(custom) = custom.filter(|custom| !custom.eq_ignore_ascii_case(base)) {
+        return format!("{custom} — {base}");
+    }
+    if current.starts_with("/Lotus/Language/") {
+        if let Some(custom) = visible_equipment_custom_name(current) {
+            return localized
+                .map_or_else(|| custom.to_owned(), |name| format!("{custom} — {name}"));
+        }
+        return localized.unwrap_or("Неизвестный предмет").to_owned();
+    }
+    base.to_owned()
+}
+
+fn visible_equipment_custom_name(value: &str) -> Option<&str> {
+    let value = value.trim();
+    let visible = if value.starts_with("/Lotus/Language/") {
+        value.split_once('|')?.1.trim()
+    } else {
+        value
+    };
+    (!visible.is_empty()).then_some(visible)
+}
+
+fn russian_equipment_name_fallback(game_ref: &str) -> Option<&'static str> {
+    match game_ref {
+        "/Lotus/Powersuits/Operator/AdultOperatorSuitRemaster" => Some("Скиталец"),
+        "/Lotus/Powersuits/Operator/ChildOperatorSuitRemaster" => Some("Оператор"),
+        "/Lotus/Types/Friendly/Pets/BeastWeapons/ChesaPetWeapon" => Some("Чеса кубрау"),
+        "/Lotus/Types/Friendly/Pets/BeastWeapons/HelminthPetWeapon" => Some("Гельминтов инфестоид"),
+        "/Lotus/Types/Friendly/Pets/BeastWeapons/HurasPetWeapon" => Some("Хурас кубрау"),
+        "/Lotus/Types/Friendly/Pets/BeastWeapons/PanzerVulpaphylaPetWeapon" => {
+            Some("Панцирная вульпафила")
+        }
+        "/Lotus/Types/Friendly/Pets/BeastWeapons/SmeetaPetWeapon" => Some("Кават смита"),
+        "/Lotus/Types/Friendly/Pets/BeastWeapons/VenariPetWeapon" => Some("Венари"),
+        "/Lotus/Types/Game/CrewShip/RailJack/DefaultHarness" => Some("Плексус"),
+        "/Lotus/Weapons/Tenno/HackingDevices/TnHackingDevice/TnHackingDeviceWeapon" => {
+            Some("Паразон")
+        }
+        _ => None,
+    }
 }
 
 fn catalog_bulk_tradable(explicit: bool, tags: &[String]) -> bool {
@@ -2975,6 +4293,311 @@ mod tests {
     };
 
     #[test]
+    fn current_nightwave_tag_resolves_exact_currency() {
+        assert_eq!(
+            nightwave_currency_ref("Radio Legion Intermission16 Syndicate").as_deref(),
+            Some("/Lotus/Types/Items/MiscItems/NoraIntermissionSixteenCreds")
+        );
+        assert!(nightwave_currency_ref("unexpected season").is_none());
+    }
+
+    fn nightwave_market_fixture(now: chrono::DateTime<Utc>) -> (Mutex<Database>, ItemCatalog) {
+        let key = MarketVariantKey::new(
+            "corrosive_projection",
+            Platform::Pc,
+            Some(0),
+            None::<String>,
+        )
+        .expect("market key");
+        let catalog = ItemCatalog {
+            metadata: CatalogMetadata {
+                provider: ProviderId::WarframeMarket,
+                fetched_at: now,
+                schema_version: 1,
+                item_count: 1,
+                checksum_sha256: "nightwave-catalog".into(),
+            },
+            items: vec![CatalogItem {
+                item_id: "corrosive-projection-id".into(),
+                slug: key.slug.clone(),
+                display_name_en: "Corrosive Projection".into(),
+                display_name_ru: Some("Коррозийный Выброс".into()),
+                thumb: None,
+                thumb_ru: None,
+                game_ref: Some("/Lotus/Upgrades/Mods/Aura/EnemyArmorReductionAuraMod".into()),
+                bulk_tradable: false,
+                max_rank: Some(5),
+                subtypes: Vec::new(),
+                tags: vec!["mod".into()],
+            }],
+        };
+        let market = NormalizedMarketSnapshot {
+            metadata: SnapshotMetadata {
+                provider: ProviderId::RelicsRun,
+                source_date: now.date_naive(),
+                fetched_at: now,
+                schema_version: 1,
+                item_count: 1,
+                record_count: 1,
+                checksum_sha256: "nightwave-market".into(),
+            },
+            records: vec![MarketRecord {
+                key,
+                external_item_id: "corrosive-projection-id".into(),
+                display_name_en: "Corrosive Projection".into(),
+                observed_at: now,
+                order_type: MarketOrderType::Closed,
+                median: Some(12.0),
+                average: Some(12.0),
+                min_price: Some(10.0),
+                max_price: Some(14.0),
+                volume: 20.0,
+                raw_json: "{}".into(),
+            }],
+        };
+        let database = Mutex::new(Database::open_in_memory().expect("database opens"));
+        {
+            let mut database = database.lock().expect("database lock");
+            database
+                .promote_catalog(&catalog)
+                .expect("catalog promoted");
+            database
+                .promote_market_snapshot(&market)
+                .expect("market promoted");
+        }
+        (database, catalog)
+    }
+
+    fn nightwave_inventory_fixture(now: chrono::DateTime<Utc>) -> ResolvedInventorySnapshot {
+        ResolvedInventorySnapshot {
+            metadata: InventorySnapshotMetadata {
+                source: InventorySource::ReadOnlyScan,
+                observed_at: now,
+                schema_version: 1,
+                item_count: 1,
+                checksum_sha256: "nightwave-inventory".into(),
+            },
+            keep_copies: 0,
+            mod_usage_scanned: false,
+            credits: None,
+            syndicates: Vec::new(),
+            items: vec![ResolvedInventoryItem {
+                canonical_game_id: "/Lotus/Types/Items/MiscItems/NoraIntermissionSixteenCreds"
+                    .into(),
+                display_name_en: None,
+                display_name_ru: None,
+                tags: Vec::new(),
+                key: None,
+                rank: None,
+                subtype: None,
+                owned_quantity: 100,
+                tradeable_quantity: 0,
+                untradeable_quantity: 100,
+                unknown_quantity: 0,
+                leveled_quantity: 0,
+                equipped_quantity: 0,
+                equipped_tradeable_quantity: 0,
+                equipped_placements: Vec::new(),
+                sellable_quantity: 0,
+                resolution: InventoryResolution::UnknownItem,
+            }],
+        }
+    }
+
+    fn empty_game_metadata_fixture(now: chrono::DateTime<Utc>) -> GameMetadataSnapshot {
+        GameMetadataSnapshot {
+            metadata: GameMetadataSnapshotMetadata {
+                source: platscope_domain::GameMetadataSource::WfcdWarframeItems,
+                fetched_at: now,
+                schema_version: 1,
+                set_count: 0,
+                relic_count: 0,
+                prime_part_count: 0,
+                riven_disposition_count: 0,
+                item_definition_count: 0,
+                checksum_sha256: "nightwave-metadata".into(),
+            },
+            prime_sets: Vec::new(),
+            relics: Vec::new(),
+            prime_parts: Vec::new(),
+            riven_dispositions: Vec::new(),
+            item_definitions: Vec::new(),
+            item_localizations: Vec::new(),
+            syndicate_offers: Vec::new(),
+            nightwave_offers: Vec::new(),
+            arcane_dissolutions: Vec::new(),
+            arcane_packs: Vec::new(),
+        }
+    }
+
+    fn nightwave_daily_fixture(now: chrono::DateTime<Utc>) -> DailyMarketState {
+        DailyMarketState {
+            fetched_at: now,
+            void_trader: None,
+            nightwave: Some(platscope_providers::NightwaveState {
+                activation: now - ChronoDuration::days(1),
+                expiry: now + ChronoDuration::days(30),
+                season: 18,
+                tag: "Radio Legion Intermission16 Syndicate".into(),
+            }),
+            steel_path: None,
+            unavailable_sources: Vec::new(),
+        }
+    }
+
+    fn nightwave_vendor_fixture(now: chrono::DateTime<Utc>) -> NightwaveVendorSnapshot {
+        NightwaveVendorSnapshot {
+            observed_at: now,
+            expires_at: now + ChronoDuration::days(1),
+            season_tag: "RadioLegionIntermission16Syndicate".into(),
+            vendor_type:
+                "/Lotus/Types/Game/VendorManifests/Events/RadioLegionIntermission16VendorManifest"
+                    .into(),
+            offers: vec![platscope_domain::NightwaveVendorOffer {
+                game_ref: "/Lotus/Upgrades/Mods/Aura/EnemyArmorReductionAuraMod".into(),
+                cred_cost: 20,
+            }],
+        }
+    }
+
+    #[test]
+    fn confirmed_nightwave_stock_is_included_in_direct_value() {
+        let now = Utc::now();
+        let (database, catalog) = nightwave_market_fixture(now);
+        let inventory = nightwave_inventory_fixture(now);
+        let metadata = empty_game_metadata_fixture(now);
+        let daily = nightwave_daily_fixture(now);
+        let vendor = nightwave_vendor_fixture(now);
+
+        let context = ResourceConverterBuildContext {
+            metadata: &metadata,
+            inventory: &inventory,
+            catalog: &catalog,
+            daily: &daily,
+            nightwave_vendor: Some(&vendor),
+            market_source_date: Some(now.date_naive()),
+            now,
+        };
+        let route = build_nightwave_route(&database, &AppSettings::default(), &context)
+            .expect("route builds");
+
+        assert_eq!(route.status, ResourceRouteStatus::Ready);
+        assert_eq!(route.reason, "nightwave_stock_confirmed");
+        assert_eq!(route.actions[0].quantity, 5);
+        assert!((route.actions[0].estimated_platinum - 60.0).abs() < f64::EPSILON);
+        assert!(route.actions[0].included_in_total);
+    }
+
+    #[test]
+    fn arcane_rank_costs_match_consumed_copy_counts() {
+        assert_eq!(
+            (0..=5).map(arcane_rank_copy_count).collect::<Vec<_>>(),
+            vec![1, 3, 6, 10, 15, 21]
+        );
+    }
+
+    #[test]
+    fn arcane_sale_keeps_reserve_and_dissolves_only_the_remainder() {
+        let definition = platscope_domain::ArcaneDissolutionDefinition {
+            slug: "arcane_test".into(),
+            game_ref: "/Lotus/Test/Arcane".into(),
+            display_name_en: "Test Arcane".into(),
+            display_name_ru: Some("РўРµСЃС‚РѕРІС‹Р№ РјРёСЃС‚РёС„РёРєР°С‚РѕСЂ".into()),
+            image_url: None,
+            vosfor: 20,
+        };
+        let input = ArcaneDecisionInput {
+            definition: &definition,
+            display_name: "РўРµСЃС‚РѕРІС‹Р№ РјРёСЃС‚РёС„РёРєР°С‚РѕСЂ".into(),
+            rank: 0,
+            market_price_each: Some(10.0),
+            vosfor_each: 20,
+            equivalent_platinum_each: 4.0,
+        };
+        let item = ResolvedInventoryItem {
+            canonical_game_id: definition.game_ref.clone(),
+            display_name_en: Some(definition.display_name_en.clone()),
+            display_name_ru: definition.display_name_ru.clone(),
+            tags: vec!["arcane_enhancement".into()],
+            key: None,
+            rank: Some(0),
+            subtype: None,
+            owned_quantity: 5,
+            tradeable_quantity: 2,
+            untradeable_quantity: 3,
+            unknown_quantity: 0,
+            leveled_quantity: 0,
+            equipped_quantity: 0,
+            equipped_tradeable_quantity: 0,
+            equipped_placements: Vec::new(),
+            sellable_quantity: 2,
+            resolution: InventoryResolution::Resolved,
+        };
+        let mut decisions = ArcaneDecisionBuckets::default();
+
+        append_arcane_decisions(&item, 2, &input, &mut decisions);
+
+        assert_eq!(decisions.sell[0].quantity, 2);
+        assert_eq!(decisions.dissolve[0].quantity, 1);
+        assert!(decisions.hold.is_empty());
+    }
+
+    #[test]
+    fn max_rank_syndicate_can_access_lower_rank_offers() {
+        let standing = SyndicateStanding {
+            tag: "SteelMeridianSyndicate".into(),
+            standing: 50_000,
+            title: Some("General".into()),
+        };
+        assert_eq!(
+            syndicate_from_affiliation(&standing),
+            Some("Steel Meridian")
+        );
+        assert!(syndicate_offer_accessible(&standing, "Protector"));
+        assert_eq!(arcane_rank_copy_count(5), 21);
+    }
+
+    #[test]
+    fn equipment_names_use_russian_localization_without_internal_paths() {
+        assert_eq!(
+            clean_equipment_display_name(
+                "/Lotus/Language/Weapons/CrpBEArcaPlasmorName|HILDI ONIA — Crp B E Arca Plasmor",
+                Some("Арка Плазмор Догмат"),
+            ),
+            "HILDI ONIA — Арка Плазмор Догмат"
+        );
+        assert_eq!(
+            clean_equipment_display_name("Скорость — Volt Prime", Some("Вольт Прайм")),
+            "Скорость — Вольт Прайм"
+        );
+        assert_eq!(
+            clean_equipment_display_name("Kuva Nukor", Some("Нюкор Кува")),
+            "Нюкор Кува"
+        );
+    }
+
+    #[test]
+    fn equipment_name_fallback_still_hides_localization_paths() {
+        assert_eq!(
+            clean_equipment_display_name(
+                "/Lotus/Language/Weapons/KuvaNukorName|POKK CRAA — Kuva Nukor",
+                None,
+            ),
+            "POKK CRAA — Kuva Nukor"
+        );
+        assert_eq!(
+            russian_equipment_name_fallback("/Lotus/Types/Game/CrewShip/RailJack/DefaultHarness",),
+            Some("Плексус")
+        );
+        assert_eq!(
+            russian_equipment_name_fallback(
+                "/Lotus/Weapons/Tenno/HackingDevices/TnHackingDevice/TnHackingDeviceWeapon",
+            ),
+            Some("Паразон")
+        );
+    }
+
+    #[test]
     fn closed_median_48h_uses_closed_trade_volume_as_weight() {
         let points = vec![
             MarketHistoryPoint {
@@ -3076,6 +4699,8 @@ mod tests {
             },
             keep_copies: 1,
             mod_usage_scanned: false,
+            credits: None,
+            syndicates: Vec::new(),
             items: vec![ResolvedInventoryItem {
                 canonical_game_id: "/Lotus/Upgrades/Mods/Sentinel/AnimalInstinct".into(),
                 display_name_en: Some("Animal Instinct".into()),
@@ -3184,6 +4809,11 @@ mod tests {
             prime_parts: vec![],
             riven_dispositions: vec![],
             item_definitions: vec![],
+            item_localizations: vec![],
+            syndicate_offers: vec![],
+            nightwave_offers: vec![],
+            arcane_dissolutions: vec![],
+            arcane_packs: vec![],
         }
     }
 
@@ -3232,6 +4862,8 @@ mod tests {
             },
             keep_copies: 1,
             mod_usage_scanned: false,
+            credits: None,
+            syndicates: Vec::new(),
             items: refinements
                 .iter()
                 .map(|(_, suffix, _)| ResolvedInventoryItem {

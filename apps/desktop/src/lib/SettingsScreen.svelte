@@ -79,7 +79,7 @@
       marketData: "Цены и история рынка",
       marketDataBody: "Загружает свежие цены и все недостающие дни 90-дневной истории relics.run. Первое обновление может занять несколько минут.",
       updateMarket: "Обновить цены рынка",
-      updatingMarket: "Загружаем 90 дней…",
+      updatingMarket: "Проверяем цены и историю…",
       itemData: "Данные предметов",
       itemDataBody: "Обновляет каталог предметов, реликвии, дукаты и данные модов разлома.",
       updateItems: "Обновить данные предметов",
@@ -90,6 +90,7 @@
       marketUpdated: (date: string, days: number, target: number) => `Цены рынка обновлены: ${date}. ${Math.min(days, target)} из ${target} дней истории загружены.`,
       historyIncomplete: (days: number, target: number) => `Текущие цены обновлены, но история загружена не полностью: ${Math.min(days, target)} из ${target} дней. Повторите обновление.`,
       itemsUpdated: (date: string) => `Данные предметов обновлены: ${date}.`,
+      itemsNotUpdated: (date: string) => `Обновление не выполнено. Показаны сохранённые данные от ${date}.`,
       marketRefreshError: "Не удалось обновить цены рынка. Предыдущие данные сохранены.",
       historyRefreshError: "Текущие цены обновлены, но не удалось догрузить историю за 90 дней.",
       itemRefreshError: "Не удалось обновить данные предметов. Предыдущие данные сохранены.",
@@ -150,7 +151,7 @@
       marketData: "Market prices and history",
       marketDataBody: "Downloads current prices and every missing day of the 90-day relics.run history. The first update may take several minutes.",
       updateMarket: "Update market prices",
-      updatingMarket: "Loading 90 days…",
+      updatingMarket: "Checking prices and history…",
       itemData: "Item data",
       itemDataBody: "Updates the item catalog, relics, ducats, and Riven data.",
       updateItems: "Update item data",
@@ -161,6 +162,7 @@
       marketUpdated: (date: string, days: number, target: number) => `Market prices updated: ${date}. ${Math.min(days, target)} of ${target} history days loaded.`,
       historyIncomplete: (days: number, target: number) => `Current prices were updated, but history is incomplete: ${Math.min(days, target)} of ${target} days. Run the update again.`,
       itemsUpdated: (date: string) => `Item data updated: ${date}.`,
+      itemsNotUpdated: (date: string) => `The update failed. Saved item data from ${date} is still in use.`,
       marketRefreshError: "Unable to update market prices. Previous data was preserved.",
       historyRefreshError: "Current prices were updated, but the 90-day history could not be downloaded.",
       itemRefreshError: "Unable to update item data. Previous data was preserved.",
@@ -353,6 +355,10 @@
     try {
       const outcome = await invoke<GameMetadataRefreshOutcome>("refresh_game_metadata");
       itemDataDate = outcome.metadata.fetchedAt.slice(0, 10);
+      if (outcome.stale || outcome.usedLkg) {
+        refreshErrorMessage = c.itemsNotUpdated(itemDataDate);
+        return;
+      }
       refreshStatusMessage = c.itemsUpdated(itemDataDate);
     } catch {
       refreshErrorMessage = c.itemRefreshError;

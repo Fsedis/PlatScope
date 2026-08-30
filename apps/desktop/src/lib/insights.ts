@@ -203,6 +203,229 @@ export interface SetRelicSupport {
   expectedUsefulDrops: number;
 }
 
+export interface RelicSetCompletionTarget {
+  setSlug: string;
+  displayName: string;
+  chancePercent: number;
+}
+
+export interface RelicOpeningRecommendation {
+  relicSlug: string;
+  displayName: string;
+  imageUrl?: string | null;
+  totalOwnedQuantity: number;
+  sourceQuantity: number;
+  sourceRefinement: RelicRefinement;
+  recommendedRefinement: RelicRefinement;
+  traceCost: number;
+  expectedPlatinum: number | null;
+  pricedChancePercent: number;
+  completionChancePercent: number;
+  progressChancePercent: number;
+  completionTargets: RelicSetCompletionTarget[];
+  priorityScore: number;
+}
+
+const relicRefinements: RelicRefinement[] = ["intact", "exceptional", "flawless", "radiant"];
+const refinementTraceCost: Record<RelicRefinement, number> = {
+  intact: 0,
+  exceptional: 25,
+  flawless: 50,
+  radiant: 100,
+};
+const rewardChanceByRefinement = {
+  intact: { common: 25.33, uncommon: 11, rare: 2 },
+  exceptional: { common: 23.33, uncommon: 13, rare: 4 },
+  flawless: { common: 20, uncommon: 17, rare: 6 },
+  radiant: { common: 16.67, uncommon: 20, rare: 10 },
+} as const;
+
+type RelicRewardRarity = keyof typeof rewardChanceByRefinement.intact;
+
+interface RelicOpeningOption extends Omit<RelicOpeningRecommendation, "priorityScore"> {
+  economicValue: number;
+  optionScore: number;
+}
+
+/**
+ * Ранжирует только реально имеющиеся реликвии и для каждой выбирает осмысленное
+ * улучшение. Ценность наград остаётся главным сигналом, а шанс закончить сет
+ * добавляет персональный приоритет поверх рыночной цены.
+ */
+export function rankRelicsToOpen(
+  relics: RelicInsightRow[],
+  sets: SetInsightRow[],
+): RelicOpeningRecommendation[] {
+  const groups = new Map<string, RelicInsightRow[]>();
+  for (const relic of relics) {
+    if (relic.ownedQuantity <= 0) continue;
+    const group = groups.get(relic.definition.relicSlug) ?? [];
+    group.push(relic);
+    groups.set(relic.definition.relicSlug, group);
+  }
+
+  const completionByReward = new Map<string, Array<{ setSlug: string; displayName: string; premium: number }>>();
+  const progressRewards = new Set<string>();
+  for (const set of sets) {
+    const opportunity = setOpportunity(set);
+    for (const part of opportunity.missingParts) progressRewards.add(part.slug);
+    if (opportunity.missingQuantity !== 1 || opportunity.missingParts.length !== 1) continue;
+    const rewardSlug = opportunity.missingParts[0].slug;
+    const targets = completionByReward.get(rewardSlug) ?? [];
+    targets.push({
+      setSlug: set.definition.setSlug,
+      displayName: set.displayName,
+      premium: Math.max(0, opportunity.setPremiumValue ?? 0),
+    });
+    completionByReward.set(rewardSlug, targets);
+  }
+
+  const selected = [...groups.values()].flatMap((group): RelicOpeningOption[] => {
+    const options = relicOpeningOptions(group, completionByReward, progressRewards);
+    if (options.length === 0) return [];
+    const freeOption = options
+      .filter((option) => option.traceCost === 0)
+      .sort(compareOpeningOptions)[0] ?? options.sort(compareOpeningOptions)[0];
+    const eligible = options.filter((option) => {
+      if (option.traceCost === 0 || option.optionScore <= freeOption.optionScore) return option.traceCost === 0;
+      const traceSteps = option.traceCost / 25;
+      const economicGain = option.economicValue - freeOption.economicValue;
+      const completionGain = option.completionChancePercent - freeOption.completionChancePercent;
+      return economicGain >= traceSteps * 0.5 || completionGain >= traceSteps;
+    });
+    return [eligible.sort(compareOpeningOptions)[0] ?? freeOption];
+  });
+
+  const maxEconomicValue = Math.max(0, ...selected.map((option) => option.economicValue));
+  return selected
+    .map(({ economicValue, optionScore: _optionScore, ...option }) => ({
+      ...option,
+      priorityScore: Math.round(
+        (maxEconomicValue > 0 ? economicValue / maxEconomicValue * 70 : 0)
+        + option.completionChancePercent * 0.3,
+      ),
+    }))
+    .sort((left, right) =>
+      right.priorityScore - left.priorityScore
+      || nullableOpportunity(right.expectedPlatinum) - nullableOpportunity(left.expectedPlatinum)
+      || right.completionChancePercent - left.completionChancePercent
+      || right.progressChancePercent - left.progressChancePercent
+      || left.displayName.localeCompare(right.displayName, "ru-RU")
+    );
+}
+
+function relicOpeningOptions(
+  group: RelicInsightRow[],
+  completionByReward: Map<string, Array<{ setSlug: string; displayName: string; premium: number }>>,
+  progressRewards: Set<string>,
+): RelicOpeningOption[] {
+  const representative = group[0];
+  const totalOwnedQuantity = group.reduce((sum, relic) => sum + relic.ownedQuantity, 0);
+  const candidates = relicRefinements.flatMap((targetRefinement): RelicOpeningOption[] => {
+    const source = group
+      .filter((relic) => refinementIndex(relic.definition.refinement) <= refinementIndex(targetRefinement))
+      .sort((left, right) =>
+        refinementIndex(right.definition.refinement) - refinementIndex(left.definition.refinement)
+        || right.ownedQuantity - left.ownedQuantity
+      )[0];
+    if (!source) return [];
+
+    const exactTarget = group.find((relic) => relic.definition.refinement === targetRefinement);
+    const rewards = (exactTarget ?? representative).rewards.map((reward) => ({
+      ...reward,
+      chancePercent: exactTarget
+        ? reward.definition.chancePercent
+        : chanceAtRefinement(
+            reward.definition.chancePercent,
+            representative.definition.refinement,
+            targetRefinement,
+          ),
+    }));
+    let expectedPlatinum = 0;
+    let pricedChancePercent = 0;
+    let completionChancePercent = 0;
+    let progressChancePercent = 0;
+    let expectedSetPremium = 0;
+    const completionTargets: RelicSetCompletionTarget[] = [];
+
+    for (const reward of rewards) {
+      const chancePercent = clampPercent(reward.chancePercent);
+      const price = reward.recommendation?.fairPrice;
+      if (price !== null && price !== undefined && Number.isFinite(price) && price > 0
+        && reward.recommendation?.confidence !== "unknown") {
+        expectedPlatinum += chancePercent / 100 * price;
+        pricedChancePercent += chancePercent;
+      }
+      const rewardSlug = reward.definition.rewardSlug;
+      if (!rewardSlug) continue;
+      if (progressRewards.has(rewardSlug)) progressChancePercent += chancePercent;
+      const targets = completionByReward.get(rewardSlug) ?? [];
+      if (targets.length === 0) continue;
+      completionChancePercent += chancePercent;
+      expectedSetPremium += chancePercent / 100 * Math.max(...targets.map((target) => target.premium));
+      for (const target of targets) {
+        completionTargets.push({
+          setSlug: target.setSlug,
+          displayName: target.displayName,
+          chancePercent,
+        });
+      }
+    }
+
+    const coveredExpectedPlatinum = pricedChancePercent >= 50 ? expectedPlatinum : null;
+    const economicValue = (coveredExpectedPlatinum ?? 0) + expectedSetPremium;
+    return [{
+      relicSlug: representative.definition.relicSlug,
+      displayName: representative.displayName,
+      imageUrl: representative.imageUrl,
+      totalOwnedQuantity,
+      sourceQuantity: source.ownedQuantity,
+      sourceRefinement: source.definition.refinement,
+      recommendedRefinement: targetRefinement,
+      traceCost: refinementTraceCost[targetRefinement] - refinementTraceCost[source.definition.refinement],
+      expectedPlatinum: coveredExpectedPlatinum,
+      pricedChancePercent: clampPercent(pricedChancePercent),
+      completionChancePercent: clampPercent(completionChancePercent),
+      progressChancePercent: clampPercent(progressChancePercent),
+      completionTargets,
+      economicValue,
+      optionScore: 0,
+    }];
+  });
+
+  const maxEconomicValue = Math.max(0, ...candidates.map((candidate) => candidate.economicValue));
+  return candidates.map((candidate) => ({
+    ...candidate,
+    optionScore: (maxEconomicValue > 0 ? candidate.economicValue / maxEconomicValue * 70 : 0)
+      + candidate.completionChancePercent * 0.3,
+  }));
+}
+
+function compareOpeningOptions(left: RelicOpeningOption, right: RelicOpeningOption): number {
+  return right.optionScore - left.optionScore
+    || right.economicValue - left.economicValue
+    || right.completionChancePercent - left.completionChancePercent
+    || left.traceCost - right.traceCost
+    || refinementIndex(left.recommendedRefinement) - refinementIndex(right.recommendedRefinement);
+}
+
+function chanceAtRefinement(
+  chancePercent: number,
+  currentRefinement: RelicRefinement,
+  targetRefinement: RelicRefinement,
+): number {
+  const currentChances = rewardChanceByRefinement[currentRefinement];
+  const rarity = (Object.keys(currentChances) as RelicRewardRarity[])
+    .map((candidate) => ({ candidate, distance: Math.abs(currentChances[candidate] - chancePercent) }))
+    .sort((left, right) => left.distance - right.distance)[0];
+  if (!rarity || rarity.distance > 1.1) return chancePercent;
+  return rewardChanceByRefinement[targetRefinement][rarity.candidate];
+}
+
+function refinementIndex(refinement: RelicRefinement): number {
+  return relicRefinements.indexOf(refinement);
+}
+
 export function setOpportunity(row: SetInsightRow): SetOpportunity {
   const targetSetCount = row.comparison.completeSets + 1;
   const missingParts = row.components.flatMap((component): MissingSetPart[] => {

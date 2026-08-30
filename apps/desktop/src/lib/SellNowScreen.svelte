@@ -24,8 +24,8 @@
   import { formatPlatinum, formatVolume, liveQuoteLabel, priceReasonMessage, variantLabel } from "./market";
   import {
     filterAndSortSellNowRows,
-    priorityLabel,
     priorityReasonMessages,
+    sellPriorityRanks,
     sellNowRowIdentity,
     type LiveSellNowResult,
     type EquippedFilter,
@@ -43,8 +43,6 @@
 
   export let onInventoryChange: (() => void) | undefined = undefined;
   export let onOpenMarketSales: () => void;
-  export let onOpenEquippedMods: () => void;
-
   type PendingListingAction = { kind: "create"; input: CreateListingInput; itemName: string };
 
   const locale = useLocale();
@@ -63,7 +61,7 @@
       inventoryUpdated: "Инвентарь обновлён", scanInventory: "Обновить из Warframe", scanningInventory: "Обновляем…", scanError: "Не удалось обновить инвентарь. Запустите Warframe, войдите в игру и повторите.", reserve: "Оставлять копий", reserveError: "Не удалось изменить резерв копий.",
       notForecast: "Важно:", nominalBody: "это сумма по текущим оценкам, а не гарантированная выручка.",
       noCandidatesLabel: "Очередь пуста", noCandidates: "Нет предметов, готовых к продаже", noCandidatesBody: "Проверьте количество, возможность обмена и резерв копий в инвентаре.", checkInventory: "Открыть инвентарь",
-      filters: "Поиск и фильтры", search: "Поиск предмета", searchExample: "Например, Поток Прайм", category: "Тип предмета", allCategories: "Все типы", view: "Показывать", allCandidates: "Весь торговый инвентарь", sellable: "Всё к продаже", sellNow: "Продавать сейчас", hold: "Лучше подождать", duplicates: "Дубликаты", unpriced: "Без цены", attention: "Требуют проверки", usage: "Использование", allUsage: "Все", freeOnly: "Не надеты", equippedOnly: "Надеты", equippedCount: (count: number) => `Надето: ${count}`, openEquipped: "Где стоят моды",
+      filters: "Поиск и фильтры", search: "Поиск предмета", searchExample: "Например, Поток Прайм", category: "Тип предмета", allCategories: "Все типы", view: "Показывать", allCandidates: "Весь торговый инвентарь", sellable: "Всё к продаже", sellNow: "Продавать сейчас", hold: "Лучше подождать", duplicates: "Дубликаты", unpriced: "Без цены", attention: "Требуют проверки", usage: "Использование", allUsage: "Все", freeOnly: "Не надеты", equippedOnly: "Надеты", equippedCount: (count: number) => `Надето: ${count}`,
       queue: "Мои предметы", exactSnapshot: (date: string) => `Цены рынка от ${date}`, missingSnapshot: "дата неизвестна",
       tableCaption: "Предметы инвентаря, рекомендуемая цена, продажи, тренд цены и очерёдность", item: "Предмет", salesPerDay: "Продажи / день", priceTrend90: "Тренд цены / 90 дней", unknownVariant: "вариант не определён",
       dailyTrades: (value: string) => `${value} сделок/день`,
@@ -74,7 +72,7 @@
       nominalWarning: "Скорость продажи зависит от спроса и вашей цены.", whyPrice: "Как рассчитана цена?", noPriceSignal: "Сделок пока недостаточно для расчёта цены.", whyPriority: "Почему этот предмет выше или ниже?", details: "Подробности продажи", selectCandidate: "Выберите предмет в очереди.",
       ownedSellable: "Есть / продать", owned: "есть", sellableLabel: "можно продать", fairListQuick: "Выставить по цене",
       noPrice: "нет данных",
-      priority: "Очередность", fairPrice: "Ориентир рынка", listPrice: "Рекомендуемый ордер", quickSell: "Лучшая покупка сейчас", sell: "на продажу", buy: "на покупку",
+      priority: "Приоритет продажи", priorityHint: "№1 — предмет, который стоит выставить первым.", priorityPosition: (rank: number | null, score: number) => rank === null ? `Приоритет не рассчитан · ${score}/100` : `№${rank} в очереди · ${score}/100`, fairPrice: "Ориентир рынка", listPrice: "Рекомендуемый ордер", quickSell: "Лучшая покупка сейчас", sell: "на продажу", buy: "на покупку",
       wfmOrder: "Ордер Warframe Market", loadingOrders: "Проверяем ваши ордера…", accountUnavailable: "Не удалось загрузить ордера Warframe Market.", retryOrders: "Повторить", accountDisconnected: "Warframe Market не подключён", accountDisconnectedBody: "Подключите аккаунт, чтобы выставить этот предмет.", openAccount: "Подключить Warframe Market", unverifiedAccount: "Подтвердите игровой аккаунт на Warframe Market, чтобы менять ордера.", notSellable: "После резерва нет подтверждённых копий для продажи.", noCurrentOrder: "Ордер ещё не выставлен", currentOrder: (price: string, quantity: number, status: string, perTrade: number | null) => perTrade === null ? `Выставлено: ${price}p × ${quantity} · ${status}` : `Выставлено: ${quantity} шт., по ${perTrade} за сделку за ${price}p · ${status}`,
       manageOrder: "Управлять ордером", orderPrice: "Цена, платина", bulkOrderPrice: "Цена за сделку, платина", orderQuantity: "Всего предметов", orderPerTrade: "Предметов за одну сделку", publishOrder: "Сразу показать ордер на рынке", reviewCreate: "Проверить ордер", variantUnavailable: "Этот вариант не найден на Warframe Market. Обновите рыночные данные.", createTitle: "Подтвердите новый ордер", confirmCreate: (name: string, price: number, quantity: number, perTrade: number | null) => perTrade === null ? `${name}: выставить ${quantity} шт. по ${price}p.` : `${name}: всего ${quantity} шт., по ${perTrade} за сделку за ${price}p.`, confirmChecked: "Я проверил предмет, цену и количество", createOrder: "Создать ордер", cancelOrderAction: "Отменить", confirmRequired: "Подтвердите, что проверили параметры ордера.", orderCreated: "Ордер создан на Warframe Market.", orderActionError: (reason: string) => accountActionErrorMessage(reason, "ru"),
     },
@@ -88,7 +86,7 @@
       inventoryUpdated: "Inventory updated", scanInventory: "Update from Warframe", scanningInventory: "Updating…", scanError: "Unable to update inventory. Start Warframe, sign in, and try again.", reserve: "Keep copies", reserveError: "Unable to change the copy reserve.",
       notForecast: "Not a revenue forecast:", nominalBody: "nominal value is sellable × fair. It does not guarantee that the full volume will sell at that price.",
       noCandidatesLabel: "No candidates", noCandidates: "No confirmed items to sell", noCandidatesBody: "Check the import, tradeability, and copy reserve. Ambiguous variants are excluded automatically.", checkInventory: "Check inventory",
-      filters: "Item search and filters", search: "Search items", searchExample: "For example, Primed Flow", category: "Item type", allCategories: "All types", view: "Show", allCandidates: "All market inventory", sellable: "All sellable", sellNow: "Sell now", hold: "Better to wait", duplicates: "Duplicates", unpriced: "Unpriced", attention: "Needs review", usage: "Usage", allUsage: "All", freeOnly: "Not equipped", equippedOnly: "Equipped", equippedCount: (count: number) => `Equipped: ${count}`, openEquipped: "Show equipped mods",
+      filters: "Item search and filters", search: "Search items", searchExample: "For example, Primed Flow", category: "Item type", allCategories: "All types", view: "Show", allCandidates: "All market inventory", sellable: "All sellable", sellNow: "Sell now", hold: "Better to wait", duplicates: "Duplicates", unpriced: "Unpriced", attention: "Needs review", usage: "Usage", allUsage: "All", freeOnly: "Not equipped", equippedOnly: "Equipped", equippedCount: (count: number) => `Equipped: ${count}`,
       queue: "My items", exactSnapshot: (date: string) => `Market prices from ${date}`, missingSnapshot: "not found",
       tableCaption: "Inventory items, recommended price, sales, price trend, and priority", item: "Item", salesPerDay: "Sales / day", priceTrend90: "Price trend / 90 days", unknownVariant: "variant unavailable",
       dailyTrades: (value: string) => `${value} trades/day`,
@@ -99,7 +97,7 @@
       nominalWarning: "Nominal value does not account for how quickly the full volume may sell.", whyPrice: "Why this price?", noPriceSignal: "There are not enough completed trades to calculate a price.", whyPriority: "Why this priority?", details: "Sell details", selectCandidate: "Select a candidate from the queue.",
       ownedSellable: "Owned / list", owned: "owned", sellableLabel: "can list", fairListQuick: "Recommended price",
       noPrice: "no price",
-      priority: "Priority", fairPrice: "Fair price", listPrice: "List price", quickSell: "Quick Sell", sell: "sell", buy: "buy",
+      priority: "Sale priority", priorityHint: "No. 1 is the item to list first.", priorityPosition: (rank: number | null, score: number) => rank === null ? `Priority unavailable · ${score}/100` : `No. ${rank} in the queue · ${score}/100`, fairPrice: "Fair price", listPrice: "List price", quickSell: "Quick Sell", sell: "sell", buy: "buy",
       wfmOrder: "Warframe Market order", loadingOrders: "Checking your orders…", accountUnavailable: "Unable to load Warframe Market orders.", retryOrders: "Try again", accountDisconnected: "Warframe Market is not connected", accountDisconnectedBody: "Connect your account to list this item.", openAccount: "Connect Warframe Market", unverifiedAccount: "Verify your game account on Warframe Market to change orders.", notSellable: "There are no confirmed copies to sell after the reserve.", noCurrentOrder: "Not listed yet", currentOrder: (price: string, quantity: number, status: string, perTrade: number | null) => perTrade === null ? `Listed: ${price}p × ${quantity} · ${status}` : `Listed: ${quantity} total, ${perTrade} per trade for ${price}p · ${status}`,
       manageOrder: "Manage order", orderPrice: "Price, platinum", bulkOrderPrice: "Price per trade, platinum", orderQuantity: "Total items", orderPerTrade: "Items per trade", publishOrder: "Show order on the market immediately", reviewCreate: "Review order", variantUnavailable: "This variant is not available on Warframe Market. Refresh market data.", createTitle: "Confirm new order", confirmCreate: (name: string, price: number, quantity: number, perTrade: number | null) => perTrade === null ? `${name}: list ${quantity} at ${price}p each.` : `${name}: ${quantity} total, ${perTrade} per trade for ${price}p.`, confirmChecked: "I reviewed the item, price, and quantity", createOrder: "Create order", cancelOrderAction: "Cancel", confirmRequired: "Confirm that you reviewed the order parameters.", orderCreated: "Order created on Warframe Market.", orderActionError: (reason: string) => accountActionErrorMessage(reason, "en"),
     },
@@ -161,6 +159,7 @@
     });
   }
   $: visibleRows = filterAndSortSellNowRows(view?.rows ?? [], filters);
+  $: priorityRanks = sellPriorityRanks(view?.rows ?? []);
   $: recommendedCount = filterAndSortSellNowRows(view?.rows ?? [], { ...filters, query: "", category: "all", preset: "sell_now" }).length;
   $: categories = INVENTORY_CATEGORIES.filter((candidate) =>
     view?.rows.some((row) => inventoryCategory(row.inventory) === candidate),
@@ -448,6 +447,17 @@
     return value === null || value === undefined ? c.noPrice : formatPlatinum(value, $locale);
   }
 
+  function priorityRank(row: SellNowRow): number | null {
+    return priorityRanks.get(sellNowRowIdentity(row)) ?? null;
+  }
+
+  function priorityVisualBand(rank: number | null): "high" | "medium" | "low" | "none" {
+    if (rank === null) return "none";
+    if (rank <= 10) return "high";
+    if (rank <= 50) return "medium";
+    return "low";
+  }
+
   onMount(() => {
     let disposed = false;
     let unlistenMarket: UnlistenFn | undefined;
@@ -505,7 +515,6 @@
         <option value="0">0</option><option value="1">1</option><option value="2">2</option>
       </select>
     </label>
-    {#if view.modUsageScanned}<button type="button" class="secondary" onclick={onOpenEquippedMods}>{c.openEquipped}</button>{/if}
     <button type="button" onclick={scanWarframe} disabled={loading || scanning}>{scanning ? c.scanningInventory : c.scanInventory}</button>
   </section>
 
@@ -587,7 +596,7 @@
                   <th scope="col" aria-sort={sortAria("volume", sortKey, sortDirection)}><button type="button" onclick={() => changeSort("volume")}>{c.salesPerDay} <span aria-hidden="true">{sortMarker("volume", sortKey, sortDirection)}</span></button></th>
                   <th scope="col" aria-sort={sortAria("trend", sortKey, sortDirection)}><button type="button" onclick={() => changeSort("trend")}>{c.priceTrend90} <span aria-hidden="true">{sortMarker("trend", sortKey, sortDirection)}</span></button></th>
                   <th scope="col">{c.moment}</th>
-                  <th scope="col" aria-sort={sortAria("priority", sortKey, sortDirection)}><button type="button" onclick={() => changeSort("priority")}>{c.priority} <span aria-hidden="true">{sortMarker("priority", sortKey, sortDirection)}</span></button></th>
+                  <th scope="col" aria-sort={sortAria("priority", sortKey, sortDirection)}><button type="button" title={c.priorityHint} onclick={() => changeSort("priority")}>{c.priority} <span aria-hidden="true">{sortMarker("priority", sortKey, sortDirection)}</span></button></th>
                 </tr>
               </thead>
               <tbody>
@@ -616,7 +625,11 @@
                       <strong class={`price-trend price-trend--${priceTrendClass(row.trend?.change90d)}`}>{priceTrendText(row.trend?.change90d)}</strong>
                     </td>
                     <td class="stacked-cell" data-label={c.moment}><strong class={`timing-pill timing-pill--${row.trend?.timing ?? "unknown"}`} title={timingDescription(row)} aria-label={timingDescription(row)}>{shortTiming(row)}</strong></td>
-                    <td class="numeric" data-label={c.priority}><span class={`priority priority--${row.priority.band}`}>{priorityLabel(row.priority.band, $locale)}</span></td>
+                    <td class="numeric" data-label={c.priority}>
+                      <span class={`priority priority--${priorityVisualBand(priorityRank(row))}`} title={c.priorityPosition(priorityRank(row), row.priority.score)} aria-label={c.priorityPosition(priorityRank(row), row.priority.score)}>
+                        {priorityRank(row) === null ? "—" : `№${priorityRank(row)}`}<small>{row.priority.score}/100</small>
+                      </span>
+                    </td>
                   </tr>
                 {/each}
               </tbody>
@@ -745,7 +758,7 @@
           <div class="detail-meta">
             <div><span>{c.forSale}</span><strong>{selectedRow.inventory.sellableQuantity} {c.of} {selectedRow.inventory.ownedQuantity}</strong></div>
             <div><span>{c.moment}</span><strong>{selectedRow.trend?.timing ? timingLabel(selectedRow.trend.timing, $locale) : c.noSignal}</strong></div>
-            <div><span>{c.priority}</span><strong>{priorityLabel(selectedRow.priority.band, $locale)}</strong></div>
+            <div><span>{c.priority}</span><strong>{c.priorityPosition(priorityRank(selectedRow), selectedRow.priority.score)}</strong></div>
             <div><span>{c.nominal}</span><strong>{formatPlatinum(selectedRow.nominalValue, $locale)}</strong></div>
           </div>
           <p class="nominal-warning">{c.nominalWarning}</p>
@@ -760,7 +773,7 @@
           </details>
           <details class="explanation">
             <summary>{c.whyPriority}</summary>
-            <ul>{#each priorityReasonMessages(selectedRow, $locale) as reason}<li>{reason}</li>{/each}</ul>
+            <ul>{#each priorityReasonMessages(selectedRow, $locale, priorityRank(selectedRow)) as reason}<li>{reason}</li>{/each}</ul>
           </details>
         {:else}
           <div class="detail-placeholder"><h2 id="sell-detail-heading">{c.details}</h2><p>{c.selectCandidate}</p></div>

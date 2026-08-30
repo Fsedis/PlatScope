@@ -1,13 +1,15 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import { useLocale } from "./i18n";
   import type { EquipmentKind, InventoryView } from "./inventory";
   import {
-    buildEquippedEquipmentGroups,
+    buildEquippedModEntries,
     configLabel,
+    filterEquippedModEntries,
     summarizeEquippedMods,
+    type EquippedModEntry,
   } from "./equippedMods";
 
   export let onInventoryChange: (() => void) | undefined = undefined;
@@ -23,23 +25,31 @@
       update: "Обновить из Warframe",
       updating: "Обновляем…",
       scanError: "Не удалось прочитать сборки. Запустите Warframe, войдите в игру и повторите.",
-      summaryMods: "Надето модов",
-      summaryEquipment: "Предметов со сборками",
-      summaryConfigs: "Конфигураций",
-      search: "Найти мод или предмет",
-      searchPlaceholder: "Например, Поток Прайм или Вольт",
-      type: "Тип предмета",
-      allTypes: "Все типы",
-      empty: "Надетых модов не найдено",
+      summaryVariants: "Модов",
+      summaryCopies: "Надето копий",
+      summaryEquipment: "Предметов",
+      search: "Найти мод",
+      searchPlaceholder: "Например, Поток Прайм",
+      type: "Установлен на",
+      allTypes: "Любой предмет",
+      listTitle: "Надетые моды",
+      shown: (count: number) => `Показано: ${count}`,
+      empty: "Надетые моды не найдены",
       emptyBody: "В считанных конфигурациях нет модов из торгового инвентаря.",
       noFiltered: "Ничего не найдено",
-      noFilteredBody: "Измените запрос или тип предмета.",
+      noFilteredBody: "Измените название мода или тип предмета.",
       clear: "Сбросить",
-      config: (label: string) => `Конфигурация ${label}`,
       rank: (rank: number) => `ранг ${rank}`,
-      free: (count: number) => `свободно для продажи: ${count}`,
-      protected: "эта копия защищена от продажи",
-      readOnly: "Снять мод можно в Арсенале Warframe. PlatScope только показывает сборки и не меняет игру.",
+      copies: (count: number) => `копий: ${count}`,
+      configs: (count: number) => `конфигураций: ${count}`,
+      selectPrompt: "Выберите мод слева",
+      selectPromptBody: "Здесь появятся все предметы и конфигурации, где он установлен.",
+      installedOn: "Где установлен",
+      usage: (equipment: number, configs: number) => `Предметов: ${equipment} · Конфигураций: ${configs}`,
+      free: (count: number) => `Свободно для продажи: ${count}`,
+      noFree: "Свободных копий для продажи нет",
+      config: (label: string) => `Конфигурация ${label}`,
+      readOnly: "Чтобы снять мод, откройте указанный предмет и конфигурацию в Арсенале Warframe. PlatScope ничего не меняет в игре.",
     },
     en: {
       loading: "Loading equipped mods…",
@@ -50,23 +60,31 @@
       update: "Update from Warframe",
       updating: "Updating…",
       scanError: "Unable to read loadouts. Start Warframe, sign in, and try again.",
-      summaryMods: "Equipped mods",
-      summaryEquipment: "Items with loadouts",
-      summaryConfigs: "Configurations",
-      search: "Find a mod or item",
-      searchPlaceholder: "For example, Primed Flow or Volt",
-      type: "Item type",
-      allTypes: "All types",
+      summaryVariants: "Mods",
+      summaryCopies: "Equipped copies",
+      summaryEquipment: "Items",
+      search: "Find a mod",
+      searchPlaceholder: "For example, Primed Flow",
+      type: "Installed on",
+      allTypes: "Any item",
+      listTitle: "Equipped mods",
+      shown: (count: number) => `Shown: ${count}`,
       empty: "No equipped mods found",
       emptyBody: "The scanned configurations contain no mods from the market inventory.",
       noFiltered: "No matches",
-      noFilteredBody: "Change the search or item type.",
+      noFilteredBody: "Change the mod name or item type.",
       clear: "Reset",
-      config: (label: string) => `Configuration ${label}`,
       rank: (rank: number) => `rank ${rank}`,
-      free: (count: number) => `free to sell: ${count}`,
-      protected: "this copy is protected from sale",
-      readOnly: "Remove mods in the Warframe Arsenal. PlatScope only displays loadouts and never changes the game.",
+      copies: (count: number) => `copies: ${count}`,
+      configs: (count: number) => `configurations: ${count}`,
+      selectPrompt: "Select a mod on the left",
+      selectPromptBody: "Every item and configuration using it will appear here.",
+      installedOn: "Installed on",
+      usage: (equipment: number, configs: number) => `Items: ${equipment} · Configurations: ${configs}`,
+      free: (count: number) => `Free to sell: ${count}`,
+      noFree: "No free copies to sell",
+      config: (label: string) => `Configuration ${label}`,
+      readOnly: "To remove the mod, open the listed item and configuration in the Warframe Arsenal. PlatScope never changes the game.",
     },
   } as const;
   const kindCopy = {
@@ -82,10 +100,18 @@
   let errorMessage = "";
   let query = "";
   let kind: EquipmentKind | "all" = "all";
-  $: allGroups = buildEquippedEquipmentGroups(inventory?.items ?? []);
-  $: groups = buildEquippedEquipmentGroups(inventory?.items ?? [], query, kind);
-  $: summary = summarizeEquippedMods(inventory?.items ?? [], allGroups);
-  $: availableKinds = [...new Set(allGroups.map((group) => group.kind))];
+  let selectedIdentity = "";
+  let detailPanel: HTMLElement | null = null;
+  $: allEntries = buildEquippedModEntries(inventory?.items ?? []);
+  $: entries = filterEquippedModEntries(allEntries, query, kind);
+  $: summary = summarizeEquippedMods(allEntries);
+  $: availableKinds = [...new Set(allEntries.flatMap((entry) => entry.kinds))]
+    .sort((left, right) => kindLabels[left].localeCompare(kindLabels[right], $locale));
+  $: if (entries.length === 0) selectedIdentity = "";
+  $: if (entries.length > 0 && !entries.some((entry) => entry.identity === selectedIdentity)) {
+    selectedIdentity = entries[0].identity;
+  }
+  $: selectedEntry = entries.find((entry) => entry.identity === selectedIdentity) ?? null;
 
   async function loadInventory(): Promise<void> {
     loading = true;
@@ -114,17 +140,27 @@
     }
   }
 
+  async function selectEntry(entry: EquippedModEntry): Promise<void> {
+    selectedIdentity = entry.identity;
+    await tick();
+    if (window.matchMedia("(max-width: 50rem)").matches) {
+      detailPanel?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }
+
   onMount(() => {
     let disposed = false;
-    let unlisten: UnlistenFn | undefined;
+    const unlisteners: UnlistenFn[] = [];
     void loadInventory();
-    void listen("inventory-updated", () => void loadInventory()).then((cleanup) => {
-      if (disposed) cleanup();
-      else unlisten = cleanup;
-    });
+    for (const event of ["inventory-updated", "game-metadata-updated"]) {
+      void listen(event, () => void loadInventory()).then((cleanup) => {
+        if (disposed) cleanup();
+        else unlisteners.push(cleanup);
+      });
+    }
     return () => {
       disposed = true;
-      unlisten?.();
+      for (const unlisten of unlisteners) unlisten();
     };
   });
 </script>
@@ -142,11 +178,11 @@
     <button type="button" onclick={scanWarframe} disabled={scanning}>{scanning ? c.updating : c.update}</button>
   </section>
 {:else if inventory}
-  <section class="equipped-overview" aria-label={c.summaryMods}>
+  <section class="equipped-overview" aria-label={c.summaryVariants}>
     <dl>
-      <div><dt>{c.summaryMods}</dt><dd>{summary.modCopies}</dd></div>
+      <div><dt>{c.summaryVariants}</dt><dd>{summary.modVariants}</dd></div>
+      <div><dt>{c.summaryCopies}</dt><dd>{summary.modCopies}</dd></div>
       <div><dt>{c.summaryEquipment}</dt><dd>{summary.equipmentCount}</dd></div>
-      <div><dt>{c.summaryConfigs}</dt><dd>{summary.configCount}</dd></div>
     </dl>
     <button type="button" onclick={scanWarframe} disabled={scanning}>{scanning ? c.updating : c.update}</button>
   </section>
@@ -165,36 +201,79 @@
     </div>
   </section>
 
-  {#if allGroups.length === 0}
+  {#if allEntries.length === 0}
     <section class="empty-panel equipped-empty"><h2>{c.empty}</h2><p>{c.emptyBody}</p></section>
-  {:else if groups.length === 0}
+  {:else if entries.length === 0}
     <section class="empty-panel equipped-empty"><h2>{c.noFiltered}</h2><p>{c.noFilteredBody}</p><button type="button" onclick={() => { query = ""; kind = "all"; }}>{c.clear}</button></section>
   {:else}
-    <div class="equipped-grid">
-      {#each groups as group (group.instanceKey)}
-        <article class="equipment-card">
-          <header class="equipment-card__header">
-            {#if group.imageUrl}<img src={group.imageUrl} alt="" loading="lazy" decoding="async" />{/if}
-            <div><span>{kindLabels[group.kind]}</span><h2>{group.displayName}</h2></div>
+    <div class="equipped-workspace">
+      <section class="equipped-master" aria-labelledby="equipped-list-title">
+        <header><h2 id="equipped-list-title">{c.listTitle}</h2><span>{c.shown(entries.length)}</span></header>
+        <ul>
+          {#each entries as entry (entry.identity)}
+            <li>
+              <button
+                type="button"
+                class:active={entry.identity === selectedIdentity}
+                aria-pressed={entry.identity === selectedIdentity}
+                aria-controls="equipped-detail"
+                onclick={() => selectEntry(entry)}
+              >
+                <span class="equipped-mod-thumb">
+                  {#if entry.imageUrl}<img src={entry.imageUrl} alt="" loading="lazy" decoding="async" />{:else}<span aria-hidden="true">◇</span>{/if}
+                </span>
+                <span class="equipped-mod-copy">
+                  <strong>{entry.displayName}</strong>
+                  <small>{entry.rank === null ? c.copies(entry.equippedQuantity) : `${c.rank(entry.rank)} · ${c.copies(entry.equippedQuantity)}`}</small>
+                </span>
+                <span class="equipped-mod-count">{c.configs(entry.configCount)}</span>
+              </button>
+            </li>
+          {/each}
+        </ul>
+      </section>
+
+      <section id="equipped-detail" class="equipped-detail" bind:this={detailPanel} aria-live="polite">
+        {#if selectedEntry}
+          <header class="equipped-detail__header">
+            <span class="equipped-detail__image">
+              {#if selectedEntry.imageUrl}<img src={selectedEntry.imageUrl} alt="" decoding="async" />{:else}<span aria-hidden="true">◇</span>{/if}
+            </span>
+            <div>
+              {#if selectedEntry.rank !== null}<span>{c.rank(selectedEntry.rank)}</span>{/if}
+              <h2>{selectedEntry.displayName}</h2>
+              <p>{c.usage(selectedEntry.equipmentCount, selectedEntry.configCount)}</p>
+            </div>
+            <strong class:unavailable={selectedEntry.sellableQuantity === 0}>
+              {selectedEntry.sellableQuantity > 0 ? c.free(selectedEntry.sellableQuantity) : c.noFree}
+            </strong>
           </header>
-          <div class="equipment-configs">
-            {#each group.configs as config (config.index)}
-              <section class="equipment-config" aria-label={c.config(configLabel(config.index))}>
-                <h3>{c.config(configLabel(config.index))}</h3>
-                <ul>
-                  {#each config.mods as mod (mod.identity)}
-                    <li>
-                      {#if mod.imageUrl}<img src={mod.imageUrl} alt="" loading="lazy" decoding="async" />{/if}
-                      <div><strong>{mod.displayName}</strong><span>{mod.rank === null ? c.protected : `${c.rank(mod.rank)} · ${c.protected}`}</span><small>{c.free(mod.freeQuantity)}</small></div>
-                    </li>
-                  {/each}
-                </ul>
-              </section>
-            {/each}
+          <div class="equipped-detail__body">
+            <h3>{c.installedOn}</h3>
+            <ul class="equipped-locations">
+              {#each selectedEntry.locations as location (location.instanceKey)}
+                <li>
+                  <span class="equipped-location__image">
+                    {#if location.imageUrl}<img src={location.imageUrl} alt="" loading="lazy" decoding="async" />{:else}<span aria-hidden="true">◇</span>{/if}
+                  </span>
+                  <div>
+                    <small>{kindLabels[location.kind]}</small>
+                    <strong>{location.displayName}</strong>
+                  </div>
+                  <div class="equipped-config-tags" aria-label={c.configs(location.configIndexes.length)}>
+                    {#each location.configIndexes as configIndex}
+                      <span>{c.config(configLabel(configIndex))}</span>
+                    {/each}
+                  </div>
+                </li>
+              {/each}
+            </ul>
+            <p class="equipped-readonly">{c.readOnly}</p>
           </div>
-        </article>
-      {/each}
+        {:else}
+          <div class="equipped-detail__empty"><h2>{c.selectPrompt}</h2><p>{c.selectPromptBody}</p></div>
+        {/if}
+      </section>
     </div>
-    <p class="equipped-readonly">{c.readOnly}</p>
   {/if}
 {/if}

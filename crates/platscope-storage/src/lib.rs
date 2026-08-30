@@ -29,6 +29,8 @@ const GAME_ITEM_DEFINITIONS_MIGRATION: &str =
     include_str!("../../../migrations/0009_game_item_definitions.sql");
 const TRADE_SHIFT_MIGRATION: &str = include_str!("../../../migrations/0010_trade_shift.sql");
 const EQUIPPED_MODS_MIGRATION: &str = include_str!("../../../migrations/0011_equipped_mods.sql");
+const INVENTORY_ACCOUNT_STATE_MIGRATION: &str =
+    include_str!("../../../migrations/0012_inventory_account_state.sql");
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -952,8 +954,9 @@ impl Database {
         transaction.execute(
             "INSERT INTO inventory_snapshots(
                 source, observed_at, imported_at, schema_version, item_count,
-                resolved_row_count, checksum_sha256, keep_copies, mod_usage_scanned, is_current
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 1)",
+                resolved_row_count, checksum_sha256, keep_copies, mod_usage_scanned,
+                credits, syndicates_json, is_current
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 1)",
             params![
                 inventory_source_name(snapshot.metadata.source),
                 snapshot.metadata.observed_at.to_rfc3339(),
@@ -964,6 +967,11 @@ impl Database {
                 snapshot.metadata.checksum_sha256,
                 i64::from(snapshot.keep_copies),
                 i64::from(snapshot.mod_usage_scanned),
+                snapshot
+                    .credits
+                    .map(|credits| to_i64(credits, "inventory credits"))
+                    .transpose()?,
+                serde_json::to_string(&snapshot.syndicates)?,
             ],
         )?;
         let snapshot_id = transaction.last_insert_rowid();
@@ -1099,6 +1107,11 @@ impl Database {
             metadata,
             keep_copies,
             mod_usage_scanned: summary.mod_usage_scanned != 0,
+            credits: summary
+                .credits
+                .map(|credits| to_u64(credits, "inventory credits"))
+                .transpose()?,
+            syndicates: serde_json::from_str(&summary.syndicates_json)?,
             items,
         }))
     }
@@ -1269,6 +1282,10 @@ impl Database {
                 if version < 11 {
                     self.connection.execute_batch(EQUIPPED_MODS_MIGRATION)?;
                 }
+                if version < 12 {
+                    self.connection
+                        .execute_batch(INVENTORY_ACCOUNT_STATE_MIGRATION)?;
+                }
                 Ok(())
             });
         if let Err(error) = migration_result {
@@ -1289,6 +1306,8 @@ struct StoredInventorySummary {
     checksum: String,
     keep_copies: i64,
     mod_usage_scanned: i64,
+    credits: Option<i64>,
+    syndicates_json: String,
 }
 
 fn load_current_inventory_summary(
@@ -1297,7 +1316,7 @@ fn load_current_inventory_summary(
     connection
         .query_row(
             "SELECT id, source, observed_at, schema_version, item_count,
-                    checksum_sha256, keep_copies, mod_usage_scanned
+                    checksum_sha256, keep_copies, mod_usage_scanned, credits, syndicates_json
              FROM inventory_snapshots WHERE is_current = 1",
             [],
             |row| {
@@ -1310,6 +1329,8 @@ fn load_current_inventory_summary(
                     checksum: row.get(5)?,
                     keep_copies: row.get(6)?,
                     mod_usage_scanned: row.get(7)?,
+                    credits: row.get(8)?,
+                    syndicates_json: row.get(9)?,
                 })
             },
         )
@@ -1745,7 +1766,7 @@ mod tests {
     fn foundation_migration_is_idempotent() {
         let database = Database::open_in_memory().expect("database opens");
         database.migrate().expect("migration can run twice");
-        assert_eq!(database.schema_version().expect("version"), 11);
+        assert_eq!(database.schema_version().expect("version"), 12);
     }
 
     #[test]
@@ -1789,7 +1810,7 @@ mod tests {
             .expect("migrated row loads");
         assert_eq!(display_name_ru, None);
         assert_eq!(search_text, "nyx_prime_set nyx prime set");
-        assert_eq!(database.schema_version().expect("version"), 11);
+        assert_eq!(database.schema_version().expect("version"), 12);
     }
 
     #[test]
@@ -2172,6 +2193,12 @@ mod tests {
             },
             keep_copies: 1,
             mod_usage_scanned: true,
+            credits: Some(1_000_000),
+            syndicates: vec![platscope_domain::SyndicateStanding {
+                tag: "CephalonSudaSyndicate".into(),
+                standing: 42_000,
+                title: Some("Genius".into()),
+            }],
             items: vec![ResolvedInventoryItem {
                 canonical_game_id: "test_item".into(),
                 display_name_en: Some("Test Item".into()),
@@ -2218,6 +2245,8 @@ mod tests {
         assert_eq!(current.metadata.checksum_sha256, "first");
         assert_eq!(current.items[0].sellable_quantity, 1);
         assert!(current.mod_usage_scanned);
+        assert_eq!(current.credits, Some(1_000_000));
+        assert_eq!(current.syndicates[0].standing, 42_000);
         assert_eq!(current.items[0].equipped_quantity, 1);
         assert_eq!(current.items[0].equipped_placements.len(), 1);
         assert_eq!(current.items[0].equipped_placements[0].config_index, 1);
@@ -2263,6 +2292,11 @@ mod tests {
                 game_ref: "test-set-ref".into(),
                 mastery_requirement: 8,
             }],
+            item_localizations: Vec::new(),
+            syndicate_offers: Vec::new(),
+            nightwave_offers: Vec::new(),
+            arcane_dissolutions: Vec::new(),
+            arcane_packs: Vec::new(),
         }
     }
 

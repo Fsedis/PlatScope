@@ -8,7 +8,7 @@ use platscope_domain::{
     CatalogItem, EquipmentKind, EquippedModInstance, InventoryItem, InventoryModPlacement,
     InventoryResolution, InventorySnapshotMetadata, InventorySource, ItemCatalog, MarketVariantKey,
     Platform, PlayerInventory, ResolvedInventoryItem, ResolvedInventorySnapshot,
-    ResolvedModPlacement, Tradeability,
+    ResolvedModPlacement, SyndicateStanding, Tradeability,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -31,6 +31,8 @@ const MAX_HELPER_DEPTH: usize = 64;
 const MAX_HELPER_NODES: usize = 250_000;
 const MAX_EQUIPMENT_CONFIGS: usize = 16;
 const MAX_CONFIG_UPGRADES: usize = 64;
+const MAX_AFFILIATIONS: usize = 128;
+const MAX_WALLET_AMOUNT: u64 = 1_000_000_000_000_000;
 const READ_ONLY_INVENTORY_CATEGORIES: [&str; 12] = [
     "MiscItems",
     "Recipes",
@@ -210,6 +212,8 @@ pub fn parse_platscope_json(raw: &str) -> Result<PlayerInventory, InventoryError
         items,
         mod_usage_scanned: false,
         equipped_mods: Vec::new(),
+        credits: None,
+        syndicates: Vec::new(),
     })
 }
 
@@ -332,6 +336,8 @@ fn normalize_read_only_payload(
         Ok(equipped_mods) => (true, equipped_mods),
         Err(_) => (false, Vec::new()),
     };
+    let credits = read_only_credits(root).unwrap_or(None);
+    let syndicates = read_only_syndicates(root).unwrap_or_default();
 
     Ok(PlayerInventory {
         metadata: InventorySnapshotMetadata {
@@ -344,7 +350,71 @@ fn normalize_read_only_payload(
         items,
         mod_usage_scanned,
         equipped_mods,
+        credits,
+        syndicates,
     })
+}
+
+fn read_only_credits(root: &serde_json::Map<String, Value>) -> Result<Option<u64>, InventoryError> {
+    let Some(value) = root.get("Credits") else {
+        return Ok(None);
+    };
+    let credits = value
+        .as_u64()
+        .ok_or(InventoryError::InvalidHelperField("Credits"))?;
+    if credits > MAX_WALLET_AMOUNT {
+        return Err(InventoryError::InvalidHelperField("Credits"));
+    }
+    Ok(Some(credits))
+}
+
+fn read_only_syndicates(
+    root: &serde_json::Map<String, Value>,
+) -> Result<Vec<SyndicateStanding>, InventoryError> {
+    let Some(value) = root.get("Affiliations") else {
+        return Ok(Vec::new());
+    };
+    let entries = value
+        .as_array()
+        .ok_or(InventoryError::InvalidHelperField("Affiliations"))?;
+    if entries.len() > MAX_AFFILIATIONS {
+        return Err(InventoryError::InvalidHelperField("Affiliations"));
+    }
+    let mut by_tag = BTreeMap::new();
+    for entry in entries {
+        let entry = entry
+            .as_object()
+            .ok_or(InventoryError::InvalidHelperField("Affiliations item"))?;
+        let Some(tag) = entry.get("Tag").and_then(Value::as_str) else {
+            continue;
+        };
+        let tag = tag.trim();
+        if tag.is_empty() || tag.len() > MAX_IDENTIFIER_LENGTH {
+            continue;
+        }
+        let standing = entry
+            .get("Standing")
+            .and_then(Value::as_i64)
+            .unwrap_or_default();
+        if !(-1_000_000_000..=1_000_000_000).contains(&standing) {
+            continue;
+        }
+        let title = entry
+            .get("Title")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|title| !title.is_empty() && title.len() <= MAX_IDENTIFIER_LENGTH)
+            .map(str::to_owned);
+        by_tag.insert(
+            tag.to_owned(),
+            SyndicateStanding {
+                tag: tag.to_owned(),
+                standing,
+                title,
+            },
+        );
+    }
+    Ok(by_tag.into_values().collect())
 }
 
 fn read_only_equipped_mods(
@@ -451,7 +521,7 @@ fn attach_equipment_placements(
                 .and_then(Value::as_str)
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
-                .map(ToOwned::to_owned);
+                .and_then(equipment_custom_name);
             if equipment_custom_name
                 .as_ref()
                 .is_some_and(|name| name.len() > MAX_IDENTIFIER_LENGTH)
@@ -657,6 +727,8 @@ fn normalize_helper_payload(
         items,
         mod_usage_scanned: false,
         equipped_mods: Vec::new(),
+        credits: None,
+        syndicates: Vec::new(),
     })
 }
 
@@ -816,6 +888,8 @@ pub fn resolve_inventory<S: BuildHasher>(
         metadata: inventory.metadata.clone(),
         keep_copies,
         mod_usage_scanned: inventory.mod_usage_scanned,
+        credits: inventory.credits,
+        syndicates: inventory.syndicates.clone(),
         items,
     }
 }
@@ -1019,6 +1093,16 @@ fn strip_set_suffix(value: &str) -> String {
         .to_owned()
 }
 
+fn equipment_custom_name(value: &str) -> Option<String> {
+    let value = value.trim();
+    let visible = if value.starts_with("/Lotus/Language/") {
+        value.split_once('|').map(|(_, custom)| custom.trim())?
+    } else {
+        value
+    };
+    (!visible.is_empty()).then(|| visible.to_owned())
+}
+
 fn humanize_game_id(value: &str) -> String {
     let leaf = value.rsplit('/').next().unwrap_or(value);
     let mut result = String::with_capacity(leaf.len() + 8);
@@ -1132,6 +1216,23 @@ mod tests {
     use chrono::TimeZone;
     use platscope_domain::{CatalogMetadata, ProviderId};
 
+    #[test]
+    fn localization_key_is_never_used_as_equipment_custom_name() {
+        assert_eq!(
+            equipment_custom_name("/Lotus/Language/Weapons/CrpBEArcaPlasmorName|HILDI ONIA",)
+                .as_deref(),
+            Some("HILDI ONIA")
+        );
+        assert_eq!(
+            equipment_custom_name("Скорость").as_deref(),
+            Some("Скорость")
+        );
+        assert_eq!(
+            equipment_custom_name("/Lotus/Language/Weapons/KuvaNukorName"),
+            None
+        );
+    }
+
     fn catalog() -> ItemCatalog {
         ItemCatalog {
             metadata: CatalogMetadata {
@@ -1169,6 +1270,8 @@ mod tests {
             items,
             mod_usage_scanned: false,
             equipped_mods: Vec::new(),
+            credits: None,
+            syndicates: Vec::new(),
         }
     }
 
@@ -1368,7 +1471,12 @@ mod tests {
                     {"ItemType":"/Lotus/Test/Arcane","UpgradeFingerprint":"{}"}
                 ],
                 "Suits": [{"ItemType":"/Lotus/Test/LeveledSuit","XP":15}],
-                "LoadOutPresets": [{"ItemType":"/Lotus/Interface/Graphics/CustomUI/StalkerStyle"}]
+                "LoadOutPresets": [{"ItemType":"/Lotus/Interface/Graphics/CustomUI/StalkerStyle"}],
+                "Credits": 1234567,
+                "Affiliations": [
+                    {"Tag":"CephalonSudaSyndicate","Standing":42000,"Title":"Genius"},
+                    {"Tag":"RedVeilSyndicate","Standing":-5000}
+                ]
             },
             "ProfileSettings": {"ItemType":"/Lotus/Interface/AnotherInternalValue"}
         }"#;
@@ -1393,6 +1501,10 @@ mod tests {
         );
         assert!(parsed.mod_usage_scanned);
         assert!(parsed.equipped_mods.is_empty());
+        assert_eq!(parsed.credits, Some(1_234_567));
+        assert_eq!(parsed.syndicates.len(), 2);
+        assert_eq!(parsed.syndicates[0].tag, "CephalonSudaSyndicate");
+        assert_eq!(parsed.syndicates[0].title.as_deref(), Some("Genius"));
     }
 
     #[test]

@@ -20,14 +20,16 @@ use platscope_core::{
     HistoryBootstrapOutcome, HistoryService, InsightsService, InsightsView, InventoryService,
     InventoryView, Language, LivePricingResult, LivePricingService, LiveSellNowResult,
     LoggingGuard, MarketBrowserService, MarketDataService, MarketHistoryView, MarketRefreshOutcome,
-    MarketSearchResult, MarketSearchRow, PriceRecommendation, PricingService, SETTINGS_KEY,
-    SellNowService, SellNowView, SetComponentInsight, UpdateListingInput, enrich_account_view,
-    init_logging,
+    MarketSearchResult, MarketSearchRow, PriceRecommendation, PricingService,
+    ResourceConverterService, ResourceConverterView, SETTINGS_KEY, SellNowService, SellNowView,
+    SetComponentInsight, UpdateListingInput, enrich_account_view, init_logging,
 };
 use platscope_domain::{
     GameMetadataSnapshot, MarketItemKind, MarketVariantKey, PrimeSetDefinition,
 };
-use platscope_readonly_scan::inventory::InventoryScanner as ReadOnlyInventoryScanner;
+use platscope_readonly_scan::inventory::{
+    InventoryScanner as ReadOnlyInventoryScanner, ReadOnlyScanResult,
+};
 use platscope_storage::{
     Database, HistoryCoverage, MarketSnapshotSummary, NewTradeEvent, ProviderHealth, TradeEvent,
     TradeEventStatus,
@@ -45,6 +47,7 @@ struct AppState {
     live_pricing_service: LivePricingService,
     history_service: HistoryService,
     game_metadata_service: GameMetadataService,
+    resource_converter_service: ResourceConverterService,
     account_service: AccountService,
     read_only_inventory_scanner: Arc<ReadOnlyInventoryScanner>,
     companion_import_tracker: Mutex<CompanionImportTracker>,
@@ -738,7 +741,7 @@ async fn scan_read_only_inventory(
     state: State<'_, AppState>,
 ) -> Result<InventoryView, String> {
     let scanner = Arc::clone(&state.read_only_inventory_scanner);
-    let (bytes, scan_info) = tauri::async_runtime::spawn_blocking(move || scanner.scan(None, None))
+    let scan_result = tauri::async_runtime::spawn_blocking(move || scanner.scan(None, None))
         .await
         .map_err(|error| format!("scan task failed to run: {error}"))?
         .map_err(|error| match error {
@@ -749,6 +752,12 @@ async fn scan_read_only_inventory(
                 "read-only Warframe scan failed; session credentials were discarded".to_owned()
             }
         })?;
+    let ReadOnlyScanResult {
+        inventory_bytes: bytes,
+        session: scan_info,
+        nightwave_vendor,
+        nightwave_status,
+    } = scan_result;
     let response_bytes = bytes.len();
     let raw_json = String::from_utf8(bytes)
         .map_err(|_| "Digital Extremes returned non-UTF-8 inventory JSON".to_owned())?;
@@ -763,6 +772,20 @@ async fn scan_read_only_inventory(
         InventoryService::import_read_only_scan_json(&state.database, &raw_json, &settings)
             .map_err(|error| error.to_string())?,
     );
+    let nightwave_offer_count = nightwave_vendor.as_ref().map_or(0, |snapshot| {
+        let count = snapshot.offers.len();
+        if let Err(error) =
+            ResourceConverterService::cache_nightwave_vendor(&state.database, snapshot)
+        {
+            tracing::warn!(
+                event = "nightwave_vendor_cache_failed",
+                error = %error,
+                "exact Nightwave vendor snapshot was not cached"
+            );
+            return 0;
+        }
+        count
+    });
     tracing::info!(
         event = "read_only_inventory_scan_finished",
         build = scan_info.build.as_deref().unwrap_or("unknown"),
@@ -773,6 +796,8 @@ async fn scan_read_only_inventory(
         source_rows = view.metadata.item_count,
         resolved_rows = view.summary.resolved_rows,
         attention_rows = view.summary.attention_rows,
+        nightwave_status = nightwave_status.code(),
+        nightwave_offer_count,
         "read-only Warframe inventory scan imported"
     );
     app.emit("inventory-updated", ())
@@ -920,6 +945,26 @@ fn insights(state: State<'_, AppState>) -> Result<Option<InsightsView>, String> 
         .unwrap_or_default();
     InsightsService::view(&state.database, &settings)
         .map(|view| view.map(localize_insight_images))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // Tauri command extractor owns State.
+async fn resource_converter(
+    state: State<'_, AppState>,
+) -> Result<Option<ResourceConverterView>, String> {
+    let settings = state
+        .database
+        .lock()
+        .map_err(|_| "database state is unavailable".to_owned())?
+        .get_setting::<AppSettings>(SETTINGS_KEY)
+        .map_err(|error| error.to_string())?
+        .unwrap_or_default();
+    state
+        .resource_converter_service
+        .view(&state.database, &settings)
+        .await
+        .map(|view| view.map(localize_resource_converter_images))
         .map_err(|error| error.to_string())
 }
 
@@ -2055,6 +2100,24 @@ fn localize_insight_images(mut view: InsightsView) -> InsightsView {
     view
 }
 
+fn localize_resource_converter_images(mut view: ResourceConverterView) -> ResourceConverterView {
+    for route in &mut view.routes {
+        for action in &mut route.actions {
+            localize_component_image_url(&mut action.image_url);
+        }
+    }
+    for decision in view
+        .arcanes
+        .sell
+        .iter_mut()
+        .chain(view.arcanes.dissolve.iter_mut())
+        .chain(view.arcanes.hold.iter_mut())
+    {
+        localize_component_image_url(&mut decision.image_url);
+    }
+    view
+}
+
 fn component_image_response(
     cache_directory: &Path,
     request_path: &str,
@@ -3142,6 +3205,7 @@ pub fn run() {
             let live_pricing_service = LivePricingService::production()?;
             let history_service = HistoryService::production()?;
             let game_metadata_service = GameMetadataService::production()?;
+            let resource_converter_service = ResourceConverterService::production()?;
             let account_device_id =
                 if let Some(value) = database.get_setting::<String>(ACCOUNT_DEVICE_ID_KEY)? {
                     value
@@ -3166,6 +3230,7 @@ pub fn run() {
                 live_pricing_service,
                 history_service,
                 game_metadata_service,
+                resource_converter_service,
                 account_service,
                 read_only_inventory_scanner: Arc::new(ReadOnlyInventoryScanner::new()),
                 companion_import_tracker: Mutex::new(CompanionImportTracker::default()),
@@ -3192,6 +3257,7 @@ pub fn run() {
             refresh_market_data,
             refresh_game_metadata,
             insights,
+            resource_converter,
             open_market_items,
             account_status,
             account_connect,

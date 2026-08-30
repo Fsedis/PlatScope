@@ -14,6 +14,7 @@
     filterAndSortOpportunitySets,
     formatPercent,
     formatRatio,
+    rankRelicsToOpen,
     refinementLabel,
     setOpportunity,
     setRelicSupport,
@@ -23,6 +24,7 @@
     type SetOpportunityMode,
   } from "./insights";
   import { formatPlatinum } from "./market";
+  import ResourceConverter from "./ResourceConverter.svelte";
 
   export let onOpenSettings: () => void;
   export let onOpenMarketSales: () => void;
@@ -42,7 +44,7 @@
       openSettings: "Открыть настройки",
       noInventory: "Инвентарь ещё не загружен",
       noInventoryBody: "Запустите чтение инвентаря в настройках — после этого появятся персональные варианты.",
-      relicMode: "Из своих реликвий",
+      relicMode: "Открыть реликвию",
       buyMode: "Докупить",
       readyMode: "Продать сет",
       ducatMode: "На дукаты",
@@ -72,6 +74,26 @@
       relicPlan: "Подходящие реликвии",
       aggregateChance: "Шанс получить хотя бы одну нужную деталь из всех указанных копий",
       probabilityNote: "Это вероятность, а не гарантия. Расчёт предполагает одно открытие каждой копии и независимый результат.",
+      openNowTitle: "Какую реликвию открыть сейчас",
+      openNowBody: "Сначала — самая выгодная из тех, что уже есть у вас. Учитываем цену наград и шанс сразу закончить комплект.",
+      expectedPlatinum: "Ожидаемая платина",
+      perOpening: "за одно открытие",
+      pricedCoverage: (coverage: string) => `цены покрывают ${coverage} шанса`,
+      finishSet: "Закрыть комплект",
+      setProgress: "Нужная деталь",
+      noSetProgress: "текущие комплекты не продвигает",
+      preparation: "Подготовка",
+      alreadyOwned: "улучшение уже есть",
+      openRefinement: (refinement: string) => `Открыть: ${refinement}`,
+      upgradeRefinement: (source: string, target: string) => `Улучшить: ${source} → ${target}`,
+      traces: (count: number) => `${count} следов Пустоты`,
+      ownedRelicCopies: (count: number) => `Есть всего: ${count}`,
+      showAllRanked: (count: number) => `Показать все (${count})`,
+      showTopRanked: "Показать лучшие",
+      rankingDetails: "Как составлен рейтинг",
+      rankingExplanation: "70% приоритета даёт ожидаемая рыночная ценность наград, 30% — шанс одним открытием закончить следующий комплект. Улучшение предлагается только при заметном выигрыше относительно уже имеющейся реликвии.",
+      noRankedRelics: "В инвентаре нет реликвий, которые можно оценить. Обновите инвентарь и данные предметов в настройках.",
+      completableSetsTitle: "Какие комплекты помогут дособрать реликвии",
       owned: "Есть",
       perOpen: "За одно открытие",
       fromCopies: "Из всех копий",
@@ -128,7 +150,7 @@
       openSettings: "Open settings",
       noInventory: "Inventory has not been loaded",
       noInventoryBody: "Run the inventory scan in Settings to see personal opportunities.",
-      relicMode: "From owned relics",
+      relicMode: "Open a relic",
       buyMode: "Buy missing parts",
       readyMode: "Sell sets",
       ducatMode: "For ducats",
@@ -158,6 +180,26 @@
       relicPlan: "Matching relics",
       aggregateChance: "Chance of at least one useful drop across the listed copies",
       probabilityNote: "This is a probability, not a guarantee. It assumes one opening per copy and independent outcomes.",
+      openNowTitle: "Which relic to open now",
+      openNowBody: "Your best owned relic comes first, based on reward value and the chance to finish a set immediately.",
+      expectedPlatinum: "Expected platinum",
+      perOpening: "per opening",
+      pricedCoverage: (coverage: string) => `prices cover ${coverage} of outcomes`,
+      finishSet: "Finish a set",
+      setProgress: "Useful part",
+      noSetProgress: "does not advance current sets",
+      preparation: "Preparation",
+      alreadyOwned: "refinement already owned",
+      openRefinement: (refinement: string) => `Open: ${refinement}`,
+      upgradeRefinement: (source: string, target: string) => `Refine: ${source} → ${target}`,
+      traces: (count: number) => `${count} Void Traces`,
+      ownedRelicCopies: (count: number) => `Owned total: ${count}`,
+      showAllRanked: (count: number) => `Show all (${count})`,
+      showTopRanked: "Show the best",
+      rankingDetails: "How this ranking works",
+      rankingExplanation: "Expected market value contributes 70% of the priority; a one-opening chance to finish the next set contributes 30%. Refinement is recommended only when it is a meaningful improvement over a relic you already own.",
+      noRankedRelics: "No owned relics can be evaluated. Refresh inventory and item data in Settings.",
+      completableSetsTitle: "Sets these relics can help finish",
       owned: "Owned",
       perOpen: "Per opening",
       fromCopies: "Across copies",
@@ -211,6 +253,7 @@
   let errorMessage = "";
   let activeMode: OpportunityMode = "relics";
   let setQuery = "";
+  let showAllRankedRelics = false;
   let expandedRelicSet = "";
   let marketStatus = "";
   let marketBusySlug = "";
@@ -232,6 +275,8 @@
   $: readyOpportunityCount = filterAndSortOpportunitySets(view?.sets ?? [], view?.relics ?? [], "ready", "", $locale).length;
   $: setRows = activeMode === "relics" ? relicRows : activeMode === "buy" ? buyRows : activeMode === "ready" ? readyRows : [];
   $: ducatRows = (view?.ducats ?? []).filter((row) => row.sellableQuantity > 0 && row.efficiency.credible);
+  $: rankedRelics = rankRelicsToOpen(view?.relics ?? [], view?.sets ?? []);
+  $: visibleRankedRelics = showAllRankedRelics ? rankedRelics : rankedRelics.slice(0, 5);
   $: ownedRelicCount = (view?.relics ?? []).reduce((sum, relic) => sum + relic.ownedQuantity, 0);
   $: listedSetItemIds = new Set(
     (accountView?.orders ?? []).filter((order) => order.type === "sell").map((order) => order.itemId),
@@ -370,6 +415,8 @@
 </script>
 
 <section class="opportunities" aria-label={c.region}>
+  <ResourceConverter {onOpenSettings} />
+
   <div class="data-status" role="status" aria-live="polite">
     {#if loading}{c.reading}{:else if view}{c.ready(view.metadata.fetchedAt.slice(0, 10))}{/if}
   </div>
@@ -447,6 +494,78 @@
         </div>
       </section>
     {:else}
+      {#if activeMode === "relics"}
+        <section class="relic-ranking" aria-labelledby="relic-ranking-title">
+          <header class="relic-ranking__header">
+            <div>
+              <h2 id="relic-ranking-title">{c.openNowTitle}</h2>
+              <p>{c.openNowBody}</p>
+            </div>
+            {#if rankedRelics.length > 5}
+              <button type="button" class="secondary" onclick={() => (showAllRankedRelics = !showAllRankedRelics)}>
+                {showAllRankedRelics ? c.showTopRanked : c.showAllRanked(rankedRelics.length)}
+              </button>
+            {/if}
+          </header>
+
+          {#if visibleRankedRelics.length > 0}
+            <ol class="relic-ranking__list">
+              {#each visibleRankedRelics as recommendation, index (recommendation.relicSlug)}
+                <li class:relic-ranking__item--best={index === 0} class="relic-ranking__item">
+                  <span class="relic-rank" aria-label={`№ ${index + 1}`}>{index + 1}</span>
+                  <div class="relic-ranking__identity">
+                    {#if recommendation.imageUrl}<img src={recommendation.imageUrl} alt="" loading="lazy" decoding="async" />{/if}
+                    <div>
+                      <h3>{recommendation.displayName}</h3>
+                      <p>{c.ownedRelicCopies(recommendation.totalOwnedQuantity)} · {refinementLabel(recommendation.sourceRefinement, $locale)} ×{recommendation.sourceQuantity}</p>
+                    </div>
+                  </div>
+                  <dl class="relic-ranking__metrics">
+                    <div>
+                      <dt>{c.expectedPlatinum}</dt>
+                      <dd>{formatPlatinum(recommendation.expectedPlatinum, $locale)}<small>{c.perOpening} · {c.pricedCoverage(formatProbability(recommendation.pricedChancePercent))}</small></dd>
+                    </div>
+                    <div>
+                      <dt>{c.finishSet}</dt>
+                      <dd>{formatProbability(recommendation.completionChancePercent)}
+                        <small>
+                          {#if recommendation.completionTargets[0]}
+                            {recommendation.completionTargets[0].displayName}
+                          {:else if recommendation.progressChancePercent > 0}
+                            {c.setProgress}: {formatProbability(recommendation.progressChancePercent)}
+                          {:else}
+                            {c.noSetProgress}
+                          {/if}
+                        </small>
+                      </dd>
+                    </div>
+                    <div class="relic-ranking__action">
+                      <dt>{c.preparation}</dt>
+                      <dd>{refinementLabel(recommendation.recommendedRefinement, $locale)}
+                        <small>{recommendation.traceCost > 0 ? c.traces(recommendation.traceCost) : c.alreadyOwned}</small>
+                      </dd>
+                    </div>
+                  </dl>
+                  <p class="relic-ranking__decision">
+                    {recommendation.traceCost > 0
+                      ? c.upgradeRefinement(refinementLabel(recommendation.sourceRefinement, $locale), refinementLabel(recommendation.recommendedRefinement, $locale))
+                      : c.openRefinement(refinementLabel(recommendation.recommendedRefinement, $locale))}
+                  </p>
+                </li>
+              {/each}
+            </ol>
+          {:else}
+            <p class="relic-ranking__empty">{c.noRankedRelics}</p>
+          {/if}
+
+          <details class="relic-ranking__details">
+            <summary>{c.rankingDetails}</summary>
+            <p>{c.rankingExplanation}</p>
+          </details>
+        </section>
+
+        <h2 class="set-list-heading">{c.completableSetsTitle}</h2>
+      {/if}
       <div class="set-list">
         {#each setRows as row (row.definition.setSlug)}
           {@const opportunity = setOpportunity(row)}
@@ -625,6 +744,32 @@
   .set-search { display: grid; flex: 0 1 20rem; gap: .25rem; color: var(--text); font-size: .75rem; font-weight: 700; }
   .set-search input { min-height: 2.25rem; width: 100%; border: 1px solid var(--border); border-radius: .5rem; padding-inline: .65rem; background: oklch(0.995 0.004 84); color: var(--text); }
   .action-status { min-height: 1.15rem; color: var(--success); font-size: .75rem; font-weight: 700; }
+  .relic-ranking { min-width: 0; overflow: hidden; border-radius: .8rem; background: var(--surface-1); box-shadow: var(--shadow-sm); }
+  .relic-ranking__header { display: flex; align-items: start; justify-content: space-between; gap: 1rem; padding: .8rem; background: var(--surface-2); }
+  .relic-ranking__header h2, .relic-ranking__header p { margin: 0; }
+  .relic-ranking__header h2 { font-size: 1rem; }
+  .relic-ranking__header p { max-width: 70ch; margin-block-start: .2rem; color: var(--text-muted); font-size: .75rem; }
+  .relic-ranking__header button { flex: none; }
+  .relic-ranking__list { display: grid; margin: 0; padding: 0; list-style: none; }
+  .relic-ranking__item { display: grid; grid-template-columns: 1.6rem minmax(11rem, 1fr) minmax(22rem, 1.65fr) auto; align-items: center; gap: .6rem; min-width: 0; padding: .55rem .75rem; border-block-start: 1px solid var(--border); }
+  .relic-ranking__item--best { background: var(--accent-soft); box-shadow: inset .2rem 0 0 var(--accent); }
+  .relic-rank { display: grid; place-items: center; width: 1.45rem; height: 1.45rem; border-radius: 999px; background: var(--surface-2); color: var(--accent-strong); font-size: .72rem; font-weight: 800; font-variant-numeric: tabular-nums; }
+  .relic-ranking__item--best .relic-rank { background: var(--accent); color: oklch(0.985 0.009 84); }
+  .relic-ranking__identity { display: flex; align-items: center; min-width: 0; gap: .5rem; }
+  .relic-ranking__identity img { flex: none; width: 2.65rem; height: 2.65rem; border-radius: .35rem; object-fit: contain; outline: 1px solid oklch(0 0 0 / .1); outline-offset: -1px; }
+  .relic-ranking__identity h3, .relic-ranking__identity p { margin: 0; }
+  .relic-ranking__identity h3 { font-size: .86rem; line-height: 1.25; }
+  .relic-ranking__identity p { margin-block-start: .1rem; color: var(--text-muted); font-size: .65rem; }
+  .relic-ranking__metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .35rem; margin: 0; }
+  .relic-ranking__metrics > div { min-width: 0; border-inline-start: 1px solid var(--border); padding-inline: .55rem; }
+  .relic-ranking__metrics dd { font-size: .9rem; }
+  .relic-ranking__metrics small { overflow-wrap: anywhere; }
+  .relic-ranking__action dd { color: var(--accent-strong); }
+  .relic-ranking__decision { min-width: 9.5rem; max-width: 13rem; margin: 0; border: 1px solid var(--accent); border-radius: .45rem; padding: .38rem .5rem; background: var(--surface-1); color: var(--accent-strong); font-size: .7rem; font-weight: 750; line-height: 1.25; text-align: center; }
+  .relic-ranking__details { border-block-start: 1px solid var(--border); padding-inline: .8rem; }
+  .relic-ranking__details p { max-width: 80ch; margin: 0 0 .65rem; color: var(--text-muted); font-size: .7rem; }
+  .relic-ranking__empty { margin: 0; border-block-start: 1px solid var(--border); padding: .8rem; color: var(--text-muted); font-size: .78rem; }
+  .set-list-heading { margin: .1rem 0 -.15rem; font-size: .92rem; }
   .set-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 32rem), 1fr)); align-items: start; gap: .7rem; }
   .set-card, .ducat-panel { min-width: 0; border-radius: .8rem; background: var(--surface-1); box-shadow: var(--shadow-sm); }
   .set-card { padding: .75rem; }
@@ -697,12 +842,20 @@
     .opportunity-toolbar, .message--action { align-items: stretch; flex-direction: column; }
     .set-search { flex-basis: auto; width: 100%; }
     .message--action button { align-self: start; }
+    .relic-ranking__item { grid-template-columns: 1.6rem minmax(0, 1fr) auto; }
+    .relic-ranking__metrics { grid-column: 2 / -1; width: 100%; }
+    .relic-ranking__decision { grid-column: 3; grid-row: 1; }
     .relic-row { grid-template-columns: minmax(0, 1fr); }
     .useful-rewards { grid-column: 1; }
   }
   @media (max-width: 42rem) {
     .mode-switcher { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .set-card__header { align-items: stretch; flex-direction: column; }
+    .relic-ranking__header { align-items: stretch; flex-direction: column; }
+    .relic-ranking__header button { align-self: start; }
+    .relic-ranking__item { grid-template-columns: 1.6rem minmax(0, 1fr); }
+    .relic-ranking__metrics { grid-column: 1 / -1; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .relic-ranking__decision { grid-column: 2; grid-row: auto; justify-self: start; max-width: none; }
     .route-badge { width: fit-content; }
     .set-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .card-actions button { flex: 1 1 12rem; }
@@ -710,10 +863,11 @@
     .ducat-panel .warning { text-align: start; }
   }
   @media (max-width: 28rem) {
-    .mode-switcher, .order-fields, .relic-row dl { grid-template-columns: minmax(0, 1fr); }
+    .mode-switcher, .order-fields, .relic-row dl, .relic-ranking__metrics { grid-template-columns: minmax(0, 1fr); }
+    .relic-ranking__metrics > div { border-inline-start: 0; border-block-start: 1px solid var(--border); padding: .35rem 0 0; }
     .set-card { padding: .65rem; }
   }
   @media (forced-colors: active) {
-    .set-card, .relic-row, .order-panel, .mode-switcher button[aria-pressed="true"] { outline: 1px solid CanvasText; }
+    .set-card, .relic-row, .order-panel, .relic-ranking, .mode-switcher button[aria-pressed="true"] { outline: 1px solid CanvasText; }
   }
 </style>

@@ -26,6 +26,7 @@ import type {
 } from "./market";
 import type { LiveSellNowResult, SellNowRow, SellNowView } from "./sellNow";
 import type { RelicRewardScanView } from "./relicRewards";
+import type { ResourceConverterView } from "./resourceConverter";
 import type { TradeEvent } from "./tradeShift";
 
 const sourceDate = "2026-08-26";
@@ -713,6 +714,9 @@ export async function installMarketBrowserMock(): Promise<void> {
     if (command === "insights") {
       return makeInsightsView();
     }
+    if (command === "resource_converter") {
+      return makeResourceConverterView();
+    }
     if (command === "open_market_items") {
       const slugs = (args as { slugs?: unknown } | undefined)?.slugs;
       return Array.isArray(slugs) ? slugs.length : 0;
@@ -828,6 +832,143 @@ export async function installMarketBrowserMock(): Promise<void> {
     }
     throw new Error(`Unknown mock command: ${command}`);
   });
+}
+
+function makeResourceConverterView(): ResourceConverterView {
+  return {
+    fetchedAt: "2026-08-31T12:20:00Z",
+    inventoryObservedAt: "2026-08-31T12:18:00Z",
+    marketSourceDate: "2026-08-31",
+    confirmedPlatinum: 114,
+    expectedVosforPlatinum: 37,
+    unavailableSources: [],
+    routes: [
+      {
+        source: "syndicate",
+        status: "ready",
+        reason: "confirmed",
+        actions: [
+          {
+            vendorName: "Цефалон Суда",
+            currency: "standing",
+            balance: 71_400,
+            cost: 25_000,
+            itemSlug: "energy_conversion",
+            itemName: "Преобразование Энергии",
+            imageUrl: null,
+            quantity: 2,
+            unitPrice: 13,
+            estimatedPlatinum: 26,
+            includedInTotal: true,
+          },
+        ],
+      },
+      {
+        source: "nightwave",
+        status: "conditional",
+        reason: "weekly_stock_unverified",
+        actions: [
+          {
+            vendorName: "Нора Найт",
+            currency: "nightwave_cred",
+            balance: 86,
+            cost: 20,
+            itemSlug: "steel_charge",
+            itemName: "Стальной Натиск",
+            imageUrl: null,
+            quantity: 4,
+            unitPrice: 9,
+            estimatedPlatinum: 36,
+            includedInTotal: false,
+          },
+        ],
+      },
+      {
+        source: "void_trader",
+        status: "ready",
+        reason: "confirmed",
+        availableAt: "2026-08-31T10:00:00Z",
+        availableUntil: "2026-09-01T13:00:00Z",
+        location: "Реле Ларунда (Меркурий)",
+        actions: [
+          {
+            vendorName: "Баро Ки’Тиир",
+            currency: "ducat",
+            balance: 1_130,
+            cost: 350,
+            itemSlug: "primed_flow",
+            itemName: "Поток Прайм",
+            imageUrl: null,
+            quantity: 2,
+            unitPrice: 35,
+            estimatedPlatinum: 70,
+            includedInTotal: true,
+          },
+        ],
+      },
+      {
+        source: "steel_path",
+        status: "unavailable",
+        reason: "reward_not_tradeable",
+        availableUntil: "2026-09-06T00:00:00Z",
+        actions: [],
+      },
+    ],
+    arcanes: {
+      available: true,
+      reason: "confirmed",
+      bestPackName: "Набор мистификаторов Эйдолона",
+      packExpectedPlatinum: 7.4,
+      priceCoveragePercent: 93,
+      directSalePlatinum: 18,
+      dissolutionExpectedPlatinum: 37,
+      sell: [
+        {
+          decision: "sell",
+          slug: "arcane_energize",
+          displayName: "Мистическое Ускорение",
+          imageUrl: null,
+          rank: 0,
+          quantity: 2,
+          marketPriceEach: 9,
+          vosforEach: 28,
+          vosforTotal: 56,
+          equivalentPlatinumEach: 4.1,
+          estimatedPlatinum: 18,
+        },
+      ],
+      dissolve: [
+        {
+          decision: "dissolve",
+          slug: "arcane_ice",
+          displayName: "Мистический Лёд",
+          imageUrl: null,
+          rank: 0,
+          quantity: 8,
+          marketPriceEach: 1,
+          vosforEach: 24,
+          vosforTotal: 192,
+          equivalentPlatinumEach: 3.6,
+          estimatedPlatinum: 29,
+        },
+      ],
+      hold: [
+        {
+          decision: "hold",
+          slug: "arcane_avenger",
+          displayName: "Мистический Мститель",
+          imageUrl: null,
+          rank: 3,
+          quantity: 1,
+          marketPriceEach: 21,
+          vosforEach: 144,
+          vosforTotal: 144,
+          equivalentPlatinumEach: 20,
+          estimatedPlatinum: 20,
+        },
+      ],
+    },
+  };
 }
 
 function makeInsightsView(): InsightsView {

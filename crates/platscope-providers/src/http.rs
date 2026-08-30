@@ -36,6 +36,26 @@ impl BoundedHttpClient {
         url: &str,
         allow_text_plain: bool,
     ) -> Result<Vec<u8>, ProviderError> {
+        self.get_json_with_limit(url, allow_text_plain, MAX_BULK_RESPONSE_BYTES)
+            .await
+    }
+
+    /// Загружает JSON с отдельным ограничением размера для заведомо крупных справочников.
+    ///
+    /// # Errors
+    ///
+    /// Возвращает типизированную transport/HTTP/schema ошибку или ошибку превышения лимита.
+    pub async fn get_json_with_limit(
+        &self,
+        url: &str,
+        allow_text_plain: bool,
+        max_response_bytes: usize,
+    ) -> Result<Vec<u8>, ProviderError> {
+        if max_response_bytes == 0 {
+            return Err(ProviderError::validation(
+                "HTTP response size limit must be greater than zero",
+            ));
+        }
         let response = self
             .client
             .get(url)
@@ -67,11 +87,12 @@ impl BoundedHttpClient {
 
         if response
             .content_length()
-            .is_some_and(|size| size > MAX_BULK_RESPONSE_BYTES as u64)
+            .is_some_and(|size| size > max_response_bytes as u64)
         {
+            let limit_mib = max_response_bytes / (1024 * 1024);
             return Err(ProviderError::new(
                 ProviderErrorCode::ResponseTooLarge,
-                "declared response exceeds 32 MiB",
+                format!("declared response exceeds {limit_mib} MiB"),
                 false,
             ));
         }
@@ -94,16 +115,17 @@ impl BoundedHttpClient {
         let declared_size = response
             .content_length()
             .unwrap_or_default()
-            .min(MAX_BULK_RESPONSE_BYTES as u64);
+            .min(max_response_bytes as u64);
         let mut body =
-            Vec::with_capacity(usize::try_from(declared_size).unwrap_or(MAX_BULK_RESPONSE_BYTES));
+            Vec::with_capacity(usize::try_from(declared_size).unwrap_or(max_response_bytes));
         let mut stream = response.bytes_stream();
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.map_err(|error| map_reqwest_error(&error))?;
-            if body.len().saturating_add(chunk.len()) > MAX_BULK_RESPONSE_BYTES {
+            if body.len().saturating_add(chunk.len()) > max_response_bytes {
+                let limit_mib = max_response_bytes / (1024 * 1024);
                 return Err(ProviderError::new(
                     ProviderErrorCode::ResponseTooLarge,
-                    "response exceeds 32 MiB",
+                    format!("response exceeds {limit_mib} MiB"),
                     false,
                 ));
             }

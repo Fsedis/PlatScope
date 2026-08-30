@@ -2,8 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import type { InventoryViewItem } from "./inventory";
 import {
-  buildEquippedEquipmentGroups,
+  buildEquippedModEntries,
   configLabel,
+  filterEquippedModEntries,
   summarizeEquippedMods,
 } from "./equippedMods";
 
@@ -49,21 +50,36 @@ const item: InventoryViewItem = {
 };
 
 describe("equipped mods presentation", () => {
-  it("groups one physical item by its loadout configurations", () => {
-    const groups = buildEquippedEquipmentGroups([item]);
-    expect(groups).toHaveLength(1);
-    expect(groups[0].displayName).toBe("Вольт Прайм");
-    expect(groups[0].configs.map((config) => config.index)).toEqual([0, 1]);
-    expect(summarizeEquippedMods([item], groups)).toEqual({
+  it("groups every placement under the selected mod", () => {
+    const entries = buildEquippedModEntries([item]);
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0].displayName).toBe("Поток Прайм");
+    expect(entries[0].locations).toHaveLength(1);
+    expect(entries[0].locations[0].displayName).toBe("Вольт Прайм");
+    expect(entries[0].locations[0].configIndexes).toEqual([0, 1]);
+    expect(entries[0].equipmentCount).toBe(1);
+    expect(entries[0].configCount).toBe(2);
+  });
+
+  it("filters the mod list by mod name and placement type", () => {
+    const entries = buildEquippedModEntries([item]);
+
+    expect(filterEquippedModEntries(entries, "поток", "all")).toHaveLength(1);
+    expect(filterEquippedModEntries(entries, "вольт", "all")).toEqual([]);
+    expect(filterEquippedModEntries(entries, "", "primary")).toEqual([]);
+    expect(filterEquippedModEntries(entries, "", "warframe")).toHaveLength(1);
+  });
+
+  it("counts physical copies separately from loadout placements", () => {
+    const entries = buildEquippedModEntries([item]);
+
+    expect(summarizeEquippedMods(entries)).toEqual({
+      modVariants: 1,
       modCopies: 1,
       equipmentCount: 1,
       configCount: 2,
     });
-  });
-
-  it("finds groups by mod name and filters equipment kind", () => {
-    expect(buildEquippedEquipmentGroups([item], "поток", "all")).toHaveLength(1);
-    expect(buildEquippedEquipmentGroups([item], "", "primary")).toEqual([]);
     expect(configLabel(0)).toBe("A");
     expect(configLabel(2)).toBe("C");
   });
