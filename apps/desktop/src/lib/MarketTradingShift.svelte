@@ -5,6 +5,7 @@
 
   import {
     accountActionErrorMessage,
+    orderEnglishName,
     validateListingNumbers,
     type AccountOrder,
     type AccountView,
@@ -24,7 +25,6 @@
     type TradeShiftRow,
   } from "./tradeShift";
 
-  export let onOpenAccount: () => void;
   export let onOpenInventory: () => void;
   export let onBrowseMarket: () => void;
 
@@ -38,7 +38,10 @@
   let liveProgress = "";
   let errorMessage = "";
   let actionMessage = "";
-  let showAll = false;
+  let accountBusy = false;
+  let accountPanelOpen = false;
+  let email = "";
+  let password = "";
   let selectedIds = new Set<string>();
   let reviewOpen = false;
   let visibilityIntent: boolean | null = null;
@@ -57,7 +60,7 @@
   $: rows = account
     ? buildTradeShiftRows(account, inventory, recommendations)
     : [];
-  $: visibleRows = showAll ? rows : rows.filter((row) => row.health !== "healthy");
+  $: visibleRows = rows;
   $: actionableRows = rows.filter((row) => row.needsAction && rowChange(row) !== null);
   $: selectedRows = actionableRows.filter((row) => selectedIds.has(row.order.id));
   $: saleEvents = events.filter(
@@ -438,6 +441,48 @@
     }
   }
 
+  async function connectAccount(event: SubmitEvent): Promise<void> {
+    event.preventDefault();
+    accountBusy = true;
+    errorMessage = "";
+    actionMessage = "Подключаем аккаунт WFM…";
+    try {
+      account = await invoke<AccountView>("account_connect", { email, password });
+      email = "";
+      password = "";
+      recommendations = new Map();
+      await loadSavedPrices();
+      actionMessage = "Аккаунт WFM подключён.";
+    } catch {
+      password = "";
+      actionMessage = "";
+      errorMessage = "Не удалось подключить WFM. Проверьте email и пароль Warframe Market.";
+    } finally {
+      accountBusy = false;
+    }
+  }
+
+  async function disconnectAccount(): Promise<void> {
+    accountBusy = true;
+    errorMessage = "";
+    actionMessage = "Отключаем аккаунт WFM…";
+    try {
+      const remotelyRevoked = await invoke<boolean>("account_disconnect");
+      account = { connected: false, profile: null, orders: [], orderItems: {} };
+      recommendations = new Map();
+      selectedIds = new Set();
+      accountPanelOpen = false;
+      actionMessage = remotelyRevoked
+        ? "Аккаунт WFM отключён."
+        : "Данные входа удалены с этого компьютера; WFM не подтвердил завершение сессии.";
+    } catch {
+      actionMessage = "";
+      errorMessage = "Не удалось отключить аккаунт WFM. Повторите попытку.";
+    } finally {
+      accountBusy = false;
+    }
+  }
+
   function healthLabel(health: OrderHealth): string {
     return ({
       inventory_mismatch: "Количество не сходится",
@@ -485,14 +530,15 @@
   }
 </script>
 
-<section class="sales-workspace" aria-labelledby="sales-heading" aria-busy={loading || applying}>
+<section class="sales-workspace" aria-labelledby="sales-heading" aria-busy={loading || applying || accountBusy}>
   <header class="sales-header">
     <div>
       <h2 id="sales-heading">Мои продажи</h2>
-      <p>Сначала сделки и ордера, которые требуют решения. Исправные ордера можно раскрыть ниже.</p>
+      <p>Все ордера показаны сразу; те, что требуют решения, стоят первыми.</p>
     </div>
     {#if account?.connected}
       <div class="sales-header__actions">
+        <button class="secondary compact" type="button" aria-expanded={accountPanelOpen} onclick={() => (accountPanelOpen = !accountPanelOpen)}>WFM · <span translate="no">{account.profile?.ingameName ?? "аккаунт"}</span></button>
         <button class="secondary compact" type="button" disabled={loading || applying} onclick={loadAll}>Обновить ордера</button>
         {#if refreshingLive}
           <button class="secondary compact" type="button" onclick={() => (stopLiveRefresh = true)}>Остановить проверку</button>
@@ -508,13 +554,31 @@
   </div>
   {#if errorMessage}<p class="inline-error" role="alert">{errorMessage}</p>{/if}
 
+  {#if accountPanelOpen && account?.connected}
+    <section class="account-panel" aria-labelledby="wfm-account-heading">
+      <div>
+        <h3 id="wfm-account-heading"><span translate="no">{account.profile?.ingameName ?? "Warframe Market"}</span></h3>
+        <p>{account.profile?.platform.toUpperCase() ?? "PC"} · {account.profile?.crossplay ? "общий рынок включён" : "общий рынок выключен"} · {account.profile?.verification ? "аккаунт подтверждён" : "аккаунт не подтверждён"}</p>
+      </div>
+      <div class="account-panel__actions">
+        <button class="secondary compact" type="button" disabled={accountBusy} onclick={reloadAccount}>Обновить статус</button>
+        <button class="danger-secondary compact" type="button" disabled={accountBusy} onclick={disconnectAccount}>Отключить WFM</button>
+      </div>
+    </section>
+  {/if}
+
   {#if loading}
     <p class="sales-empty">Загружаем ордера, остатки и последние сделки…</p>
   {:else if !account?.connected}
-    <div class="sales-empty sales-empty--action">
-      <div><strong>Подключите Warframe Market</strong><span>После подключения здесь появятся ваши ордера и подтверждённые игрой продажи.</span></div>
-      <button class="compact" type="button" onclick={onOpenAccount}>Подключить WFM</button>
-    </div>
+    <form class="connect-panel" onsubmit={connectAccount}>
+      <div class="connect-panel__copy"><h3>Подключить Warframe Market</h3><p>После подключения здесь появятся ордера и подтверждённые игрой продажи.</p></div>
+      <div class="connect-fields">
+        <label for="market-wfm-email">Email Warframe Market<input id="market-wfm-email" name="username" type="email" autocomplete="username" spellcheck="false" bind:value={email} required maxlength="128" placeholder="name@example.com" /></label>
+        <label for="market-wfm-password">Пароль Warframe Market<input id="market-wfm-password" name="password" type="password" autocomplete="current-password" bind:value={password} required maxlength="128" /></label>
+      </div>
+      <button class="compact" type="submit" disabled={accountBusy}>{accountBusy ? "Подключаем…" : "Подключить WFM"}</button>
+      <details class="security-details"><summary>Как хранятся данные входа</summary><p>Пароль используется только для входа и не сохраняется. Ключ сессии хранится в защищённом хранилище Windows.</p></details>
+    </form>
   {:else}
     <dl class="sales-summary">
       <div class:attention={attentionCount > 0}><dt>Требуют действий</dt><dd>{attentionCount}</dd></div>
@@ -523,7 +587,7 @@
     </dl>
 
     {#if !account.profile?.verification}
-      <div class="verification-note" role="note"><span>Аккаунт WFM не подтверждён: ордера доступны для просмотра, но менять их нельзя.</span><button class="text-button compact" type="button" onclick={onOpenAccount}>Проверить подключение</button></div>
+      <div class="verification-note" role="note"><span>Аккаунт WFM не подтверждён: ордера доступны для просмотра, но менять их нельзя.</span><button class="text-button compact" type="button" disabled={accountBusy} onclick={reloadAccount}>Обновить статус</button></div>
     {/if}
 
     {#if pendingEvents.length}
@@ -569,10 +633,9 @@
       <header class="orders-toolbar">
         <div>
           <h3 id="orders-heading">Ордера на продажу</h3>
-          <span>{showAll ? `${visibleRows.length} всего` : `${visibleRows.length} требуют внимания`}</span>
+          <span>{visibleRows.length} всего</span>
         </div>
         <div class="orders-toolbar__actions">
-          <label class="compact-check"><input type="checkbox" bind:checked={showAll} /> Показать исправные</label>
           <button class="compact" type="button" disabled={!selectedRows.length || applying} onclick={() => (reviewOpen = true)}>Посмотреть изменения ({selectedRows.length})</button>
         </div>
       </header>
@@ -585,6 +648,7 @@
             <thead><tr><th class="check-column"><span class="sr-only">Выбрать</span></th><th>Предмет</th><th>В ордере</th><th>Рекомендуется</th><th>Можно продать</th><th>Что сделать</th></tr></thead>
             <tbody>
               {#each visibleRows as row (row.order.id)}
+                {@const englishName = orderEnglishName(row.item ?? undefined)}
                 <tr class:row-attention={row.needsAction}>
                   <td>
                     {#if rowChange(row)}
@@ -594,7 +658,11 @@
                   <th scope="row">
                     <span class="item-cell">
                       {#if row.item?.imageUrl}<img src={row.item.imageUrl} alt="" loading="lazy" />{/if}
-                      <span><strong>{row.item?.displayName ?? "Неизвестный предмет"}</strong><small>{row.order.visible ? "виден покупателям" : "скрыт"}</small></span>
+                      <span>
+                        <strong>{row.item?.displayName ?? "Неизвестный предмет"}</strong>
+                        {#if englishName}<span class="item-name-en" translate="no">{englishName}</span>{/if}
+                        <small>{row.order.visible ? "виден покупателям" : "скрыт"}</small>
+                      </span>
                     </span>
                   </th>
                   <td><strong>{formatPlatinum(row.order.platinum)}</strong><small>×{row.order.quantity}</small></td>
@@ -618,8 +686,6 @@
             </tbody>
           </table>
         </div>
-      {:else if summary.total}
-        <div class="all-good"><strong>С ордерами всё в порядке</strong><span>Цены и количество не требуют изменений.</span><button class="text-button compact" type="button" onclick={() => (showAll = true)}>Показать все</button></div>
       {:else}
         <div class="sales-empty sales-empty--action"><div><strong>Нет ордеров на продажу</strong><span>Найдите предмет, проверьте цену и выставьте его из раздела «Мои предметы».</span></div><button class="secondary compact" type="button" onclick={onBrowseMarket}>Найти предмет</button></div>
       {/if}
@@ -721,11 +787,25 @@
   .sales-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; padding: .1rem; }
   .sales-header h2 { margin-bottom: .12rem; font-size: 1.08rem; }
   .sales-header p { max-width: 65ch; margin: 0; color: var(--text-muted); font-size: .76rem; }
-  .sales-header__actions, .orders-toolbar__actions, .confirm-actions, .trade-event__actions, .management-panel__actions { display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; }
+  .sales-header__actions, .account-panel__actions, .orders-toolbar__actions, .confirm-actions, .trade-event__actions, .management-panel__actions { display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; }
   button.compact { min-height: 1.8rem; padding: .22rem .5rem; font-size: .75rem; }
   .status-line { min-height: .9rem; padding: 0 .1rem; color: var(--text-muted); font-size: .7rem; }
   .status-line:empty { display: none; }
   .inline-error { margin: 0; border-radius: .45rem; padding: .5rem .6rem; background: var(--danger-soft); color: var(--danger); font-size: .75rem; font-weight: 650; }
+  .account-panel { display: flex; align-items: center; justify-content: space-between; gap: .8rem; border: 1px solid var(--border); border-radius: .55rem; padding: .55rem .65rem; background: var(--surface-2); }
+  .account-panel h3, .account-panel p { margin: 0; }
+  .account-panel h3 { font-size: .82rem; }
+  .account-panel p { margin-block-start: .1rem; color: var(--text-muted); font-size: .68rem; }
+  .connect-panel { display: grid; justify-items: start; gap: .65rem; border: 1px solid var(--border); border-radius: .6rem; padding: .8rem; background: var(--surface-1); box-shadow: var(--shadow-sm); }
+  .connect-panel__copy h3, .connect-panel__copy p { margin: 0; }
+  .connect-panel__copy h3 { font-size: .92rem; }
+  .connect-panel__copy p { margin-block-start: .12rem; color: var(--text-muted); font-size: .74rem; }
+  .connect-fields { display: grid; grid-template-columns: repeat(2, minmax(12rem, 1fr)); gap: .6rem; width: min(100%, 38rem); }
+  .connect-fields label { display: grid; gap: .22rem; color: var(--text-muted); font-size: .68rem; font-weight: 700; }
+  .connect-fields input { min-width: 0; min-height: 2.1rem; width: 100%; border: 1px solid var(--border); border-radius: .45rem; padding: .35rem .55rem; background: oklch(0.995 0.004 84); color: var(--text); }
+  .security-details { width: min(100%, 38rem); color: var(--text-muted); font-size: .7rem; }
+  .security-details summary { cursor: pointer; font-weight: 700; }
+  .security-details p { margin: .4rem 0 0; line-height: 1.45; }
   .sales-empty { margin: 0; border: 1px solid var(--border); border-radius: .6rem; padding: .85rem; background: var(--surface-1); color: var(--text-muted); font-size: .78rem; }
   .sales-empty--action { display: flex; align-items: center; justify-content: space-between; gap: .8rem; }
   .sales-empty strong, .sales-empty span { display: block; }
@@ -767,6 +847,7 @@
   .item-cell img { width: 2rem; height: 2rem; border: 1px solid var(--border); border-radius: .35rem; object-fit: contain; background: var(--surface-2); }
   .item-cell strong, .item-cell small { display: block; }
   .item-cell strong { display: -webkit-box; overflow: hidden; line-height: 1.2; text-transform: none; letter-spacing: 0; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; }
+  .item-cell .item-name-en { display: block; margin-block-start: .08rem; overflow: hidden; color: var(--text-muted); font-size: .66rem; font-weight: 600; line-height: 1.2; text-overflow: ellipsis; text-transform: none; white-space: nowrap; }
   .item-cell small { margin-top: .1rem; color: var(--text-subtle); font-size: .64rem; font-weight: 500; }
   .suggestion { color: var(--success); }
   .mismatch { color: var(--danger); }
@@ -785,9 +866,6 @@
   .order-editor__fields input[type="number"] { min-height: 2rem; width: 100%; }
   .order-editor__actions { display: flex; align-items: center; gap: .4rem; }
   .editor-error { margin: 0; color: var(--danger); font-size: .72rem; font-weight: 650; }
-  .all-good { display: flex; align-items: center; gap: .65rem; margin: 0; padding: .7rem; border-top: 1px solid var(--border); color: var(--text-muted); font-size: .75rem; }
-  .all-good strong { color: var(--success); }
-  .all-good button { margin-inline-start: auto; }
   .confirm-panel { margin: 0; border: 1px solid var(--accent); border-radius: .55rem; padding: .7rem; background: var(--accent-soft); }
   .confirm-panel--danger { border-color: var(--danger); background: var(--danger-soft); }
   .orders-panel .confirm-panel { margin: .55rem; }
@@ -813,7 +891,7 @@
   .trade-history .trade-events { max-height: 16rem; overflow: auto; }
   .history-empty { margin: 0; border-top: 1px solid var(--border); padding: .7rem; color: var(--text-muted); font-size: .72rem; }
   @media (max-width: 60rem) { .secondary-sections { grid-template-columns: minmax(0, 1fr); } }
-  @media (max-width: 50rem) { .sales-header, .orders-toolbar, .sales-empty--action, .verification-note { align-items: stretch; flex-direction: column; } .sales-summary, .order-editor__fields { grid-template-columns: minmax(0, 1fr); } .sales-summary div { border-inline-end: 0; border-block-end: 1px solid var(--border); } .sales-summary div:last-child { border-block-end: 0; } .shift-table-wrap { max-height: none; } .trade-events article { align-items: flex-start; flex-direction: column; } }
+  @media (max-width: 50rem) { .sales-header, .account-panel, .orders-toolbar, .sales-empty--action, .verification-note { align-items: stretch; flex-direction: column; } .sales-summary, .order-editor__fields, .connect-fields { grid-template-columns: minmax(0, 1fr); } .sales-summary div { border-inline-end: 0; border-block-end: 1px solid var(--border); } .sales-summary div:last-child { border-block-end: 0; } .shift-table-wrap { max-height: none; } .trade-events article { align-items: flex-start; flex-direction: column; } }
   @media (max-width: 46rem) {
     .shift-table, .shift-table tbody { display: block; }
     .shift-table colgroup, .shift-table thead { display: none; }

@@ -3,7 +3,6 @@
     | "market"
     | "inventory"
     | "insights"
-    | "account"
     | "diagnostics"
     | "settings";
 </script>
@@ -16,9 +15,6 @@
   {:else if screen === "insights"}
     <path d="m11 3 1.8 4.2L17 9l-4.2 1.8L11 15l-1.8-4.2L5 9l4.2-1.8L11 3Z" />
     <path d="m18.5 13 .9 2.1 2.1.9-2.1.9-.9 2.1-.9-2.1-2.1-.9 2.1-.9.9-2.1Z" />
-  {:else if screen === "account"}
-    <circle cx="12" cy="8" r="4" />
-    <path d="M4.5 21a7.5 7.5 0 0 1 15 0" />
   {:else if screen === "diagnostics"}
     <path d="M4 5h16v14H4zM7 9h3m-3 4h6m-6 4h9" />
     <circle cx="17" cy="9" r="1" />

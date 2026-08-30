@@ -25,7 +25,7 @@
   import { formatPlatinum } from "./market";
 
   export let onOpenSettings: () => void;
-  export let onOpenAccount: () => void;
+  export let onOpenMarketSales: () => void;
 
   type OpportunityMode = SetOpportunityMode | "ducats";
 
@@ -287,7 +287,7 @@
   function startListing(row: SetInsightRow): void {
     listingError = "";
     if (!accountView?.connected || !accountView.profile?.verification || (row.itemId && listedSetItemIds.has(row.itemId))) {
-      onOpenAccount();
+      onOpenMarketSales();
       return;
     }
     if (!row.itemId) {
@@ -516,7 +516,7 @@
                   {c.buyMissing(opportunity.missingParts.length)}
                 </button>
               {:else}
-                <button type="button" onclick={() => row.itemId && listedSetItemIds.has(row.itemId) ? onOpenAccount() : startListing(row)}>
+                <button type="button" onclick={() => row.itemId && listedSetItemIds.has(row.itemId) ? onOpenMarketSales() : startListing(row)}>
                   {#if row.itemId && listedSetItemIds.has(row.itemId)}{c.openOrders}{:else if !accountView?.connected}{c.connectAccount}{:else if !accountView.profile?.verification}{c.verifyAccount}{:else}{c.sellSet}{/if}
                 </button>
               {/if}

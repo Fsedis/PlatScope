@@ -41,7 +41,7 @@
   } from "./viewPreferences";
 
   export let onInventoryChange: (() => void) | undefined = undefined;
-  export let onOpenAccount: () => void;
+  export let onOpenMarketSales: () => void;
 
   type PendingListingAction = { kind: "create"; input: CreateListingInput; itemName: string };
 
@@ -666,12 +666,12 @@
               <div class="wfm-order-empty">
                 <strong>{c.accountDisconnected}</strong>
                 <p>{c.accountDisconnectedBody}</p>
-                <button type="button" onclick={onOpenAccount}>{c.openAccount}</button>
+                <button type="button" onclick={onOpenMarketSales}>{c.openAccount}</button>
               </div>
             {:else if !accountView.profile?.verification}
               <div class="wfm-order-empty">
                 <strong>{c.unverifiedAccount}</strong>
-                <button type="button" class="secondary" onclick={onOpenAccount}>{c.openAccount}</button>
+                <button type="button" class="secondary" onclick={onOpenMarketSales}>{c.openAccount}</button>
               </div>
             {:else if !selectedRow.inventory.itemId || !selectedRow.inventory.key}
               <p class="inline-error" role="alert">{c.variantUnavailable}</p>
@@ -687,7 +687,7 @@
                   : c.noCurrentOrder}
               </p>
               {#if currentOrder}
-                <button type="button" onclick={onOpenAccount}>{c.manageOrder}</button>
+                <button type="button" onclick={onOpenMarketSales}>{c.manageOrder}</button>
               {:else if pendingListingAction}
                 <section class="wfm-order-confirmation" aria-labelledby="wfm-order-confirmation-heading">
                   <h3 id="wfm-order-confirmation-heading" bind:this={listingConfirmationHeading} tabindex="-1">{c.createTitle}</h3>

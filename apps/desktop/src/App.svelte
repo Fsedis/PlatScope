@@ -3,7 +3,6 @@
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { onMount, tick } from "svelte";
 
-  import AccountScreen from "./lib/AccountScreen.svelte";
   import AppNavIcon from "./lib/AppNavIcon.svelte";
   import AppUpdatePanel from "./lib/AppUpdatePanel.svelte";
   import DiagnosticsScreen from "./lib/DiagnosticsScreen.svelte";
@@ -62,13 +61,11 @@
       market: "Рынок",
       inventory: "Мои предметы",
       insights: "Возможности",
-      account: "Warframe Market",
       diagnostics: "Состояние данных",
       settings: "Настройки",
       marketLede: "Мои продажи, актуальность ордеров и поиск цены в одном рабочем месте.",
       inventoryLede: "Торговый инвентарь, момент продажи и ордера Warframe Market в одном месте.",
       insightsLede: "Как выгоднее распорядиться предметами: открыть реликвии, дособрать или продать сет.",
-      accountLede: "Подключение аккаунта Warframe Market и состояние доступа.",
       diagnosticsLede: "Что загружено, что устарело и где возникла ошибка.",
       settingsLede: "Язык, платформа и обновление данных.",
       searching: "Ищем в сохранённых данных…", shown: (visible: number, total: number) => `${visible} из ${total} вариантов показано`,
@@ -94,13 +91,11 @@
       market: "Market",
       inventory: "My items",
       insights: "Opportunities",
-      account: "Warframe Market",
       diagnostics: "Data status",
       settings: "Settings",
       marketLede: "Your sales, order health, and price research in one workspace.",
       inventoryLede: "Market inventory, sell timing, and Warframe Market orders in one place.",
       insightsLede: "Use owned relics, finish profitable sets, or list complete ones.",
-      accountLede: "Warframe Market account connection and access status.",
       diagnosticsLede: "Provider, local cache, and data coverage status without reading terminal logs.",
       settingsLede: "Language, market platform, and data refresh controls.",
       searching: "Searching saved data…", shown: (visible: number, total: number) => `${visible} of ${total} variants shown`,
@@ -136,7 +131,6 @@
     | "market"
     | "inventory"
     | "insights"
-    | "account"
     | "diagnostics"
     | "settings";
   type MarketWorkspace = "sales" | "browse";
@@ -170,6 +164,11 @@
       window.scrollTo({ top: 0, left: 0 });
       if (keyboardNavigation) pageHeading?.focus();
     });
+  }
+
+  function openMarketSales(): void {
+    marketWorkspace = "sales";
+    navigateTo("market");
   }
 
   $: visibleRows = filterAndSortRows(
@@ -373,7 +372,6 @@
       market: selectedCopy.market,
       inventory: selectedCopy.inventory,
       insights: selectedCopy.insights,
-      account: selectedCopy.account,
       diagnostics: selectedCopy.diagnostics,
       settings: selectedCopy.settings,
     }[screen];
@@ -384,7 +382,6 @@
       market: selectedCopy.marketLede,
       inventory: selectedCopy.inventoryLede,
       insights: selectedCopy.insightsLede,
-      account: selectedCopy.accountLede,
       diagnostics: selectedCopy.diagnosticsLede,
       settings: selectedCopy.settingsLede,
     }[screen];
@@ -496,12 +493,6 @@
         ><AppNavIcon screen="insights" /><span>{shell.insights}</span></button>
         <button
           type="button"
-          class:active={activeScreen === "account"}
-          aria-current={activeScreen === "account" ? "page" : undefined}
-          onclick={() => navigateTo("account")}
-        ><AppNavIcon screen="account" /><span>{shell.account}</span></button>
-        <button
-          type="button"
           class:active={activeScreen === "diagnostics"}
           aria-current={activeScreen === "diagnostics" ? "page" : undefined}
           onclick={() => navigateTo("diagnostics")}
@@ -568,7 +559,6 @@
 
   {#if marketWorkspace === "sales"}
     <MarketTradingShift
-      onOpenAccount={() => navigateTo("account")}
       onOpenInventory={() => navigateTo("inventory")}
       onBrowseMarket={() => (marketWorkspace = "browse")}
     />
@@ -856,15 +846,13 @@
   {:else if activeScreen === "inventory"}
     <SellNowScreen
       onInventoryChange={() => void loadStatus()}
-      onOpenAccount={() => navigateTo("account")}
+      onOpenMarketSales={openMarketSales}
     />
   {:else if activeScreen === "insights"}
     <InsightsScreen
       onOpenSettings={() => navigateTo("settings")}
-      onOpenAccount={() => navigateTo("account")}
+      onOpenMarketSales={openMarketSales}
     />
-  {:else if activeScreen === "account"}
-    <AccountScreen onOpenMarketSales={() => { marketWorkspace = "sales"; navigateTo("market"); }} />
   {:else if activeScreen === "diagnostics"}
     <DiagnosticsScreen />
   {:else if activeScreen === "settings"}
