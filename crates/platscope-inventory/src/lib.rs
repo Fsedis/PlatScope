@@ -325,7 +325,13 @@ fn normalize_read_only_payload(
         return Err(InventoryError::HelperItemsMissing);
     }
 
-    let equipped_mods = read_only_equipped_mods(root)?;
+    // Equipment/configuration data is an optional extension of the inventory
+    // response. A schema drift there must never make the verified item list
+    // unusable: keep the inventory snapshot and mark mod usage as unavailable.
+    let (mod_usage_scanned, equipped_mods) = match read_only_equipped_mods(root) {
+        Ok(equipped_mods) => (true, equipped_mods),
+        Err(_) => (false, Vec::new()),
+    };
 
     Ok(PlayerInventory {
         metadata: InventorySnapshotMetadata {
@@ -336,7 +342,7 @@ fn normalize_read_only_payload(
             checksum_sha256: hex::encode(Sha256::digest(raw.as_bytes())),
         },
         items,
-        mod_usage_scanned: true,
+        mod_usage_scanned,
         equipped_mods,
     })
 }
@@ -465,9 +471,11 @@ fn attach_equipment_placements(
                 return Err(InventoryError::InvalidHelperField("Configs"));
             }
             for (config_index, config) in configs.iter().enumerate() {
-                let config = config
-                    .as_object()
-                    .ok_or(InventoryError::InvalidHelperField("Config"))?;
+                // The live API uses null placeholders for empty loadout slots.
+                // They are not malformed configurations and should be ignored.
+                let Some(config) = config.as_object() else {
+                    continue;
+                };
                 let Some(upgrades) = config.get("Upgrades") else {
                     continue;
                 };
@@ -1442,6 +1450,42 @@ mod tests {
             placement.equipment_display_name_ru.as_deref() == Some("Скорость — Volt Prime")
                 && placement.config_index == 1
         }));
+    }
+
+    #[test]
+    fn null_equipment_configs_are_ignored_without_losing_mod_usage() {
+        let raw = r#"{
+            "Upgrades": [
+                {"ItemId":{"$oid":"mod-1"},"ItemType":"/Lotus/Upgrades/Mods/PrimedFlow","UpgradeFingerprint":"{\"lvl\":5}"}
+            ],
+            "Suits": [{
+                "ItemId":{"$oid":"volt-1"},
+                "ItemType":"/Lotus/Powersuits/Volt/VoltPrime",
+                "Configs":[null,{"Upgrades":[{"$id":"mod-1"}]},null]
+            }]
+        }"#;
+
+        let parsed = parse_read_only_scan_json(raw).expect("null config placeholders parse");
+        assert!(parsed.mod_usage_scanned);
+        assert_eq!(parsed.equipped_mods.len(), 1);
+        assert_eq!(parsed.equipped_mods[0].placements.len(), 1);
+        assert_eq!(parsed.equipped_mods[0].placements[0].config_index, 1);
+    }
+
+    #[test]
+    fn equipment_schema_drift_does_not_block_inventory_refresh() {
+        let raw = r#"{
+            "MiscItems": [{"ItemType":"/Lotus/Test/Part","ItemCount":2}],
+            "Suits": [{
+                "ItemType":"/Lotus/Powersuits/Volt/VoltPrime",
+                "Configs":"unexpected"
+            }]
+        }"#;
+
+        let parsed = parse_read_only_scan_json(raw).expect("base inventory remains usable");
+        assert_eq!(parsed.items.len(), 2);
+        assert!(!parsed.mod_usage_scanned);
+        assert!(parsed.equipped_mods.is_empty());
     }
 
     #[test]
