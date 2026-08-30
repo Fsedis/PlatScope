@@ -329,7 +329,7 @@ struct DiagnosticsExportResult {
     bytes: u64,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 #[allow(clippy::needless_pass_by_value)] // Tauri command extractor owns State.
 fn foundation_status(state: State<'_, AppState>) -> Result<FoundationStatus, String> {
     load_foundation_status(&state)
@@ -376,7 +376,7 @@ fn load_foundation_status(state: &AppState) -> Result<FoundationStatus, String> 
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 #[allow(clippy::needless_pass_by_value)] // Tauri command extractor owns State.
 fn diagnostics_status(state: State<'_, AppState>) -> Result<DiagnosticsStatus, String> {
     load_diagnostics_status(&state)
@@ -413,7 +413,7 @@ fn safe_diagnostics_report(status: DiagnosticsStatus) -> SafeDiagnosticsReport {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 #[allow(clippy::needless_pass_by_value)] // Tauri command extractor owns State.
 fn export_diagnostics_report(
     state: State<'_, AppState>,
@@ -642,7 +642,7 @@ fn poll_companion_inventory(state: &AppState) -> Result<CompanionPollOutcome, St
     }))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 #[allow(clippy::needless_pass_by_value)] // Tauri command extractor owns State.
 fn companion_inventory_status(state: State<'_, AppState>) -> Result<CompanionImportStatus, String> {
     let settings = state
@@ -704,7 +704,7 @@ async fn check_companion_inventory(
     Ok(outcome.status)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 #[allow(clippy::needless_pass_by_value)] // Tauri deserializes command values by ownership.
 fn import_inventory_json(
     raw_json: String,
@@ -780,7 +780,7 @@ async fn scan_read_only_inventory(
     Ok(view)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 #[allow(clippy::needless_pass_by_value)] // Tauri command extractor owns State.
 fn load_inventory(state: State<'_, AppState>) -> Result<Option<InventoryView>, String> {
     let settings = state
@@ -795,7 +795,7 @@ fn load_inventory(state: State<'_, AppState>) -> Result<Option<InventoryView>, S
         .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 #[allow(clippy::needless_pass_by_value)] // Tauri command extractor owns State.
 fn set_inventory_keep_copies(
     keep_copies: u32,
@@ -824,7 +824,7 @@ fn set_inventory_keep_copies(
         .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 #[allow(clippy::needless_pass_by_value)] // Tauri command extractor owns State.
 fn sell_now(state: State<'_, AppState>) -> Result<Option<SellNowView>, String> {
     let settings = state
@@ -863,7 +863,7 @@ async fn sell_now_live(
     .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 #[allow(clippy::needless_pass_by_value)] // Tauri deserializes command values by ownership.
 fn market_history(
     key: MarketVariantKey,
@@ -908,7 +908,7 @@ async fn refresh_game_metadata(
         .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 #[allow(clippy::needless_pass_by_value)] // Tauri command extractor owns State.
 fn insights(state: State<'_, AppState>) -> Result<Option<InsightsView>, String> {
     let settings = state
@@ -1084,7 +1084,7 @@ async fn account_delete_listing(
     Ok(order)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 #[allow(clippy::needless_pass_by_value)] // Tauri command extractor owns State.
 fn trade_events(state: State<'_, AppState>) -> Result<Vec<TradeEvent>, String> {
     state
@@ -1095,7 +1095,7 @@ fn trade_events(state: State<'_, AppState>) -> Result<Vec<TradeEvent>, String> {
         .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 #[allow(clippy::needless_pass_by_value)] // Tauri deserializes command values by ownership.
 fn trade_event_reconciled(
     id: i64,
@@ -1122,7 +1122,7 @@ fn trade_event_reconciled(
         .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 #[allow(clippy::needless_pass_by_value)] // Tauri command extractor owns State.
 fn trade_event_ignore(id: i64, state: State<'_, AppState>) -> Result<bool, String> {
     state
@@ -1133,7 +1133,7 @@ fn trade_event_ignore(id: i64, state: State<'_, AppState>) -> Result<bool, Strin
         .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 #[allow(clippy::needless_pass_by_value)] // Tauri command extractor owns State.
 fn trade_event_restore(id: i64, state: State<'_, AppState>) -> Result<bool, String> {
     state
@@ -1165,7 +1165,7 @@ async fn live_price_current_variant(
         .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 #[allow(clippy::needless_pass_by_value)] // Tauri deserializes command values by ownership.
 fn price_current_variant(
     key: MarketVariantKey,
@@ -1176,7 +1176,7 @@ fn price_current_variant(
         .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 #[allow(clippy::needless_pass_by_value)] // Tauri deserializes command values by ownership.
 fn search_market(
     query: String,
@@ -1282,7 +1282,7 @@ fn preview_reward_overlay(
     Ok(view)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 #[allow(clippy::needless_pass_by_value)] // Tauri command extractor owns State.
 fn latest_relic_rewards(state: State<'_, AppState>) -> Result<Option<RelicRewardScanView>, String> {
     state
@@ -2511,7 +2511,7 @@ fn elapsed_millis(started: Instant) -> u64 {
     u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 #[allow(clippy::needless_pass_by_value)] // Tauri command extractor owns State.
 fn load_settings(state: State<'_, AppState>) -> Result<AppSettings, String> {
     let database = state
@@ -2524,7 +2524,7 @@ fn load_settings(state: State<'_, AppState>) -> Result<AppSettings, String> {
         .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 #[allow(clippy::needless_pass_by_value)] // Tauri deserializes the command body by value.
 fn save_settings(mut settings: AppSettings, state: State<'_, AppState>) -> Result<(), String> {
     validate_app_settings(&settings).map_err(str::to_owned)?;
