@@ -6,6 +6,7 @@
   import AppNavIcon from "./lib/AppNavIcon.svelte";
   import AppUpdatePanel from "./lib/AppUpdatePanel.svelte";
   import DiagnosticsScreen from "./lib/DiagnosticsScreen.svelte";
+  import EquippedModsScreen from "./lib/EquippedModsScreen.svelte";
   import HistoryChart from "./lib/HistoryChart.svelte";
   import InsightsScreen from "./lib/InsightsScreen.svelte";
   import MarketTradingShift from "./lib/MarketTradingShift.svelte";
@@ -60,11 +61,13 @@
       navLabel: "Разделы приложения",
       market: "Рынок",
       inventory: "Мои предметы",
+      equippedMods: "Надетые моды",
       insights: "Возможности",
       diagnostics: "Состояние данных",
       settings: "Настройки",
       marketLede: "Мои продажи, актуальность ордеров и поиск цены в одном рабочем месте.",
       inventoryLede: "Торговый инвентарь, момент продажи и ордера Warframe Market в одном месте.",
+      equippedModsLede: "На каком предмете и в какой конфигурации стоит каждый мод.",
       insightsLede: "Как выгоднее распорядиться предметами: открыть реликвии, дособрать или продать сет.",
       diagnosticsLede: "Что загружено, что устарело и где возникла ошибка.",
       settingsLede: "Язык, платформа и обновление данных.",
@@ -90,11 +93,13 @@
       navLabel: "Application sections",
       market: "Market",
       inventory: "My items",
+      equippedMods: "Equipped mods",
       insights: "Opportunities",
       diagnostics: "Data status",
       settings: "Settings",
       marketLede: "Your sales, order health, and price research in one workspace.",
       inventoryLede: "Market inventory, sell timing, and Warframe Market orders in one place.",
+      equippedModsLede: "See the item and configuration using each mod.",
       insightsLede: "Use owned relics, finish profitable sets, or list complete ones.",
       diagnosticsLede: "Provider, local cache, and data coverage status without reading terminal logs.",
       settingsLede: "Language, market platform, and data refresh controls.",
@@ -130,6 +135,7 @@
   type AppScreen =
     | "market"
     | "inventory"
+    | "equipped_mods"
     | "insights"
     | "diagnostics"
     | "settings";
@@ -371,6 +377,7 @@
     return {
       market: selectedCopy.market,
       inventory: selectedCopy.inventory,
+      equipped_mods: selectedCopy.equippedMods,
       insights: selectedCopy.insights,
       diagnostics: selectedCopy.diagnostics,
       settings: selectedCopy.settings,
@@ -381,6 +388,7 @@
     return {
       market: selectedCopy.marketLede,
       inventory: selectedCopy.inventoryLede,
+      equipped_mods: selectedCopy.equippedModsLede,
       insights: selectedCopy.insightsLede,
       diagnostics: selectedCopy.diagnosticsLede,
       settings: selectedCopy.settingsLede,
@@ -485,6 +493,12 @@
           aria-current={activeScreen === "inventory" ? "page" : undefined}
           onclick={() => navigateTo("inventory")}
         ><AppNavIcon screen="inventory" /><span>{shell.inventory}</span></button>
+        <button
+          type="button"
+          class:active={activeScreen === "equipped_mods"}
+          aria-current={activeScreen === "equipped_mods" ? "page" : undefined}
+          onclick={() => navigateTo("equipped_mods")}
+        ><AppNavIcon screen="equipped_mods" /><span>{shell.equippedMods}</span></button>
         <button
           type="button"
           class:active={activeScreen === "insights"}
@@ -847,7 +861,10 @@
     <SellNowScreen
       onInventoryChange={() => void loadStatus()}
       onOpenMarketSales={openMarketSales}
+      onOpenEquippedMods={() => navigateTo("equipped_mods")}
     />
+  {:else if activeScreen === "equipped_mods"}
+    <EquippedModsScreen onInventoryChange={() => void loadStatus()} />
   {:else if activeScreen === "insights"}
     <InsightsScreen
       onOpenSettings={() => navigateTo("settings")}

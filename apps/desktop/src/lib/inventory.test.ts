@@ -31,6 +31,8 @@ const base: InventoryViewItem = {
   untradeableQuantity: 0,
   unknownQuantity: 0,
   leveledQuantity: 0,
+  equippedQuantity: 0,
+  equippedPlacements: [],
   sellableQuantity: 2,
   resolution: "resolved",
   vaultStatus: "vaulted",

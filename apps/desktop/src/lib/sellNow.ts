@@ -52,6 +52,7 @@ export interface SellNowView {
   inventoryMetadata: InventorySnapshotMetadata;
   inventorySummary: InventorySummary;
   keepCopies: number;
+  modUsageScanned: boolean;
   marketSnapshot: MarketSnapshotSummary | null;
   summary: SellNowSummary;
   rows: SellNowRow[];
@@ -76,11 +77,13 @@ export type SellNowPreset =
   | "attention";
 export type SellNowSortKey = "priority" | "name" | "sellable" | "fair" | "volume" | "trend";
 export type SellNowSortDirection = "asc" | "desc";
+export type EquippedFilter = "all" | "free" | "equipped";
 
 export interface SellNowFilters {
   query: string;
   category: InventoryCategoryFilter;
   preset: SellNowPreset;
+  equipped: EquippedFilter;
   sortKey: SellNowSortKey;
   sortDirection: SellNowSortDirection;
 }
@@ -116,7 +119,11 @@ export function filterAndSortSellNowRows(
         (filters.preset === "unpriced" && fair === null) ||
         (filters.preset === "attention" &&
           (row.inventory.resolution !== "resolved" || row.inventory.unknownQuantity > 0));
-      return matchesQuery && matchesCategory && matchesPreset;
+      const matchesEquipped =
+        filters.equipped === "all" ||
+        (filters.equipped === "free" && row.inventory.equippedQuantity === 0) ||
+        (filters.equipped === "equipped" && row.inventory.equippedQuantity > 0);
+      return matchesQuery && matchesCategory && matchesPreset && matchesEquipped;
     })
     .sort((left, right) => {
       const comparison = compareRows(left, right, filters.sortKey);

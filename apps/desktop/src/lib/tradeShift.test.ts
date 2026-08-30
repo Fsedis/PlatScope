@@ -30,6 +30,7 @@ const account: AccountView = {
 const inventory: InventoryView = {
   metadata: { source: "read_only_scan", observedAt: "2026-08-29T00:00:00Z", schemaVersion: 1, itemCount: 1, checksumSha256: "x" },
   keepCopies: 1,
+  modUsageScanned: false,
   summary: { ownedQuantity: 3, sellableQuantity: 2, resolvedRows: 1, attentionRows: 0 },
   items: [{
     canonicalGameId: "Primed Flow", itemId: "item-1", bulkTradable: false,
@@ -37,6 +38,7 @@ const inventory: InventoryView = {
     key: { slug: "primed_flow", platform: "pc", rank: null, subtype: null, amberStars: null, cyanStars: null },
     rank: null, subtype: null, ownedQuantity: 3, tradeableQuantity: 3,
     untradeableQuantity: 0, unknownQuantity: 0, leveledQuantity: 0,
+    equippedQuantity: 0, equippedPlacements: [],
     sellableQuantity: 2, resolution: "resolved", vaultStatus: "unknown",
     closedMedian48h: 130, hasReliablePrice: true,
   }],

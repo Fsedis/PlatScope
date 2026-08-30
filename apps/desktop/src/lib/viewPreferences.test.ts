@@ -39,6 +39,7 @@ describe("saved working views", () => {
     expect(saveSellNowViewPreferences({
       category: "arcane_enhancement",
       preset: "sell_now",
+      equipped: "all",
       sortKey: "fair",
       sortDirection: "desc",
     }, storage)).toBe(true);

@@ -46,6 +46,29 @@ export interface InventorySummary {
   attentionRows: number;
 }
 
+export type EquipmentKind =
+  | "warframe"
+  | "primary"
+  | "secondary"
+  | "melee"
+  | "companion"
+  | "companion_weapon"
+  | "archwing"
+  | "archgun"
+  | "archmelee"
+  | "necramech"
+  | "amp"
+  | "other";
+
+export interface EquippedModPlacement {
+  equipmentInstanceKey: string;
+  equipmentGameId: string;
+  equipmentDisplayName: string;
+  equipmentImageUrl: string | null;
+  equipmentKind: EquipmentKind;
+  configIndex: number;
+}
+
 export interface InventoryViewItem {
   canonicalGameId: string;
   itemId: string | null;
@@ -61,6 +84,8 @@ export interface InventoryViewItem {
   untradeableQuantity: number;
   unknownQuantity: number;
   leveledQuantity: number;
+  equippedQuantity: number;
+  equippedPlacements: EquippedModPlacement[];
   sellableQuantity: number;
   resolution: InventoryResolution;
   vaultStatus: VaultStatus;
@@ -71,6 +96,7 @@ export interface InventoryViewItem {
 export interface InventoryView {
   metadata: InventorySnapshotMetadata;
   keepCopies: number;
+  modUsageScanned: boolean;
   summary: InventorySummary;
   items: InventoryViewItem[];
 }

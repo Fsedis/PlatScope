@@ -1556,7 +1556,7 @@ td {
 
 .inventory-command-bar {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
   align-items: end;
   gap: 0.65rem;
   margin-block-end: 0.65rem;
@@ -1635,7 +1635,7 @@ td {
 
 .sell-toolbar {
   display: grid;
-  grid-template-columns: minmax(15rem, 1.5fr) repeat(2, minmax(10rem, 0.7fr));
+  grid-template-columns: minmax(15rem, 1.5fr) repeat(3, minmax(9rem, 0.7fr));
   align-items: end;
   gap: 0.55rem;
   margin-block-end: 0.65rem;
@@ -2692,6 +2692,210 @@ td,
   }
 
   .wfm-order-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.equipped-note {
+  width: fit-content;
+  border-radius: 999px;
+  padding: 0.1rem 0.4rem;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-weight: 700;
+}
+
+.equipped-status {
+  min-height: 1.25rem;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.equipped-overview,
+.equipped-toolbar,
+.equipment-card {
+  border: 1px solid var(--border);
+  background: var(--surface-1);
+  box-shadow: var(--shadow-sm);
+}
+
+.equipped-overview {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  border-radius: 0.7rem;
+  padding: 0.65rem;
+}
+
+.equipped-overview dl {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.75rem;
+  margin: 0;
+}
+
+.equipped-overview dl > div {
+  display: grid;
+  gap: 0.1rem;
+}
+
+.equipped-overview dt {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+
+.equipped-overview dd {
+  margin: 0;
+  color: var(--accent-strong);
+  font-size: 1.1rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 800;
+}
+
+.equipped-toolbar {
+  display: grid;
+  grid-template-columns: minmax(15rem, 1fr) minmax(11rem, 0.32fr);
+  align-items: end;
+  gap: 0.55rem;
+  margin-block: 0.65rem;
+  border-radius: 0.65rem;
+  padding: 0.55rem;
+}
+
+.equipped-toolbar input,
+.equipped-toolbar select {
+  width: 100%;
+  min-height: 2.25rem;
+}
+
+.equipped-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 26rem), 1fr));
+  align-items: start;
+  gap: 0.65rem;
+}
+
+.equipment-card {
+  overflow: clip;
+  border-radius: 0.75rem;
+}
+
+.equipment-card__header {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  border-block-end: 1px solid var(--border);
+  padding: 0.65rem;
+  background: var(--surface-2);
+}
+
+.equipment-card__header img {
+  width: 3rem;
+  height: 3rem;
+  flex: none;
+  border: 1px solid var(--border);
+  border-radius: 0.55rem;
+  object-fit: contain;
+  background: var(--surface-1);
+}
+
+.equipment-card__header span {
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.equipment-card__header h2 {
+  margin: 0.12rem 0 0;
+  font-size: 1rem;
+  line-height: 1.25;
+}
+
+.equipment-configs {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0.6rem;
+}
+
+.equipment-config {
+  min-width: 0;
+}
+
+.equipment-config h3 {
+  margin: 0 0 0.35rem;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+
+.equipment-config ul {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.equipment-config li {
+  display: grid;
+  grid-template-columns: 2.5rem minmax(0, 1fr);
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 0.4rem;
+  background: var(--surface-2);
+}
+
+.equipment-config li > img {
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 0.35rem;
+  object-fit: contain;
+  background: var(--surface-1);
+}
+
+.equipment-config li > div {
+  display: grid;
+  min-width: 0;
+}
+
+.equipment-config li strong {
+  overflow: hidden;
+  font-size: 0.78rem;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.equipment-config li span,
+.equipment-config li small {
+  color: var(--text-muted);
+  font-size: 0.66rem;
+  line-height: 1.35;
+}
+
+.equipment-config li small {
+  color: var(--success);
+}
+
+.equipped-readonly {
+  margin: 0.7rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+
+@media (max-width: 46rem) {
+  .equipped-overview {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .equipped-toolbar {
     grid-template-columns: minmax(0, 1fr);
   }
 }

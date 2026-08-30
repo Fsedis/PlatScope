@@ -28,6 +28,7 @@
     priorityReasonMessages,
     sellNowRowIdentity,
     type LiveSellNowResult,
+    type EquippedFilter,
     type SellNowFilters,
     type SellNowPreset,
     type SellNowRow,
@@ -42,6 +43,7 @@
 
   export let onInventoryChange: (() => void) | undefined = undefined;
   export let onOpenMarketSales: () => void;
+  export let onOpenEquippedMods: () => void;
 
   type PendingListingAction = { kind: "create"; input: CreateListingInput; itemName: string };
 
@@ -61,7 +63,7 @@
       inventoryUpdated: "Инвентарь обновлён", scanInventory: "Обновить из Warframe", scanningInventory: "Обновляем…", scanError: "Не удалось обновить инвентарь. Запустите Warframe, войдите в игру и повторите.", reserve: "Оставлять копий", reserveError: "Не удалось изменить резерв копий.",
       notForecast: "Важно:", nominalBody: "это сумма по текущим оценкам, а не гарантированная выручка.",
       noCandidatesLabel: "Очередь пуста", noCandidates: "Нет предметов, готовых к продаже", noCandidatesBody: "Проверьте количество, возможность обмена и резерв копий в инвентаре.", checkInventory: "Открыть инвентарь",
-      filters: "Поиск и фильтры", search: "Поиск предмета", searchExample: "Например, Поток Прайм", category: "Тип предмета", allCategories: "Все типы", view: "Показывать", allCandidates: "Весь торговый инвентарь", sellable: "Всё к продаже", sellNow: "Продавать сейчас", hold: "Лучше подождать", duplicates: "Дубликаты", unpriced: "Без цены", attention: "Требуют проверки",
+      filters: "Поиск и фильтры", search: "Поиск предмета", searchExample: "Например, Поток Прайм", category: "Тип предмета", allCategories: "Все типы", view: "Показывать", allCandidates: "Весь торговый инвентарь", sellable: "Всё к продаже", sellNow: "Продавать сейчас", hold: "Лучше подождать", duplicates: "Дубликаты", unpriced: "Без цены", attention: "Требуют проверки", usage: "Использование", allUsage: "Все", freeOnly: "Не надеты", equippedOnly: "Надеты", equippedCount: (count: number) => `Надето: ${count}`, openEquipped: "Где стоят моды",
       queue: "Мои предметы", exactSnapshot: (date: string) => `Цены рынка от ${date}`, missingSnapshot: "дата неизвестна",
       tableCaption: "Предметы инвентаря, рекомендуемая цена, продажи, тренд цены и очерёдность", item: "Предмет", salesPerDay: "Продажи / день", priceTrend90: "Тренд цены / 90 дней", unknownVariant: "вариант не определён",
       dailyTrades: (value: string) => `${value} сделок/день`,
@@ -86,7 +88,7 @@
       inventoryUpdated: "Inventory updated", scanInventory: "Update from Warframe", scanningInventory: "Updating…", scanError: "Unable to update inventory. Start Warframe, sign in, and try again.", reserve: "Keep copies", reserveError: "Unable to change the copy reserve.",
       notForecast: "Not a revenue forecast:", nominalBody: "nominal value is sellable × fair. It does not guarantee that the full volume will sell at that price.",
       noCandidatesLabel: "No candidates", noCandidates: "No confirmed items to sell", noCandidatesBody: "Check the import, tradeability, and copy reserve. Ambiguous variants are excluded automatically.", checkInventory: "Check inventory",
-      filters: "Item search and filters", search: "Search items", searchExample: "For example, Primed Flow", category: "Item type", allCategories: "All types", view: "Show", allCandidates: "All market inventory", sellable: "All sellable", sellNow: "Sell now", hold: "Better to wait", duplicates: "Duplicates", unpriced: "Unpriced", attention: "Needs review",
+      filters: "Item search and filters", search: "Search items", searchExample: "For example, Primed Flow", category: "Item type", allCategories: "All types", view: "Show", allCandidates: "All market inventory", sellable: "All sellable", sellNow: "Sell now", hold: "Better to wait", duplicates: "Duplicates", unpriced: "Unpriced", attention: "Needs review", usage: "Usage", allUsage: "All", freeOnly: "Not equipped", equippedOnly: "Equipped", equippedCount: (count: number) => `Equipped: ${count}`, openEquipped: "Show equipped mods",
       queue: "My items", exactSnapshot: (date: string) => `Market prices from ${date}`, missingSnapshot: "not found",
       tableCaption: "Inventory items, recommended price, sales, price trend, and priority", item: "Item", salesPerDay: "Sales / day", priceTrend90: "Price trend / 90 days", unknownVariant: "variant unavailable",
       dailyTrades: (value: string) => `${value} trades/day`,
@@ -136,6 +138,7 @@
   let query = "";
   let category: InventoryCategoryFilter = "all";
   let preset: SellNowPreset = "sell_now";
+  let equipped: EquippedFilter = "all";
   let sortKey: SellNowSortKey = "priority";
   let sortDirection: SellNowSortDirection = "desc";
   let viewPreferencesReady = false;
@@ -144,6 +147,7 @@
     query,
     category,
     preset,
+    equipped,
     sortKey,
     sortDirection,
   } satisfies SellNowFilters;
@@ -151,6 +155,7 @@
     saveSellNowViewPreferences({
       category,
       preset,
+      equipped,
       sortKey,
       sortDirection,
     });
@@ -450,6 +455,7 @@
     const savedView = loadSellNowViewPreferences();
     category = savedView.category;
     preset = savedView.preset;
+    equipped = savedView.equipped;
     sortKey = savedView.sortKey;
     sortDirection = savedView.sortDirection;
     viewPreferencesReady = true;
@@ -499,6 +505,7 @@
         <option value="0">0</option><option value="1">1</option><option value="2">2</option>
       </select>
     </label>
+    {#if view.modUsageScanned}<button type="button" class="secondary" onclick={onOpenEquippedMods}>{c.openEquipped}</button>{/if}
     <button type="button" onclick={scanWarframe} disabled={loading || scanning}>{scanning ? c.scanningInventory : c.scanInventory}</button>
   </section>
 
@@ -534,6 +541,14 @@
           {#each categories as itemCategory}
             <option value={itemCategory}>{categoryLabels[itemCategory]}</option>
           {/each}
+        </select>
+      </div>
+      <div class="filter-field">
+        <label for="sell-equipped">{c.usage}</label>
+        <select id="sell-equipped" bind:value={equipped}>
+          <option value="all">{c.allUsage}</option>
+          <option value="free">{c.freeOnly}</option>
+          <option value="equipped">{c.equippedOnly}</option>
         </select>
       </div>
       <div class="filter-field">
@@ -586,6 +601,7 @@
                         <span class="item-button__copy">
                         <span>{row.inventory.displayName}</span>
                         <small>{row.inventory.key ? variantLabel(row.inventory.key, $locale) : c.unknownVariant}</small>
+                        {#if row.inventory.equippedQuantity > 0}<small class="equipped-note">{c.equippedCount(row.inventory.equippedQuantity)}</small>{/if}
                         </span>
                       </button>
                     </td>
@@ -608,7 +624,7 @@
           </div>
         {:else}
           <div class="no-results">
-            <h3>{c.noFiltered}</h3><p>{c.changeFilters}</p><button type="button" onclick={() => { query = ""; category = "all"; preset = "sell_now"; }}>{c.reset}</button>
+            <h3>{c.noFiltered}</h3><p>{c.changeFilters}</p><button type="button" onclick={() => { query = ""; category = "all"; preset = "sell_now"; equipped = "all"; }}>{c.reset}</button>
           </div>
         {/if}
       </section>

@@ -1,8 +1,7 @@
-import type {
-  InventoryCategoryFilter,
-} from "./inventory";
+import type { InventoryCategoryFilter } from "./inventory";
 import type { MarketSortKey, PriceFilter, SortDirection } from "./market";
 import type {
+  EquippedFilter,
   SellNowPreset,
   SellNowSortDirection,
   SellNowSortKey,
@@ -22,6 +21,7 @@ export interface MarketViewPreferences {
 export interface SellNowViewPreferences {
   category: InventoryCategoryFilter;
   preset: SellNowPreset;
+  equipped: EquippedFilter;
   sortKey: SellNowSortKey;
   sortDirection: SellNowSortDirection;
 }
@@ -35,6 +35,7 @@ export const DEFAULT_MARKET_VIEW: MarketViewPreferences = {
 export const DEFAULT_SELL_NOW_VIEW: SellNowViewPreferences = {
   category: "all",
   preset: "sell_now",
+  equipped: "all",
   sortKey: "priority",
   sortDirection: "desc",
 };
@@ -62,6 +63,7 @@ const sellNowSortKeys = [
   "volume",
   "trend",
 ] as const;
+const equippedFilters = ["all", "free", "equipped"] as const;
 
 export function loadMarketViewPreferences(
   storage: ViewPreferenceStorage | null = defaultStorage(),
@@ -92,6 +94,7 @@ export function loadSellNowViewPreferences(
   return {
     category: validCategory(value?.category),
     preset: allowed(value?.preset, sellNowPresets, DEFAULT_SELL_NOW_VIEW.preset),
+    equipped: allowed(value?.equipped, equippedFilters, DEFAULT_SELL_NOW_VIEW.equipped),
     sortKey: allowed(value?.sortKey, sellNowSortKeys, DEFAULT_SELL_NOW_VIEW.sortKey),
     sortDirection: allowed(
       value?.sortDirection,

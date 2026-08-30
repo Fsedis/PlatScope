@@ -2,6 +2,7 @@
   export let screen:
     | "market"
     | "inventory"
+    | "equipped_mods"
     | "insights"
     | "diagnostics"
     | "settings";
@@ -12,6 +13,8 @@
     <path d="M4 17V9m5 8V5m5 12v-6m5 6V3M3 20h18" />
   {:else if screen === "inventory"}
     <path d="M4 7h16v13H4zM3 4h18v3H3zM9 11h6" />
+  {:else if screen === "equipped_mods"}
+    <path d="M5 6h14v12H5zM8 3v3m8-3v3M8 10h8m-8 4h5" />
   {:else if screen === "insights"}
     <path d="m11 3 1.8 4.2L17 9l-4.2 1.8L11 15l-1.8-4.2L5 9l4.2-1.8L11 3Z" />
     <path d="m18.5 13 .9 2.1 2.1.9-2.1.9-.9 2.1-.9-2.1-2.1-.9 2.1-.9.9-2.1Z" />

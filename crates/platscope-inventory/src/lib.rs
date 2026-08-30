@@ -5,9 +5,10 @@ use std::hash::BuildHasher;
 
 use chrono::{DateTime, Utc};
 use platscope_domain::{
-    CatalogItem, InventoryItem, InventoryResolution, InventorySnapshotMetadata, InventorySource,
-    ItemCatalog, MarketVariantKey, Platform, PlayerInventory, ResolvedInventoryItem,
-    ResolvedInventorySnapshot, Tradeability,
+    CatalogItem, EquipmentKind, EquippedModInstance, InventoryItem, InventoryModPlacement,
+    InventoryResolution, InventorySnapshotMetadata, InventorySource, ItemCatalog, MarketVariantKey,
+    Platform, PlayerInventory, ResolvedInventoryItem, ResolvedInventorySnapshot,
+    ResolvedModPlacement, Tradeability,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -28,6 +29,8 @@ const MAX_SUBTYPE_LENGTH: usize = 64;
 const MAX_RANK: u16 = 100;
 const MAX_HELPER_DEPTH: usize = 64;
 const MAX_HELPER_NODES: usize = 250_000;
+const MAX_EQUIPMENT_CONFIGS: usize = 16;
+const MAX_CONFIG_UPGRADES: usize = 64;
 const READ_ONLY_INVENTORY_CATEGORIES: [&str; 12] = [
     "MiscItems",
     "Recipes",
@@ -41,6 +44,37 @@ const READ_ONLY_INVENTORY_CATEGORIES: [&str; 12] = [
     "SpaceMelee",
     "Sentinels",
     "SentinelWeapons",
+];
+const READ_ONLY_EQUIPMENT_CATEGORIES: [(&str, EquipmentKind); 29] = [
+    ("Suits", EquipmentKind::Warframe),
+    ("LongGuns", EquipmentKind::Primary),
+    ("Pistols", EquipmentKind::Secondary),
+    ("Melee", EquipmentKind::Melee),
+    ("SpecialItems", EquipmentKind::Other),
+    ("Sentinels", EquipmentKind::Companion),
+    ("SentinelWeapons", EquipmentKind::CompanionWeapon),
+    ("SpaceSuits", EquipmentKind::Archwing),
+    ("SpaceGuns", EquipmentKind::Archgun),
+    ("SpaceMelee", EquipmentKind::Archmelee),
+    ("Hoverboards", EquipmentKind::Other),
+    ("OperatorAmps", EquipmentKind::Amp),
+    ("Antiques", EquipmentKind::Other),
+    ("MoaPets", EquipmentKind::Companion),
+    ("Scoops", EquipmentKind::Other),
+    ("Horses", EquipmentKind::Other),
+    ("DrifterGuns", EquipmentKind::Secondary),
+    ("DrifterMelee", EquipmentKind::Melee),
+    ("Motorcycles", EquipmentKind::Other),
+    ("CrewShips", EquipmentKind::Other),
+    ("DataKnives", EquipmentKind::Melee),
+    ("MechSuits", EquipmentKind::Necramech),
+    ("CrewShipHarnesses", EquipmentKind::Other),
+    ("KubrowPets", EquipmentKind::Companion),
+    ("CrewShipWeapons", EquipmentKind::Other),
+    ("CrewShipSalvagedWeapons", EquipmentKind::Other),
+    ("OperatorSuits", EquipmentKind::Other),
+    ("OperatorMasks", EquipmentKind::Other),
+    ("OperatorAccessories", EquipmentKind::Other),
 ];
 
 #[derive(Debug, Deserialize)]
@@ -91,6 +125,14 @@ struct GroupQuantities {
     untradeable: u32,
     unknown: u32,
     leveled: u32,
+}
+
+#[derive(Debug, Clone)]
+struct EquippedModSource {
+    canonical_game_id: String,
+    rank: u16,
+    tradeability: Tradeability,
+    placements: Vec<InventoryModPlacement>,
 }
 
 /// Разбирает собственный versioned JSON-формат и валидирует coherent snapshot.
@@ -166,6 +208,8 @@ pub fn parse_platscope_json(raw: &str) -> Result<PlayerInventory, InventoryError
             checksum_sha256: hex::encode(Sha256::digest(raw.as_bytes())),
         },
         items,
+        mod_usage_scanned: false,
+        equipped_mods: Vec::new(),
     })
 }
 
@@ -281,6 +325,8 @@ fn normalize_read_only_payload(
         return Err(InventoryError::HelperItemsMissing);
     }
 
+    let equipped_mods = read_only_equipped_mods(root)?;
+
     Ok(PlayerInventory {
         metadata: InventorySnapshotMetadata {
             source: InventorySource::ReadOnlyScan,
@@ -290,7 +336,196 @@ fn normalize_read_only_payload(
             checksum_sha256: hex::encode(Sha256::digest(raw.as_bytes())),
         },
         items,
+        mod_usage_scanned: true,
+        equipped_mods,
     })
+}
+
+fn read_only_equipped_mods(
+    root: &serde_json::Map<String, Value>,
+) -> Result<Vec<EquippedModInstance>, InventoryError> {
+    let mut instances = read_only_upgrade_instances(root)?;
+    attach_equipment_placements(root, &mut instances)?;
+    let mut equipped = instances
+        .into_values()
+        .filter(|source| !source.placements.is_empty())
+        .map(|source| EquippedModInstance {
+            canonical_game_id: source.canonical_game_id,
+            rank: source.rank,
+            tradeability: source.tradeability,
+            placements: source.placements,
+        })
+        .collect::<Vec<_>>();
+    equipped.sort_by(|left, right| {
+        left.canonical_game_id
+            .cmp(&right.canonical_game_id)
+            .then(left.rank.cmp(&right.rank))
+    });
+    Ok(equipped)
+}
+
+fn read_only_upgrade_instances(
+    root: &serde_json::Map<String, Value>,
+) -> Result<HashMap<String, EquippedModSource>, InventoryError> {
+    let mut instances = HashMap::<String, EquippedModSource>::new();
+    if let Some(upgrades) = root.get("Upgrades") {
+        let upgrades = upgrades
+            .as_array()
+            .ok_or(InventoryError::InvalidHelperField("Upgrades"))?;
+        for upgrade in upgrades {
+            let map = upgrade
+                .as_object()
+                .ok_or(InventoryError::InvalidHelperField("upgrade"))?;
+            let Some(item_id) = helper_reference_id(map.get("ItemId"))? else {
+                continue;
+            };
+            let canonical_game_id = map
+                .get("ItemType")
+                .or_else(|| map.get("Type"))
+                .and_then(Value::as_str)
+                .ok_or(InventoryError::InvalidHelperField("ItemType"))?
+                .trim()
+                .to_owned();
+            if canonical_game_id.is_empty() || canonical_game_id.len() > MAX_IDENTIFIER_LENGTH {
+                return Err(InventoryError::InvalidIdentifier);
+            }
+            let rank = read_only_rank("Upgrades", map)?.unwrap_or_default();
+            let xp = helper_u32(map.get("XP"), "XP", 0)?;
+            let source = EquippedModSource {
+                canonical_game_id,
+                rank,
+                tradeability: if xp > 0 {
+                    Tradeability::Untradeable
+                } else {
+                    Tradeability::Tradeable
+                },
+                placements: Vec::new(),
+            };
+            if let Some(previous) = instances.insert(item_id, source.clone())
+                && (previous.canonical_game_id != source.canonical_game_id
+                    || previous.rank != source.rank
+                    || previous.tradeability != source.tradeability)
+            {
+                return Err(InventoryError::InvalidHelperField("duplicate ItemId"));
+            }
+        }
+    }
+    Ok(instances)
+}
+
+fn attach_equipment_placements(
+    root: &serde_json::Map<String, Value>,
+    instances: &mut HashMap<String, EquippedModSource>,
+) -> Result<(), InventoryError> {
+    for (category, equipment_kind) in READ_ONLY_EQUIPMENT_CATEGORIES {
+        let Some(entries) = root.get(category) else {
+            continue;
+        };
+        let entries = entries
+            .as_array()
+            .ok_or(InventoryError::InvalidHelperField("equipment category"))?;
+        for (equipment_index, entry) in entries.iter().enumerate() {
+            let map = entry
+                .as_object()
+                .ok_or(InventoryError::InvalidHelperField("equipment"))?;
+            let Some(equipment_game_id) = map
+                .get("ItemType")
+                .or_else(|| map.get("Type"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            else {
+                continue;
+            };
+            if equipment_game_id.len() > MAX_IDENTIFIER_LENGTH {
+                return Err(InventoryError::InvalidIdentifier);
+            }
+            let equipment_custom_name = map
+                .get("ItemName")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned);
+            if equipment_custom_name
+                .as_ref()
+                .is_some_and(|name| name.len() > MAX_IDENTIFIER_LENGTH)
+            {
+                return Err(InventoryError::InvalidHelperField("ItemName"));
+            }
+            let raw_equipment_id = helper_reference_id(map.get("ItemId"))?
+                .unwrap_or_else(|| format!("{category}:{equipment_index}:{equipment_game_id}"));
+            let equipment_instance_key = hex::encode(Sha256::digest(raw_equipment_id.as_bytes()));
+            let Some(configs) = map.get("Configs") else {
+                continue;
+            };
+            let configs = configs
+                .as_array()
+                .ok_or(InventoryError::InvalidHelperField("Configs"))?;
+            if configs.len() > MAX_EQUIPMENT_CONFIGS {
+                return Err(InventoryError::InvalidHelperField("Configs"));
+            }
+            for (config_index, config) in configs.iter().enumerate() {
+                let config = config
+                    .as_object()
+                    .ok_or(InventoryError::InvalidHelperField("Config"))?;
+                let Some(upgrades) = config.get("Upgrades") else {
+                    continue;
+                };
+                let upgrades = upgrades
+                    .as_array()
+                    .ok_or(InventoryError::InvalidHelperField("Config.Upgrades"))?;
+                if upgrades.len() > MAX_CONFIG_UPGRADES {
+                    return Err(InventoryError::InvalidHelperField("Config.Upgrades"));
+                }
+                let config_index = u16::try_from(config_index)
+                    .map_err(|_| InventoryError::InvalidHelperField("Config index"))?;
+                for upgrade in upgrades {
+                    let Some(upgrade_id) = helper_reference_id(Some(upgrade))? else {
+                        continue;
+                    };
+                    // Intrinsic/default upgrades use canonical Lotus paths rather
+                    // than inventory instance IDs and cannot be traded.
+                    if upgrade_id.starts_with("/Lotus/") {
+                        continue;
+                    }
+                    let Some(source) = instances.get_mut(&upgrade_id) else {
+                        continue;
+                    };
+                    let placement = InventoryModPlacement {
+                        equipment_instance_key: equipment_instance_key.clone(),
+                        equipment_game_id: equipment_game_id.to_owned(),
+                        equipment_custom_name: equipment_custom_name.clone(),
+                        equipment_kind,
+                        config_index,
+                    };
+                    if !source.placements.contains(&placement) {
+                        source.placements.push(placement);
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn helper_reference_id(value: Option<&Value>) -> Result<Option<String>, InventoryError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let candidate = match value {
+        Value::String(value) => Some(value.as_str()),
+        Value::Object(map) => map
+            .get("$id")
+            .or_else(|| map.get("$oid"))
+            .and_then(Value::as_str),
+        Value::Null => None,
+        _ => return Err(InventoryError::InvalidHelperField("ItemId")),
+    };
+    let candidate = candidate.map(str::trim).filter(|value| !value.is_empty());
+    if candidate.is_some_and(|value| value.len() > MAX_IDENTIFIER_LENGTH) {
+        return Err(InventoryError::InvalidHelperField("ItemId"));
+    }
+    Ok(candidate.map(ToOwned::to_owned))
 }
 
 fn read_only_rank(
@@ -412,6 +647,8 @@ fn normalize_helper_payload(
             checksum_sha256: hex::encode(Sha256::digest(raw.as_bytes())),
         },
         items,
+        mod_usage_scanned: false,
+        equipped_mods: Vec::new(),
     })
 }
 
@@ -516,6 +753,7 @@ pub fn resolve_inventory<S: BuildHasher>(
 ) -> ResolvedInventorySnapshot {
     let lookup = catalog_lookup(&catalog.items);
     let mut groups: BTreeMap<GroupKey, GroupQuantities> = BTreeMap::new();
+    let mut equipped_by_group: BTreeMap<GroupKey, Vec<&EquippedModInstance>> = BTreeMap::new();
     for item in &inventory.items {
         let key = GroupKey {
             canonical_game_id: item.canonical_game_id.clone(),
@@ -540,12 +778,25 @@ pub fn resolve_inventory<S: BuildHasher>(
         }
     }
 
+    for equipped in &inventory.equipped_mods {
+        equipped_by_group
+            .entry(GroupKey {
+                canonical_game_id: equipped.canonical_game_id.clone(),
+                rank: Some(equipped.rank),
+                subtype: None,
+            })
+            .or_default()
+            .push(equipped);
+    }
+
     let items = groups
         .into_iter()
         .map(|(group, quantities)| {
+            let equipped = equipped_by_group.remove(&group).unwrap_or_default();
             resolve_group(
                 group,
                 &quantities,
+                &equipped,
                 &lookup,
                 available_variants,
                 platform,
@@ -556,6 +807,7 @@ pub fn resolve_inventory<S: BuildHasher>(
     ResolvedInventorySnapshot {
         metadata: inventory.metadata.clone(),
         keep_copies,
+        mod_usage_scanned: inventory.mod_usage_scanned,
         items,
     }
 }
@@ -575,6 +827,7 @@ pub fn apply_keep_copies(
             item.tradeable_quantity,
             item.untradeable_quantity,
             item.unknown_quantity,
+            item.equipped_tradeable_quantity,
             keep_copies,
         );
     }
@@ -584,6 +837,7 @@ pub fn apply_keep_copies(
 fn resolve_group<S: BuildHasher>(
     group: GroupKey,
     quantities: &GroupQuantities,
+    equipped: &[&EquippedModInstance],
     lookup: &HashMap<String, Vec<&CatalogItem>>,
     available_variants: &HashSet<MarketVariantKey, S>,
     platform: Platform,
@@ -641,12 +895,16 @@ fn resolve_group<S: BuildHasher>(
             InventoryResolution::AmbiguousItem,
         ),
     };
+    let (equipped_quantity, equipped_tradeable_quantity, equipped_placements) =
+        resolve_equipped_mods(equipped, quantities, lookup);
+
     let sellable_quantity = sellable_quantity(
         resolution,
         quantities.owned,
         quantities.tradeable,
         quantities.untradeable,
         quantities.unknown,
+        equipped_tradeable_quantity,
         keep_copies,
     );
     ResolvedInventoryItem {
@@ -662,9 +920,107 @@ fn resolve_group<S: BuildHasher>(
         untradeable_quantity: quantities.untradeable,
         unknown_quantity: quantities.unknown,
         leveled_quantity: quantities.leveled,
+        equipped_quantity,
+        equipped_tradeable_quantity,
+        equipped_placements,
         sellable_quantity,
         resolution,
     }
+}
+
+fn resolve_equipped_mods(
+    equipped: &[&EquippedModInstance],
+    quantities: &GroupQuantities,
+    lookup: &HashMap<String, Vec<&CatalogItem>>,
+) -> (u32, u32, Vec<ResolvedModPlacement>) {
+    let equipped_quantity = u32::try_from(equipped.len())
+        .unwrap_or(u32::MAX)
+        .min(quantities.owned);
+    let equipped_tradeable_quantity = u32::try_from(
+        equipped
+            .iter()
+            .filter(|instance| instance.tradeability == Tradeability::Tradeable)
+            .count(),
+    )
+    .unwrap_or(u32::MAX)
+    .min(quantities.tradeable);
+    let mut placements = equipped
+        .iter()
+        .flat_map(|instance| instance.placements.iter())
+        .map(|placement| resolve_mod_placement(placement, lookup))
+        .collect::<Vec<_>>();
+    placements.sort_by(|left, right| {
+        left.equipment_display_name_en
+            .cmp(&right.equipment_display_name_en)
+            .then(
+                left.equipment_instance_key
+                    .cmp(&right.equipment_instance_key),
+            )
+            .then(left.config_index.cmp(&right.config_index))
+    });
+    placements.dedup();
+    (equipped_quantity, equipped_tradeable_quantity, placements)
+}
+
+fn resolve_mod_placement(
+    placement: &InventoryModPlacement,
+    lookup: &HashMap<String, Vec<&CatalogItem>>,
+) -> ResolvedModPlacement {
+    let candidates = lookup
+        .get(&normalized_identifier(&placement.equipment_game_id))
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    let catalog_item = candidates
+        .iter()
+        .copied()
+        .find(|candidate| candidate.game_ref.as_deref() == Some(&placement.equipment_game_id))
+        .or_else(|| candidates.first().copied());
+    let fallback = humanize_game_id(&placement.equipment_game_id);
+    let base_en = catalog_item.map_or_else(
+        || fallback.clone(),
+        |item| strip_set_suffix(&item.display_name_en),
+    );
+    let base_ru = catalog_item
+        .and_then(|item| item.display_name_ru.as_deref())
+        .map_or_else(|| fallback.clone(), strip_set_suffix);
+    let display_name = |base: String| {
+        placement
+            .equipment_custom_name
+            .as_ref()
+            .map_or(base.clone(), |custom| format!("{custom} — {base}"))
+    };
+    ResolvedModPlacement {
+        equipment_instance_key: placement.equipment_instance_key.clone(),
+        equipment_game_id: placement.equipment_game_id.clone(),
+        equipment_display_name_en: Some(display_name(base_en)),
+        equipment_display_name_ru: Some(display_name(base_ru)),
+        equipment_image_url: catalog_item
+            .and_then(|item| item.thumb_ru.as_ref().or(item.thumb.as_ref()))
+            .map(|thumb| format!("https://warframe.market/static/assets/{thumb}")),
+        equipment_kind: placement.equipment_kind,
+        config_index: placement.config_index,
+    }
+}
+
+fn strip_set_suffix(value: &str) -> String {
+    value
+        .strip_suffix(" Set")
+        .or_else(|| value.strip_suffix(": Комплект"))
+        .or_else(|| value.strip_suffix(" Комплект"))
+        .unwrap_or(value)
+        .to_owned()
+}
+
+fn humanize_game_id(value: &str) -> String {
+    let leaf = value.rsplit('/').next().unwrap_or(value);
+    let mut result = String::with_capacity(leaf.len() + 8);
+    for (index, character) in leaf.chars().enumerate() {
+        if index > 0 && character.is_uppercase() {
+            result.push(' ');
+        }
+        result.push(character);
+    }
+    result
 }
 
 fn market_shape_available<S: BuildHasher>(
@@ -687,14 +1043,16 @@ fn sellable_quantity(
     tradeable: u32,
     untradeable: u32,
     unknown: u32,
+    equipped_tradeable: u32,
     keep_copies: u32,
 ) -> u32 {
     if resolution != InventoryResolution::Resolved || unknown > 0 {
         return 0;
     }
+    let protected = untradeable.saturating_add(equipped_tradeable);
     owned
-        .saturating_sub(keep_copies.max(untradeable))
-        .min(tradeable)
+        .saturating_sub(keep_copies.max(protected))
+        .min(tradeable.saturating_sub(equipped_tradeable))
 }
 
 fn catalog_lookup(items: &[CatalogItem]) -> HashMap<String, Vec<&CatalogItem>> {
@@ -801,6 +1159,8 @@ mod tests {
                 checksum_sha256: "inventory".into(),
             },
             items,
+            mod_usage_scanned: false,
+            equipped_mods: Vec::new(),
         }
     }
 
@@ -1023,6 +1383,65 @@ mod tests {
                 .iter()
                 .all(|item| !item.canonical_game_id.contains("/Interface/"))
         );
+        assert!(parsed.mod_usage_scanned);
+        assert!(parsed.equipped_mods.is_empty());
+    }
+
+    #[test]
+    fn equipped_instances_are_counted_once_and_protected_from_sale() {
+        let raw = r#"{
+            "Upgrades": [
+                {"ItemId":{"$oid":"mod-1"},"ItemType":"/Lotus/Upgrades/Mods/PrimedFlow","UpgradeFingerprint":"{\"lvl\":5}"},
+                {"ItemId":{"$oid":"mod-2"},"ItemType":"/Lotus/Upgrades/Mods/PrimedFlow","UpgradeFingerprint":"{\"lvl\":5}"}
+            ],
+            "Suits": [{
+                "ItemId":{"$oid":"volt-1"},
+                "ItemType":"/Lotus/Powersuits/Volt/VoltPrime",
+                "ItemName":"Скорость",
+                "Configs":[
+                    {"Upgrades":[{"$id":"mod-1"}]},
+                    {"Upgrades":[{"$id":"mod-1"}]}
+                ]
+            }],
+            "LongGuns": [{
+                "ItemId":"braton-1",
+                "ItemType":"/Lotus/Weapons/Tenno/Rifle/BratonPrime",
+                "Configs":[{"Upgrades":["mod-2","/Lotus/Upgrades/Intrinsic/Test"]}]
+            }]
+        }"#;
+        let parsed = parse_read_only_scan_json(raw).expect("equipped references parse");
+        assert!(parsed.mod_usage_scanned);
+        assert_eq!(parsed.equipped_mods.len(), 2);
+        assert_eq!(
+            parsed
+                .equipped_mods
+                .iter()
+                .map(|instance| instance.placements.len())
+                .sum::<usize>(),
+            3
+        );
+
+        let variants = HashSet::from([MarketVariantKey::new(
+            "primed_flow",
+            Platform::Pc,
+            Some(5),
+            None::<String>,
+        )
+        .expect("variant")]);
+        let resolved = resolve_inventory(&parsed, &catalog(), &variants, Platform::Pc, 0);
+        let mod_item = resolved
+            .items
+            .iter()
+            .find(|item| item.canonical_game_id.ends_with("PrimedFlow"))
+            .expect("resolved mod");
+        assert_eq!(mod_item.equipped_quantity, 2);
+        assert_eq!(mod_item.equipped_tradeable_quantity, 2);
+        assert_eq!(mod_item.equipped_placements.len(), 3);
+        assert_eq!(mod_item.sellable_quantity, 0);
+        assert!(mod_item.equipped_placements.iter().any(|placement| {
+            placement.equipment_display_name_ru.as_deref() == Some("Скорость — Volt Prime")
+                && placement.config_index == 1
+        }));
     }
 
     #[test]

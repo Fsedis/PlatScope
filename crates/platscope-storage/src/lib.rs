@@ -6,10 +6,10 @@ use std::time::Duration;
 
 use chrono::{DateTime, NaiveDate, Utc};
 use platscope_domain::{
-    GameMetadataSnapshot, GameMetadataSource, InventoryResolution, InventorySnapshotMetadata,
-    InventorySource, ItemCatalog, MarketHistoryPoint, MarketOrderType, MarketRecord,
-    MarketVariantKey, NormalizedMarketSnapshot, Platform, ProviderId, ResolvedInventoryItem,
-    ResolvedInventorySnapshot,
+    EquipmentKind, GameMetadataSnapshot, GameMetadataSource, InventoryResolution,
+    InventorySnapshotMetadata, InventorySource, ItemCatalog, MarketHistoryPoint, MarketOrderType,
+    MarketRecord, MarketVariantKey, NormalizedMarketSnapshot, Platform, ProviderId,
+    ResolvedInventoryItem, ResolvedInventorySnapshot, ResolvedModPlacement,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -28,6 +28,7 @@ const RIVEN_DISPOSITIONS_MIGRATION: &str =
 const GAME_ITEM_DEFINITIONS_MIGRATION: &str =
     include_str!("../../../migrations/0009_game_item_definitions.sql");
 const TRADE_SHIFT_MIGRATION: &str = include_str!("../../../migrations/0010_trade_shift.sql");
+const EQUIPPED_MODS_MIGRATION: &str = include_str!("../../../migrations/0011_equipped_mods.sql");
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -941,27 +942,7 @@ impl Database {
         &mut self,
         snapshot: &ResolvedInventorySnapshot,
     ) -> Result<(), StorageError> {
-        if snapshot.items.len() as u64 > snapshot.metadata.item_count {
-            return Err(StorageError::Invariant(
-                "resolved inventory rows exceed source item_count".into(),
-            ));
-        }
-        for item in &snapshot.items {
-            let classified = item
-                .tradeable_quantity
-                .saturating_add(item.untradeable_quantity)
-                .saturating_add(item.unknown_quantity);
-            if item.owned_quantity == 0
-                || classified != item.owned_quantity
-                || item.leveled_quantity > item.owned_quantity
-                || item.sellable_quantity > item.tradeable_quantity
-            {
-                return Err(StorageError::Invariant(format!(
-                    "invalid inventory quantities for {}",
-                    item.canonical_game_id
-                )));
-            }
-        }
+        validate_inventory_snapshot(snapshot)?;
 
         let transaction = self.connection.transaction()?;
         transaction.execute(
@@ -971,8 +952,8 @@ impl Database {
         transaction.execute(
             "INSERT INTO inventory_snapshots(
                 source, observed_at, imported_at, schema_version, item_count,
-                resolved_row_count, checksum_sha256, keep_copies, is_current
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1)",
+                resolved_row_count, checksum_sha256, keep_copies, mod_usage_scanned, is_current
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 1)",
             params![
                 inventory_source_name(snapshot.metadata.source),
                 snapshot.metadata.observed_at.to_rfc3339(),
@@ -982,6 +963,7 @@ impl Database {
                 to_i64(snapshot.items.len() as u64, "resolved inventory row_count")?,
                 snapshot.metadata.checksum_sha256,
                 i64::from(snapshot.keep_copies),
+                i64::from(snapshot.mod_usage_scanned),
             ],
         )?;
         let snapshot_id = transaction.last_insert_rowid();
@@ -990,8 +972,15 @@ impl Database {
                 snapshot_id, canonical_game_id, display_name_en, display_name_ru, tags_json,
                 item_slug, platform, rank, subtype, owned_quantity, tradeable_quantity,
                 untradeable_quantity, unknown_quantity, leveled_quantity,
-                sellable_quantity, resolution
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+                equipped_quantity, equipped_tradeable_quantity, sellable_quantity, resolution
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+        )?;
+        let mut placement_statement = transaction.prepare_cached(
+            "INSERT INTO inventory_mod_placements(
+                inventory_item_id, equipment_instance_key, equipment_game_id,
+                equipment_display_name_en, equipment_display_name_ru, equipment_image_url,
+                equipment_kind, config_index
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         )?;
         for item in &snapshot.items {
             statement.execute(params![
@@ -1009,10 +998,26 @@ impl Database {
                 i64::from(item.untradeable_quantity),
                 i64::from(item.unknown_quantity),
                 i64::from(item.leveled_quantity),
+                i64::from(item.equipped_quantity),
+                i64::from(item.equipped_tradeable_quantity),
                 i64::from(item.sellable_quantity),
                 inventory_resolution_name(item.resolution),
             ])?;
+            let inventory_item_id = transaction.last_insert_rowid();
+            for placement in &item.equipped_placements {
+                placement_statement.execute(params![
+                    inventory_item_id,
+                    placement.equipment_instance_key,
+                    placement.equipment_game_id,
+                    placement.equipment_display_name_en,
+                    placement.equipment_display_name_ru,
+                    placement.equipment_image_url,
+                    equipment_kind_name(placement.equipment_kind),
+                    i64::from(placement.config_index),
+                ])?;
+            }
         }
+        drop(placement_statement);
         drop(statement);
         transaction.commit()?;
         Ok(())
@@ -1026,58 +1031,34 @@ impl Database {
     pub fn current_inventory_snapshot(
         &self,
     ) -> Result<Option<ResolvedInventorySnapshot>, StorageError> {
-        let summary = self
-            .connection
-            .query_row(
-                "SELECT id, source, observed_at, schema_version, item_count,
-                        checksum_sha256, keep_copies
-                 FROM inventory_snapshots WHERE is_current = 1",
-                [],
-                |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
-                        row.get::<_, i64>(3)?,
-                        row.get::<_, i64>(4)?,
-                        row.get::<_, String>(5)?,
-                        row.get::<_, i64>(6)?,
-                    ))
-                },
-            )
-            .optional()?;
-        let Some((snapshot_id, source, observed_at, schema_version, item_count, checksum, keep)) =
-            summary
-        else {
+        let Some(summary) = load_current_inventory_summary(&self.connection)? else {
             return Ok(None);
         };
-        let metadata = InventorySnapshotMetadata {
-            source: parse_inventory_source(&source)?,
-            observed_at: DateTime::parse_from_rfc3339(&observed_at)?.with_timezone(&Utc),
-            schema_version: u32::try_from(schema_version)
-                .map_err(|_| StorageError::Invariant("invalid inventory schema_version".into()))?,
-            item_count: u64::try_from(item_count)
-                .map_err(|_| StorageError::Invariant("invalid inventory item_count".into()))?,
-            checksum_sha256: checksum,
-        };
-        let keep_copies = u32::try_from(keep)
-            .map_err(|_| StorageError::Invariant("invalid keep_copies".into()))?;
+        let metadata = inventory_snapshot_metadata(
+            &summary.source,
+            &summary.observed_at,
+            summary.schema_version,
+            summary.item_count,
+            summary.checksum,
+        )?;
+        let keep_copies = u32_from_sql(summary.keep_copies, "keep_copies")?;
         let mut statement = self.connection.prepare_cached(
-            "SELECT canonical_game_id, display_name_en, display_name_ru, tags_json, item_slug,
+            "SELECT id, canonical_game_id, display_name_en, display_name_ru, tags_json, item_slug,
                     platform, rank, subtype, owned_quantity, tradeable_quantity,
                     untradeable_quantity, unknown_quantity, leveled_quantity,
-                    sellable_quantity, resolution
+                    equipped_quantity, equipped_tradeable_quantity, sellable_quantity, resolution
              FROM inventory_items WHERE snapshot_id = ?1
              ORDER BY COALESCE(display_name_en, canonical_game_id), rank, subtype",
         )?;
-        let mut rows = statement.query([snapshot_id])?;
+        let mut rows = statement.query([summary.snapshot_id])?;
         let mut items = Vec::new();
         while let Some(row) = rows.next()? {
-            let tags: Vec<String> = serde_json::from_str(&row.get::<_, String>(3)?)?;
-            let slug = row.get::<_, Option<String>>(4)?;
-            let platform = row.get::<_, Option<String>>(5)?;
-            let rank = optional_u16_from_sql(row.get::<_, Option<i64>>(6)?, "inventory rank")?;
-            let subtype = row.get::<_, Option<String>>(7)?;
+            let inventory_item_id = row.get::<_, i64>(0)?;
+            let tags: Vec<String> = serde_json::from_str(&row.get::<_, String>(4)?)?;
+            let slug = row.get::<_, Option<String>>(5)?;
+            let platform = row.get::<_, Option<String>>(6)?;
+            let rank = optional_u16_from_sql(row.get::<_, Option<i64>>(7)?, "inventory rank")?;
+            let subtype = row.get::<_, Option<String>>(8)?;
             let key = match (slug, platform) {
                 (Some(slug), Some(platform)) => Some(
                     MarketVariantKey::new(slug, parse_platform(&platform)?, rank, subtype.clone())
@@ -1090,26 +1071,34 @@ impl Database {
                     ));
                 }
             };
+            let placements = load_inventory_mod_placements(&self.connection, inventory_item_id)?;
             items.push(ResolvedInventoryItem {
-                canonical_game_id: row.get(0)?,
-                display_name_en: row.get(1)?,
-                display_name_ru: row.get(2)?,
+                canonical_game_id: row.get(1)?,
+                display_name_en: row.get(2)?,
+                display_name_ru: row.get(3)?,
                 tags,
                 key,
                 rank,
                 subtype,
-                owned_quantity: u32_from_sql(row.get(8)?, "owned_quantity")?,
-                tradeable_quantity: u32_from_sql(row.get(9)?, "tradeable_quantity")?,
-                untradeable_quantity: u32_from_sql(row.get(10)?, "untradeable_quantity")?,
-                unknown_quantity: u32_from_sql(row.get(11)?, "unknown_quantity")?,
-                leveled_quantity: u32_from_sql(row.get(12)?, "leveled_quantity")?,
-                sellable_quantity: u32_from_sql(row.get(13)?, "sellable_quantity")?,
-                resolution: parse_inventory_resolution(&row.get::<_, String>(14)?)?,
+                owned_quantity: u32_from_sql(row.get(9)?, "owned_quantity")?,
+                tradeable_quantity: u32_from_sql(row.get(10)?, "tradeable_quantity")?,
+                untradeable_quantity: u32_from_sql(row.get(11)?, "untradeable_quantity")?,
+                unknown_quantity: u32_from_sql(row.get(12)?, "unknown_quantity")?,
+                leveled_quantity: u32_from_sql(row.get(13)?, "leveled_quantity")?,
+                equipped_quantity: u32_from_sql(row.get(14)?, "equipped_quantity")?,
+                equipped_tradeable_quantity: u32_from_sql(
+                    row.get(15)?,
+                    "equipped_tradeable_quantity",
+                )?,
+                equipped_placements: placements,
+                sellable_quantity: u32_from_sql(row.get(16)?, "sellable_quantity")?,
+                resolution: parse_inventory_resolution(&row.get::<_, String>(17)?)?,
             });
         }
         Ok(Some(ResolvedInventorySnapshot {
             metadata,
             keep_copies,
+            mod_usage_scanned: summary.mod_usage_scanned != 0,
             items,
         }))
     }
@@ -1277,6 +1266,9 @@ impl Database {
                 if version < 10 {
                     self.connection.execute_batch(TRADE_SHIFT_MIGRATION)?;
                 }
+                if version < 11 {
+                    self.connection.execute_batch(EQUIPPED_MODS_MIGRATION)?;
+                }
                 Ok(())
             });
         if let Err(error) = migration_result {
@@ -1286,6 +1278,130 @@ impl Database {
         self.connection.execute_batch("COMMIT")?;
         Ok(())
     }
+}
+
+struct StoredInventorySummary {
+    snapshot_id: i64,
+    source: String,
+    observed_at: String,
+    schema_version: i64,
+    item_count: i64,
+    checksum: String,
+    keep_copies: i64,
+    mod_usage_scanned: i64,
+}
+
+fn load_current_inventory_summary(
+    connection: &Connection,
+) -> Result<Option<StoredInventorySummary>, StorageError> {
+    connection
+        .query_row(
+            "SELECT id, source, observed_at, schema_version, item_count,
+                    checksum_sha256, keep_copies, mod_usage_scanned
+             FROM inventory_snapshots WHERE is_current = 1",
+            [],
+            |row| {
+                Ok(StoredInventorySummary {
+                    snapshot_id: row.get(0)?,
+                    source: row.get(1)?,
+                    observed_at: row.get(2)?,
+                    schema_version: row.get(3)?,
+                    item_count: row.get(4)?,
+                    checksum: row.get(5)?,
+                    keep_copies: row.get(6)?,
+                    mod_usage_scanned: row.get(7)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(StorageError::Sqlite)
+}
+
+fn validate_inventory_snapshot(snapshot: &ResolvedInventorySnapshot) -> Result<(), StorageError> {
+    if snapshot.items.len() as u64 > snapshot.metadata.item_count {
+        return Err(StorageError::Invariant(
+            "resolved inventory rows exceed source item_count".into(),
+        ));
+    }
+    for item in &snapshot.items {
+        let classified = item
+            .tradeable_quantity
+            .saturating_add(item.untradeable_quantity)
+            .saturating_add(item.unknown_quantity);
+        if item.owned_quantity == 0
+            || classified != item.owned_quantity
+            || item.leveled_quantity > item.owned_quantity
+            || item.sellable_quantity > item.tradeable_quantity
+            || item.equipped_quantity > item.owned_quantity
+            || item.equipped_tradeable_quantity > item.equipped_quantity
+            || item.equipped_tradeable_quantity > item.tradeable_quantity
+        {
+            return Err(StorageError::Invariant(format!(
+                "invalid inventory quantities for {}",
+                item.canonical_game_id
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn inventory_snapshot_metadata(
+    source: &str,
+    observed_at: &str,
+    schema_version: i64,
+    item_count: i64,
+    checksum_sha256: String,
+) -> Result<InventorySnapshotMetadata, StorageError> {
+    Ok(InventorySnapshotMetadata {
+        source: parse_inventory_source(source)?,
+        observed_at: DateTime::parse_from_rfc3339(observed_at)?.with_timezone(&Utc),
+        schema_version: u32::try_from(schema_version)
+            .map_err(|_| StorageError::Invariant("invalid inventory schema_version".into()))?,
+        item_count: u64::try_from(item_count)
+            .map_err(|_| StorageError::Invariant("invalid inventory item_count".into()))?,
+        checksum_sha256,
+    })
+}
+
+fn load_inventory_mod_placements(
+    connection: &Connection,
+    inventory_item_id: i64,
+) -> Result<Vec<ResolvedModPlacement>, StorageError> {
+    let mut statement = connection.prepare_cached(
+        "SELECT equipment_instance_key, equipment_game_id, equipment_display_name_en,
+                equipment_display_name_ru, equipment_image_url, equipment_kind, config_index
+         FROM inventory_mod_placements
+         WHERE inventory_item_id = ?1
+         ORDER BY COALESCE(equipment_display_name_ru, equipment_display_name_en, equipment_game_id),
+                  equipment_instance_key, config_index",
+    )?;
+    statement
+        .query_map([inventory_item_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, Option<String>>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, i64>(6)?,
+            ))
+        })?
+        .map(|placement| {
+            let (instance_key, game_id, name_en, name_ru, image_url, kind, config) = placement?;
+            Ok(ResolvedModPlacement {
+                equipment_instance_key: instance_key,
+                equipment_game_id: game_id,
+                equipment_display_name_en: name_en,
+                equipment_display_name_ru: name_ru,
+                equipment_image_url: image_url,
+                equipment_kind: parse_equipment_kind(&kind)?,
+                config_index: u16::try_from(config).map_err(|_| {
+                    StorageError::Invariant("invalid equipment config_index".into())
+                })?,
+            })
+        })
+        .collect()
 }
 
 #[derive(Default)]
@@ -1495,6 +1611,43 @@ fn parse_inventory_resolution(value: &str) -> Result<InventoryResolution, Storag
     }
 }
 
+fn equipment_kind_name(kind: EquipmentKind) -> &'static str {
+    match kind {
+        EquipmentKind::Warframe => "warframe",
+        EquipmentKind::Primary => "primary",
+        EquipmentKind::Secondary => "secondary",
+        EquipmentKind::Melee => "melee",
+        EquipmentKind::Companion => "companion",
+        EquipmentKind::CompanionWeapon => "companion_weapon",
+        EquipmentKind::Archwing => "archwing",
+        EquipmentKind::Archgun => "archgun",
+        EquipmentKind::Archmelee => "archmelee",
+        EquipmentKind::Necramech => "necramech",
+        EquipmentKind::Amp => "amp",
+        EquipmentKind::Other => "other",
+    }
+}
+
+fn parse_equipment_kind(value: &str) -> Result<EquipmentKind, StorageError> {
+    match value {
+        "warframe" => Ok(EquipmentKind::Warframe),
+        "primary" => Ok(EquipmentKind::Primary),
+        "secondary" => Ok(EquipmentKind::Secondary),
+        "melee" => Ok(EquipmentKind::Melee),
+        "companion" => Ok(EquipmentKind::Companion),
+        "companion_weapon" => Ok(EquipmentKind::CompanionWeapon),
+        "archwing" => Ok(EquipmentKind::Archwing),
+        "archgun" => Ok(EquipmentKind::Archgun),
+        "archmelee" => Ok(EquipmentKind::Archmelee),
+        "necramech" => Ok(EquipmentKind::Necramech),
+        "amp" => Ok(EquipmentKind::Amp),
+        "other" => Ok(EquipmentKind::Other),
+        _ => Err(StorageError::Invariant(format!(
+            "unknown equipment kind {value}"
+        ))),
+    }
+}
+
 fn platform_name(platform: Platform) -> &'static str {
     match platform {
         Platform::Pc => "pc",
@@ -1592,7 +1745,7 @@ mod tests {
     fn foundation_migration_is_idempotent() {
         let database = Database::open_in_memory().expect("database opens");
         database.migrate().expect("migration can run twice");
-        assert_eq!(database.schema_version().expect("version"), 10);
+        assert_eq!(database.schema_version().expect("version"), 11);
     }
 
     #[test]
@@ -1636,7 +1789,7 @@ mod tests {
             .expect("migrated row loads");
         assert_eq!(display_name_ru, None);
         assert_eq!(search_text, "nyx_prime_set nyx prime set");
-        assert_eq!(database.schema_version().expect("version"), 10);
+        assert_eq!(database.schema_version().expect("version"), 11);
     }
 
     #[test]
@@ -2018,6 +2171,7 @@ mod tests {
                 checksum_sha256: "first".into(),
             },
             keep_copies: 1,
+            mod_usage_scanned: true,
             items: vec![ResolvedInventoryItem {
                 canonical_game_id: "test_item".into(),
                 display_name_en: Some("Test Item".into()),
@@ -2031,6 +2185,17 @@ mod tests {
                 untradeable_quantity: 0,
                 unknown_quantity: 0,
                 leveled_quantity: 0,
+                equipped_quantity: 1,
+                equipped_tradeable_quantity: 1,
+                equipped_placements: vec![ResolvedModPlacement {
+                    equipment_instance_key: "equipment-hash".into(),
+                    equipment_game_id: "/Lotus/Test/VoltPrime".into(),
+                    equipment_display_name_en: Some("Volt Prime".into()),
+                    equipment_display_name_ru: Some("Вольт Прайм".into()),
+                    equipment_image_url: Some("https://example.invalid/volt.png".into()),
+                    equipment_kind: EquipmentKind::Warframe,
+                    config_index: 1,
+                }],
                 sellable_quantity: 1,
                 resolution: InventoryResolution::Resolved,
             }],
@@ -2052,6 +2217,10 @@ mod tests {
             .expect("inventory exists");
         assert_eq!(current.metadata.checksum_sha256, "first");
         assert_eq!(current.items[0].sellable_quantity, 1);
+        assert!(current.mod_usage_scanned);
+        assert_eq!(current.items[0].equipped_quantity, 1);
+        assert_eq!(current.items[0].equipped_placements.len(), 1);
+        assert_eq!(current.items[0].equipped_placements[0].config_index, 1);
     }
 
     fn fixture_game_metadata(checksum: &str) -> GameMetadataSnapshot {

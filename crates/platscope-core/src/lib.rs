@@ -10,7 +10,7 @@ use chrono::{Duration as ChronoDuration, NaiveDate, Utc};
 pub use platscope_account::{AccountOrder, AccountProfile, CreateListingInput, UpdateListingInput};
 use platscope_account::{CredentialStore, OsCredentialStore, WfmAccountClient};
 use platscope_domain::{
-    GameMetadataSnapshot, GameMetadataSnapshotMetadata, InventoryResolution,
+    EquipmentKind, GameMetadataSnapshot, GameMetadataSnapshotMetadata, InventoryResolution,
     InventorySnapshotMetadata, InventorySource, ItemCatalog, LiveOrder, LiveOrderBook,
     LiveOrderSide, MarketHistoryPoint, MarketItemKind, MarketRecord, MarketVariantKey, Platform,
     PlayerInventory, PrimePartMetadata, PrimeSetComponentDefinition, PrimeSetDefinition,
@@ -283,6 +283,8 @@ pub struct InventoryViewItem {
     pub untradeable_quantity: u32,
     pub unknown_quantity: u32,
     pub leveled_quantity: u32,
+    pub equipped_quantity: u32,
+    pub equipped_placements: Vec<EquippedModPlacementView>,
     pub sellable_quantity: u32,
     pub resolution: InventoryResolution,
     pub vault_status: VaultStatus,
@@ -292,9 +294,21 @@ pub struct InventoryViewItem {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct EquippedModPlacementView {
+    pub equipment_instance_key: String,
+    pub equipment_game_id: String,
+    pub equipment_display_name: String,
+    pub equipment_image_url: Option<String>,
+    pub equipment_kind: EquipmentKind,
+    pub config_index: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct InventoryView {
     pub metadata: InventorySnapshotMetadata,
     pub keep_copies: u32,
+    pub mod_usage_scanned: bool,
     pub summary: InventorySummary,
     pub items: Vec<InventoryViewItem>,
 }
@@ -330,6 +344,7 @@ pub struct SellNowView {
     pub inventory_metadata: InventorySnapshotMetadata,
     pub inventory_summary: InventorySummary,
     pub keep_copies: u32,
+    pub mod_usage_scanned: bool,
     pub market_snapshot: Option<MarketSnapshotSummary>,
     pub summary: SellNowSummary,
     pub rows: Vec<SellNowRow>,
@@ -1743,6 +1758,7 @@ impl SellNowService {
         let inventory_metadata = inventory.metadata;
         let inventory_summary = inventory.summary;
         let keep_copies = inventory.keep_copies;
+        let mod_usage_scanned = inventory.mod_usage_scanned;
         let inventory_nominal_value = inventory_nominal_value(database, &inventory.items)?;
         let mut rows = Vec::new();
         for item in inventory.items {
@@ -1782,6 +1798,7 @@ impl SellNowService {
             inventory_metadata,
             inventory_summary,
             keep_copies,
+            mod_usage_scanned,
             market_snapshot,
             summary,
             rows,
@@ -2129,6 +2146,27 @@ fn inventory_view_from_snapshot(
                 Language::Russian => "Неизвестный предмет".to_owned(),
                 Language::English => "Unknown item".to_owned(),
             });
+            let equipped_placements = item
+                .equipped_placements
+                .into_iter()
+                .map(|placement| {
+                    let equipment_display_name = match language {
+                        Language::Russian => placement
+                            .equipment_display_name_ru
+                            .or(placement.equipment_display_name_en),
+                        Language::English => placement.equipment_display_name_en,
+                    }
+                    .unwrap_or_else(|| placement.equipment_game_id.clone());
+                    EquippedModPlacementView {
+                        equipment_instance_key: placement.equipment_instance_key,
+                        equipment_game_id: placement.equipment_game_id,
+                        equipment_display_name,
+                        equipment_image_url: placement.equipment_image_url,
+                        equipment_kind: placement.equipment_kind,
+                        config_index: placement.config_index,
+                    }
+                })
+                .collect();
             InventoryViewItem {
                 canonical_game_id: item.canonical_game_id,
                 item_id: None,
@@ -2144,6 +2182,8 @@ fn inventory_view_from_snapshot(
                 untradeable_quantity: 0,
                 unknown_quantity: 0,
                 leveled_quantity: 0,
+                equipped_quantity: item.equipped_quantity,
+                equipped_placements,
                 sellable_quantity: item.sellable_quantity,
                 resolution: item.resolution,
                 vault_status: VaultStatus::Unknown,
@@ -2176,6 +2216,7 @@ fn inventory_view_from_snapshot(
     InventoryView {
         metadata: snapshot.metadata,
         keep_copies,
+        mod_usage_scanned: snapshot.mod_usage_scanned,
         summary,
         items,
     }
@@ -2185,7 +2226,7 @@ fn inventory_item_visible(item: &ResolvedInventoryItem) -> bool {
     matches!(
         item.resolution,
         InventoryResolution::Resolved | InventoryResolution::ExactVariantUnavailable
-    ) && item.tradeable_quantity > 0
+    ) && (item.tradeable_quantity > 0 || item.equipped_quantity > 0)
 }
 
 fn enrich_inventory_view(
@@ -2983,6 +3024,9 @@ mod tests {
             untradeable_quantity: 1,
             unknown_quantity: 0,
             leveled_quantity: 1,
+            equipped_quantity: 0,
+            equipped_tradeable_quantity: 0,
+            equipped_placements: Vec::new(),
             sellable_quantity: 1,
             resolution: InventoryResolution::Resolved,
         };
@@ -3009,6 +3053,9 @@ mod tests {
             untradeable_quantity: 0,
             unknown_quantity: 0,
             leveled_quantity: 0,
+            equipped_quantity: 0,
+            equipped_tradeable_quantity: 0,
+            equipped_placements: Vec::new(),
             sellable_quantity: 0,
             resolution: InventoryResolution::ExactVariantUnavailable,
         }));
@@ -3028,6 +3075,7 @@ mod tests {
                 checksum_sha256: "inventory".into(),
             },
             keep_copies: 1,
+            mod_usage_scanned: false,
             items: vec![ResolvedInventoryItem {
                 canonical_game_id: "/Lotus/Upgrades/Mods/Sentinel/AnimalInstinct".into(),
                 display_name_en: Some("Animal Instinct".into()),
@@ -3041,6 +3089,9 @@ mod tests {
                 untradeable_quantity: 0,
                 unknown_quantity: 0,
                 leveled_quantity: 3,
+                equipped_quantity: 0,
+                equipped_tradeable_quantity: 0,
+                equipped_placements: Vec::new(),
                 sellable_quantity: 2,
                 resolution: InventoryResolution::Resolved,
             }],
@@ -3180,6 +3231,7 @@ mod tests {
                 checksum_sha256: "inventory".into(),
             },
             keep_copies: 1,
+            mod_usage_scanned: false,
             items: refinements
                 .iter()
                 .map(|(_, suffix, _)| ResolvedInventoryItem {
@@ -3195,6 +3247,9 @@ mod tests {
                     untradeable_quantity: 0,
                     unknown_quantity: 0,
                     leveled_quantity: 0,
+                    equipped_quantity: 0,
+                    equipped_tradeable_quantity: 0,
+                    equipped_placements: Vec::new(),
                     sellable_quantity: 0,
                     resolution: InventoryResolution::UnknownItem,
                 })

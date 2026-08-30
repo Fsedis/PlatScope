@@ -434,11 +434,63 @@ pub struct InventoryItem {
     pub leveled: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EquipmentKind {
+    Warframe,
+    Primary,
+    Secondary,
+    Melee,
+    Companion,
+    CompanionWeapon,
+    Archwing,
+    Archgun,
+    Archmelee,
+    Necramech,
+    Amp,
+    Other,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InventoryModPlacement {
+    pub equipment_instance_key: String,
+    pub equipment_game_id: String,
+    pub equipment_custom_name: Option<String>,
+    pub equipment_kind: EquipmentKind,
+    pub config_index: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EquippedModInstance {
+    pub canonical_game_id: String,
+    pub rank: u16,
+    pub tradeability: Tradeability,
+    pub placements: Vec<InventoryModPlacement>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlayerInventory {
     pub metadata: InventorySnapshotMetadata,
     pub items: Vec<InventoryItem>,
+    #[serde(default)]
+    pub mod_usage_scanned: bool,
+    #[serde(default)]
+    pub equipped_mods: Vec<EquippedModInstance>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolvedModPlacement {
+    pub equipment_instance_key: String,
+    pub equipment_game_id: String,
+    pub equipment_display_name_en: Option<String>,
+    pub equipment_display_name_ru: Option<String>,
+    pub equipment_image_url: Option<String>,
+    pub equipment_kind: EquipmentKind,
+    pub config_index: u16,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -456,6 +508,12 @@ pub struct ResolvedInventoryItem {
     pub untradeable_quantity: u32,
     pub unknown_quantity: u32,
     pub leveled_quantity: u32,
+    #[serde(default)]
+    pub equipped_quantity: u32,
+    #[serde(default)]
+    pub equipped_tradeable_quantity: u32,
+    #[serde(default)]
+    pub equipped_placements: Vec<ResolvedModPlacement>,
     pub sellable_quantity: u32,
     pub resolution: InventoryResolution,
 }
@@ -465,6 +523,8 @@ pub struct ResolvedInventoryItem {
 pub struct ResolvedInventorySnapshot {
     pub metadata: InventorySnapshotMetadata,
     pub keep_copies: u32,
+    #[serde(default)]
+    pub mod_usage_scanned: bool,
     pub items: Vec<ResolvedInventoryItem>,
 }
 

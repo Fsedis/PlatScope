@@ -14,6 +14,7 @@ const filters: SellNowFilters = {
   query: "",
   category: "all",
   preset: "all",
+  equipped: "all",
   sortKey: "priority",
   sortDirection: "desc",
 };
@@ -46,6 +47,8 @@ function row(
     untradeableQuantity: 0,
     unknownQuantity: 0,
     leveledQuantity: 0,
+    equippedQuantity: 0,
+    equippedPlacements: [],
     sellableQuantity: 1,
     resolution: "resolved",
     vaultStatus: "unknown",
@@ -197,6 +200,21 @@ describe("sell now presentation", () => {
       ...filters,
       preset: "attention",
     })).toEqual([attention]);
+  });
+
+  it("filters equipped rows independently from sell recommendations", () => {
+    const free = row("free", 30, 10, "neutral");
+    const equipped = row("equipped", 30, 10, "neutral");
+    equipped.inventory.equippedQuantity = 1;
+
+    expect(filterAndSortSellNowRows([free, equipped], {
+      ...filters,
+      equipped: "free",
+    })).toEqual([free]);
+    expect(filterAndSortSellNowRows([free, equipped], {
+      ...filters,
+      equipped: "equipped",
+    })).toEqual([equipped]);
   });
 
   it("filters mutually exclusive item types", () => {

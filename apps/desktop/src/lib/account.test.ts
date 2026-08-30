@@ -198,6 +198,8 @@ function inventoryItem(): InventoryViewItem {
     untradeableQuantity: 0,
     unknownQuantity: 0,
     leveledQuantity: 3,
+    equippedQuantity: 0,
+    equippedPlacements: [],
     sellableQuantity: 2,
     resolution: "resolved",
     vaultStatus: "unknown",
