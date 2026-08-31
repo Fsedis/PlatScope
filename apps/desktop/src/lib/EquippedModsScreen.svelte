@@ -28,6 +28,7 @@
       summaryVariants: "Модов",
       summaryCopies: "Надето копий",
       summaryEquipment: "Предметов",
+      summaryConfigurations: "Конфигураций",
       search: "Найти мод",
       searchPlaceholder: "Например, Поток Прайм",
       type: "Установлен на",
@@ -63,6 +64,7 @@
       summaryVariants: "Mods",
       summaryCopies: "Equipped copies",
       summaryEquipment: "Items",
+      summaryConfigurations: "Configurations",
       search: "Find a mod",
       searchPlaceholder: "For example, Primed Flow",
       type: "Installed on",
@@ -183,6 +185,7 @@
       <div><dt>{c.summaryVariants}</dt><dd>{summary.modVariants}</dd></div>
       <div><dt>{c.summaryCopies}</dt><dd>{summary.modCopies}</dd></div>
       <div><dt>{c.summaryEquipment}</dt><dd>{summary.equipmentCount}</dd></div>
+      <div><dt>{c.summaryConfigurations}</dt><dd>{summary.configCount}</dd></div>
     </dl>
     <button type="button" onclick={scanWarframe} disabled={scanning}>{scanning ? c.updating : c.update}</button>
   </section>

@@ -7,12 +7,14 @@ const LIQUIDITY_HALF_SATURATION: f64 = 10.0;
 const DECISION_MARGIN: f64 = 0.05;
 const COMPLETE_COVERAGE_PERCENT: f64 = 99.0;
 const PARTIAL_COVERAGE_PERCENT: f64 = 50.0;
+const MAX_COMPLETE_REWARD_TABLE_PERCENT: f64 = 101.0;
+const MAX_UNPRICED_COMPLETE_PERCENT: f64 = 1.0;
 
 #[derive(Debug, Clone, Copy)]
 pub struct SetPartInput<'a> {
     pub slug: &'a str,
     pub required_quantity: u32,
-    pub owned_quantity: u32,
+    pub sellable_quantity: u32,
     pub fair_price: Option<f64>,
     pub closed_volume: Option<f64>,
     pub confidence: PriceConfidence,
@@ -94,27 +96,22 @@ pub fn compare_set(input: SetComparisonInput<'_>) -> SetComparison {
         .parts
         .iter()
         .filter(|part| part.required_quantity > 0)
-        .map(|part| part.owned_quantity / part.required_quantity)
+        .map(|part| part.sellable_quantity / part.required_quantity)
         .min()
         .unwrap_or(0);
-    let set_fair_value = trusted_price(input.set_fair_price);
+    let set_fair_value = credible_price(input.set_fair_price, input.set_confidence);
     let parts_fair_value = input.parts.iter().try_fold(0.0, |total, part| {
-        trusted_price(part.fair_price)
+        credible_price(part.fair_price, part.confidence)
             .map(|price| total + price * f64::from(part.required_quantity))
     });
-    let set_liquidity_adjusted_value = set_fair_value.map(|price| {
-        price
-            * confidence_multiplier(input.set_confidence)
-            * liquidity_factor(input.set_closed_volume)
-    });
+    let set_liquidity_adjusted_value = liquidity_adjusted_price(
+        set_fair_value,
+        input.set_confidence,
+        input.set_closed_volume,
+    );
     let parts_liquidity_adjusted_value = input.parts.iter().try_fold(0.0, |total, part| {
-        trusted_price(part.fair_price).map(|price| {
-            total
-                + price
-                    * f64::from(part.required_quantity)
-                    * confidence_multiplier(part.confidence)
-                    * liquidity_factor(part.closed_volume)
-        })
+        liquidity_adjusted_price(part.fair_price, part.confidence, part.closed_volume)
+            .map(|price| total + price * f64::from(part.required_quantity))
     });
     let set_premium_percent = set_fair_value
         .zip(parts_fair_value)
@@ -158,20 +155,27 @@ pub fn calculate_relic_ev(rewards: &[RelicRewardInput<'_>]) -> RelicExpectedValu
     let mut total_chance_percent = 0.0;
     let mut missing_reward_count = 0;
     for reward in rewards {
-        let chance = valid_chance(reward.chance_percent).unwrap_or(0.0);
+        let Some(chance) = valid_chance(reward.chance_percent) else {
+            missing_reward_count += 1;
+            continue;
+        };
         total_chance_percent += chance;
-        if let Some(price) = trusted_price(reward.fair_price)
-            .filter(|_| confidence_multiplier(reward.confidence) > 0.0)
-        {
+        if let Some(price) = credible_price(reward.fair_price, reward.confidence) {
             priced_expected_value += chance / 100.0 * price;
             priced_chance_percent += chance;
         } else {
             missing_reward_count += 1;
         }
     }
-    let coverage = if priced_chance_percent >= COMPLETE_COVERAGE_PERCENT {
+    let reward_table_complete = (COMPLETE_COVERAGE_PERCENT..=MAX_COMPLETE_REWARD_TABLE_PERCENT)
+        .contains(&total_chance_percent);
+    let unpriced_chance_percent = (total_chance_percent - priced_chance_percent).max(0.0);
+    let coverage = if reward_table_complete
+        && priced_chance_percent >= COMPLETE_COVERAGE_PERCENT
+        && unpriced_chance_percent <= MAX_UNPRICED_COMPLETE_PERCENT
+    {
         RelicPricingCoverage::Complete
-    } else if priced_chance_percent >= PARTIAL_COVERAGE_PERCENT {
+    } else if reward_table_complete && priced_chance_percent >= PARTIAL_COVERAGE_PERCENT {
         RelicPricingCoverage::Partial
     } else {
         RelicPricingCoverage::Insufficient
@@ -264,23 +268,33 @@ fn trusted_price(value: Option<f64>) -> Option<f64> {
     value.filter(|price| price.is_finite() && *price > 0.0)
 }
 
+fn credible_price(value: Option<f64>, confidence: PriceConfidence) -> Option<f64> {
+    matches!(confidence, PriceConfidence::High | PriceConfidence::Medium)
+        .then(|| trusted_price(value))
+        .flatten()
+}
+
 fn valid_chance(value: f64) -> Option<f64> {
     (value.is_finite() && (0.0..=100.0).contains(&value)).then_some(value)
 }
 
-fn liquidity_factor(volume: Option<f64>) -> f64 {
-    let volume = volume
-        .filter(|value| value.is_finite() && *value >= 0.0)
-        .unwrap_or(0.0);
-    volume / (volume + LIQUIDITY_HALF_SATURATION)
+fn liquidity_adjusted_price(
+    price: Option<f64>,
+    confidence: PriceConfidence,
+    volume: Option<f64>,
+) -> Option<f64> {
+    let price = credible_price(price, confidence)?;
+    let volume = volume.filter(|value| value.is_finite() && *value > 0.0)?;
+    Some(
+        price * confidence_multiplier(confidence) * (volume / (volume + LIQUIDITY_HALF_SATURATION)),
+    )
 }
 
 const fn confidence_multiplier(confidence: PriceConfidence) -> f64 {
     match confidence {
         PriceConfidence::High => 1.0,
         PriceConfidence::Medium => 0.75,
-        PriceConfidence::Low => 0.4,
-        PriceConfidence::Unknown => 0.0,
+        PriceConfidence::Low | PriceConfidence::Unknown => 0.0,
     }
 }
 
@@ -294,7 +308,7 @@ mod tests {
             SetPartInput {
                 slug: "blade",
                 required_quantity: 2,
-                owned_quantity: 5,
+                sellable_quantity: 5,
                 fair_price: Some(10.0),
                 closed_volume: Some(20.0),
                 confidence: PriceConfidence::High,
@@ -302,7 +316,7 @@ mod tests {
             SetPartInput {
                 slug: "blueprint",
                 required_quantity: 1,
-                owned_quantity: 3,
+                sellable_quantity: 3,
                 fair_price: Some(20.0),
                 closed_volume: Some(20.0),
                 confidence: PriceConfidence::High,
@@ -320,11 +334,33 @@ mod tests {
     }
 
     #[test]
+    fn protected_copies_do_not_count_as_a_saleable_complete_set() {
+        let parts = [SetPartInput {
+            slug: "part",
+            required_quantity: 1,
+            sellable_quantity: 0,
+            fair_price: Some(10.0),
+            closed_volume: Some(20.0),
+            confidence: PriceConfidence::High,
+        }];
+        let result = compare_set(SetComparisonInput {
+            set_slug: "test_set",
+            set_fair_price: Some(20.0),
+            set_closed_volume: Some(20.0),
+            set_confidence: PriceConfidence::High,
+            parts: &parts,
+        });
+
+        assert_eq!(result.complete_sets, 0);
+        assert_eq!(result.recommended_mode, SetSaleMode::InsufficientInventory);
+    }
+
+    #[test]
     fn illiquid_set_premium_does_not_automatically_win() {
         let parts = [SetPartInput {
             slug: "part",
             required_quantity: 1,
-            owned_quantity: 1,
+            sellable_quantity: 1,
             fair_price: Some(90.0),
             closed_volume: Some(100.0),
             confidence: PriceConfidence::High,
@@ -342,6 +378,53 @@ mod tests {
                 .set_premium_percent
                 .is_some_and(|premium| premium > 0.0)
         );
+    }
+
+    #[test]
+    fn unknown_set_confidence_is_insufficient_instead_of_zero_value() {
+        let parts = [SetPartInput {
+            slug: "part",
+            required_quantity: 1,
+            sellable_quantity: 1,
+            fair_price: Some(10.0),
+            closed_volume: Some(20.0),
+            confidence: PriceConfidence::High,
+        }];
+        let result = compare_set(SetComparisonInput {
+            set_slug: "test_set",
+            set_fair_price: Some(50.0),
+            set_closed_volume: Some(20.0),
+            set_confidence: PriceConfidence::Unknown,
+            parts: &parts,
+        });
+
+        assert_eq!(result.set_fair_value, None);
+        assert_eq!(result.set_liquidity_adjusted_value, None);
+        assert_eq!(result.recommended_mode, SetSaleMode::InsufficientPricing);
+    }
+
+    #[test]
+    fn missing_or_zero_liquidity_is_insufficient_instead_of_zero_value() {
+        for volume in [None, Some(0.0)] {
+            let parts = [SetPartInput {
+                slug: "part",
+                required_quantity: 1,
+                sellable_quantity: 1,
+                fair_price: Some(10.0),
+                closed_volume: Some(20.0),
+                confidence: PriceConfidence::High,
+            }];
+            let result = compare_set(SetComparisonInput {
+                set_slug: "test_set",
+                set_fair_price: Some(50.0),
+                set_closed_volume: volume,
+                set_confidence: PriceConfidence::High,
+                parts: &parts,
+            });
+
+            assert_eq!(result.set_liquidity_adjusted_value, None);
+            assert_eq!(result.recommended_mode, SetSaleMode::InsufficientPricing);
+        }
     }
 
     #[test]
@@ -377,6 +460,36 @@ mod tests {
         let result = calculate_relic_ev(&rewards);
         assert_eq!(result.coverage, RelicPricingCoverage::Insufficient);
         assert_eq!(result.priced_expected_value, None);
+    }
+
+    #[test]
+    fn malformed_reward_probability_table_never_exposes_ev() {
+        let rewards = [RelicRewardInput {
+            reward_slug: Some("duplicated"),
+            chance_percent: 100.0,
+            fair_price: Some(100.0),
+            confidence: PriceConfidence::High,
+        }; 2];
+        let result = calculate_relic_ev(&rewards);
+
+        assert!((result.total_chance_percent - 200.0).abs() < f64::EPSILON);
+        assert_eq!(result.coverage, RelicPricingCoverage::Insufficient);
+        assert_eq!(result.priced_expected_value, None);
+    }
+
+    #[test]
+    fn low_confidence_reward_is_not_counted_as_priced_ev() {
+        let rewards = [RelicRewardInput {
+            reward_slug: Some("uncertain"),
+            chance_percent: 100.0,
+            fair_price: Some(100.0),
+            confidence: PriceConfidence::Low,
+        }];
+        let result = calculate_relic_ev(&rewards);
+
+        assert_eq!(result.priced_expected_value, None);
+        assert!(result.priced_chance_percent.abs() < f64::EPSILON);
+        assert_eq!(result.coverage, RelicPricingCoverage::Insufficient);
     }
 
     #[test]

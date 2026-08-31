@@ -45,8 +45,6 @@ const item: InventoryViewItem = {
   sellableQuantity: 2,
   resolution: "resolved",
   vaultStatus: "unknown",
-  closedMedian48h: 40,
-  hasReliablePrice: true,
 };
 
 describe("equipped mods presentation", () => {
@@ -82,5 +80,24 @@ describe("equipped mods presentation", () => {
     });
     expect(configLabel(0)).toBe("A");
     expect(configLabel(2)).toBe("C");
+  });
+
+  it("counts each equipment configuration once across different equipped mods", () => {
+    const secondMod: InventoryViewItem = {
+      ...item,
+      canonicalGameId: "/Lotus/Upgrades/Mods/Intensify",
+      itemId: "intensify",
+      displayName: "Усиление",
+      equippedPlacements: item.equippedPlacements.map((placement) => ({ ...placement })),
+    };
+
+    const summary = summarizeEquippedMods(buildEquippedModEntries([item, secondMod]));
+
+    expect(summary).toEqual({
+      modVariants: 2,
+      modCopies: 2,
+      equipmentCount: 1,
+      configCount: 2,
+    });
   });
 });

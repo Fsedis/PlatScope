@@ -1,12 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  filterInventory,
   inventoryCategory,
   inventorySourceLabel,
   inventoryVariantLabel,
   resolutionLabel,
-  type InventoryFilters,
   type InventoryViewItem,
 } from "./inventory";
 
@@ -20,6 +18,7 @@ const base: InventoryViewItem = {
     slug: "test_item",
     platform: "pc",
     rank: null,
+    charges: null,
     subtype: null,
     amberStars: null,
     cyanStars: null,
@@ -36,24 +35,9 @@ const base: InventoryViewItem = {
   sellableQuantity: 2,
   resolution: "resolved",
   vaultStatus: "vaulted",
-  closedMedian48h: 18,
-  hasReliablePrice: true,
-};
-
-const allFilters: InventoryFilters = {
-  category: "all",
-  duplicates: "all" as const,
-  vault: "all" as const,
-  price: "all" as const,
 };
 
 describe("inventory presentation", () => {
-  it("filters by localized name and category", () => {
-    const filters: InventoryFilters = { ...allFilters, category: "component" };
-    expect(filterInventory([base], "тестовый", filters)).toEqual([base]);
-    expect(filterInventory([base], "другой", filters)).toEqual([]);
-  });
-
   it("assigns one primary type when tags overlap", () => {
     expect(inventoryCategory({ ...base, tags: ["mod", "warframe", "rare"] })).toBe("mod");
     expect(inventoryCategory({ ...base, tags: ["component", "weapon", "prime"] })).toBe("component");
@@ -67,31 +51,6 @@ describe("inventory presentation", () => {
       sellableQuantity: 0,
     };
     expect(resolutionLabel(attention.resolution)).toBe("Нет точного варианта");
-  });
-
-  it("recognizes duplicates from owned quantity", () => {
-    expect(
-      filterInventory([base], "", { ...allFilters, duplicates: "duplicates" }),
-    ).toEqual([base]);
-  });
-
-  it("combines vault and reliable-price filters", () => {
-    expect(
-      filterInventory([base], "", {
-        ...allFilters,
-        vault: "vaulted",
-        price: "priced",
-      }),
-    ).toEqual([base]);
-    expect(
-      filterInventory([base], "", { ...allFilters, vault: "available" }),
-    ).toEqual([]);
-    expect(
-      filterInventory([{ ...base, closedMedian48h: null, hasReliablePrice: false }], "", {
-        ...allFilters,
-        price: "unpriced",
-      }),
-    ).toHaveLength(1);
   });
 
   it("formats exact rank and subtype", () => {

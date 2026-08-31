@@ -74,7 +74,7 @@
       noPrice: "нет данных",
       priority: "Приоритет продажи", priorityHint: "№1 — предмет, который стоит выставить первым.", priorityPosition: (rank: number | null, score: number) => rank === null ? `Приоритет не рассчитан · ${score}/100` : `№${rank} в очереди · ${score}/100`, fairPrice: "Ориентир рынка", listPrice: "Рекомендуемый ордер", quickSell: "Лучшая покупка сейчас", sell: "на продажу", buy: "на покупку",
       wfmOrder: "Ордер Warframe Market", loadingOrders: "Проверяем ваши ордера…", accountUnavailable: "Не удалось загрузить ордера Warframe Market.", retryOrders: "Повторить", accountDisconnected: "Warframe Market не подключён", accountDisconnectedBody: "Подключите аккаунт, чтобы выставить этот предмет.", openAccount: "Подключить Warframe Market", unverifiedAccount: "Подтвердите игровой аккаунт на Warframe Market, чтобы менять ордера.", notSellable: "После резерва нет подтверждённых копий для продажи.", noCurrentOrder: "Ордер ещё не выставлен", currentOrder: (price: string, quantity: number, status: string, perTrade: number | null) => perTrade === null ? `Выставлено: ${price}p × ${quantity} · ${status}` : `Выставлено: ${quantity} шт., по ${perTrade} за сделку за ${price}p · ${status}`,
-      manageOrder: "Управлять ордером", orderPrice: "Цена, платина", bulkOrderPrice: "Цена за сделку, платина", orderQuantity: "Всего предметов", orderPerTrade: "Предметов за одну сделку", publishOrder: "Сразу показать ордер на рынке", reviewCreate: "Проверить ордер", variantUnavailable: "Этот вариант не найден на Warframe Market. Обновите рыночные данные.", createTitle: "Подтвердите новый ордер", confirmCreate: (name: string, price: number, quantity: number, perTrade: number | null) => perTrade === null ? `${name}: выставить ${quantity} шт. по ${price}p.` : `${name}: всего ${quantity} шт., по ${perTrade} за сделку за ${price}p.`, confirmChecked: "Я проверил предмет, цену и количество", createOrder: "Создать ордер", cancelOrderAction: "Отменить", confirmRequired: "Подтвердите, что проверили параметры ордера.", orderCreated: "Ордер создан на Warframe Market.", orderActionError: (reason: string) => accountActionErrorMessage(reason, "ru"),
+      manageOrder: "Управлять ордером", orderPrice: "Цена, платина", bulkOrderPrice: "Цена за 1 предмет, платина", orderQuantity: "Всего предметов", orderPerTrade: "Предметов за одну сделку", publishOrder: "Сразу показать ордер на рынке", reviewCreate: "Проверить ордер", variantUnavailable: "Этот вариант не найден на Warframe Market. Обновите рыночные данные.", createTitle: "Подтвердите новый ордер", confirmCreate: (name: string, price: number, quantity: number, perTrade: number | null) => perTrade === null ? `${name}: выставить ${quantity} шт. по ${price}p.` : `${name}: всего ${quantity} шт., по ${perTrade} за сделку за ${price}p за лот.`, confirmChecked: "Я проверил предмет, цену и количество", createOrder: "Создать ордер", cancelOrderAction: "Отменить", confirmRequired: "Подтвердите, что проверили параметры ордера.", orderCreated: "Ордер создан на Warframe Market.", orderActionError: (reason: string) => accountActionErrorMessage(reason, "ru"),
     },
     en: {
       matching: "Loading your items…", shown: (visible: number, total: number) => `${visible} of ${total} items shown`,
@@ -99,7 +99,7 @@
       noPrice: "no price",
       priority: "Sale priority", priorityHint: "No. 1 is the item to list first.", priorityPosition: (rank: number | null, score: number) => rank === null ? `Priority unavailable · ${score}/100` : `No. ${rank} in the queue · ${score}/100`, fairPrice: "Fair price", listPrice: "List price", quickSell: "Quick Sell", sell: "sell", buy: "buy",
       wfmOrder: "Warframe Market order", loadingOrders: "Checking your orders…", accountUnavailable: "Unable to load Warframe Market orders.", retryOrders: "Try again", accountDisconnected: "Warframe Market is not connected", accountDisconnectedBody: "Connect your account to list this item.", openAccount: "Connect Warframe Market", unverifiedAccount: "Verify your game account on Warframe Market to change orders.", notSellable: "There are no confirmed copies to sell after the reserve.", noCurrentOrder: "Not listed yet", currentOrder: (price: string, quantity: number, status: string, perTrade: number | null) => perTrade === null ? `Listed: ${price}p × ${quantity} · ${status}` : `Listed: ${quantity} total, ${perTrade} per trade for ${price}p · ${status}`,
-      manageOrder: "Manage order", orderPrice: "Price, platinum", bulkOrderPrice: "Price per trade, platinum", orderQuantity: "Total items", orderPerTrade: "Items per trade", publishOrder: "Show order on the market immediately", reviewCreate: "Review order", variantUnavailable: "This variant is not available on Warframe Market. Refresh market data.", createTitle: "Confirm new order", confirmCreate: (name: string, price: number, quantity: number, perTrade: number | null) => perTrade === null ? `${name}: list ${quantity} at ${price}p each.` : `${name}: ${quantity} total, ${perTrade} per trade for ${price}p.`, confirmChecked: "I reviewed the item, price, and quantity", createOrder: "Create order", cancelOrderAction: "Cancel", confirmRequired: "Confirm that you reviewed the order parameters.", orderCreated: "Order created on Warframe Market.", orderActionError: (reason: string) => accountActionErrorMessage(reason, "en"),
+      manageOrder: "Manage order", orderPrice: "Price, platinum", bulkOrderPrice: "Price per item, platinum", orderQuantity: "Total items", orderPerTrade: "Items per trade", publishOrder: "Show order on the market immediately", reviewCreate: "Review order", variantUnavailable: "This variant is not available on Warframe Market. Refresh market data.", createTitle: "Confirm new order", confirmCreate: (name: string, price: number, quantity: number, perTrade: number | null) => perTrade === null ? `${name}: list ${quantity} at ${price}p each.` : `${name}: ${quantity} total, ${perTrade} per trade for ${price}p per lot.`, confirmChecked: "I reviewed the item, price, and quantity", createOrder: "Create order", cancelOrderAction: "Cancel", confirmRequired: "Confirm that you reviewed the order parameters.", orderCreated: "Order created on Warframe Market.", orderActionError: (reason: string) => accountActionErrorMessage(reason, "en"),
     },
   } as const;
   $: c = copy[$locale];
@@ -261,10 +261,9 @@
     seed: string,
   ): void {
     orderDraftSeed = seed;
-    orderPrice = order?.platinum ?? Math.max(
-      1,
-      Math.round(row.recommendation?.listPrice ?? row.recommendation?.fairPrice ?? 1),
-    );
+    orderPrice = order
+      ? Math.max(1, Math.round(order.platinum / (order.perTrade ?? 1)))
+      : Math.max(1, Math.round(row.recommendation?.listPrice ?? row.recommendation?.fairPrice ?? 1));
     orderQuantity = order?.quantity ?? Math.max(1, row.inventory.sellableQuantity);
     orderPerTrade = order?.perTrade ?? 1;
     orderVisible = order?.visible ?? true;
@@ -276,12 +275,19 @@
     event.preventDefault();
     if (!selectedRow || currentOrder) return;
     const perTrade = selectedRow.inventory.bulkTradable ? orderPerTrade : null;
-    orderFormError = validateListingNumbers(orderPrice, orderQuantity, perTrade, $locale) ?? "";
+    const listingPlatinum = orderPrice * (perTrade ?? 1);
+    orderFormError = validateListingNumbers(
+      listingPlatinum,
+      orderQuantity,
+      perTrade,
+      $locale,
+      selectedRow.inventory.sellableQuantity,
+    ) ?? "";
     if (orderFormError) return;
     const trigger = event.submitter as HTMLElement | null;
     const input = createListingInputFromInventory(
       selectedRow.inventory,
-      orderPrice,
+      listingPlatinum,
       orderQuantity,
       orderVisible,
       perTrade,
@@ -390,7 +396,6 @@
       candidateRows: candidates.length,
       pricedRows: candidates.filter((row) => row.recommendation?.fairPrice !== null && row.recommendation !== null).length,
       highPriorityRows: rows.filter((row) => row.priority.band === "high").length,
-      inventoryNominalValue: view?.summary.inventoryNominalValue ?? 0,
       nominalValue: rows.reduce((sum, row) => sum + (row.nominalValue ?? 0), 0),
     };
   }
@@ -737,7 +742,7 @@
                     </div>
                     <div class="filter-field">
                       <label for="sell-order-quantity">{c.orderQuantity}</label>
-                      <input id="sell-order-quantity" type="number" inputmode="numeric" bind:value={orderQuantity} min="1" max="9999" step="1" required aria-describedby={orderFormError ? "sell-order-error" : undefined} aria-invalid={orderFormError ? "true" : undefined} />
+                      <input id="sell-order-quantity" type="number" inputmode="numeric" bind:value={orderQuantity} min="1" max={selectedRow.inventory.sellableQuantity} step="1" required aria-describedby={orderFormError ? "sell-order-error" : undefined} aria-invalid={orderFormError ? "true" : undefined} />
                     </div>
                     {#if selectedRow.inventory.bulkTradable}
                       <div class="filter-field bulk-trade-field">

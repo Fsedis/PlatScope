@@ -14,24 +14,25 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Utc};
 use platscope_core::{
-    AccountOrder, AccountService, AccountView, AppSettings, CreateListingInput,
+    AccountOrder, AccountOrderType, AccountService, AccountView, AppSettings, CreateListingInput,
     DEFAULT_MARKET_SEARCH_LIMIT, GameMetadataRefreshOutcome, GameMetadataService,
     HistoryBootstrapOutcome, HistoryService, InsightsService, InsightsView, InventoryService,
-    InventoryView, Language, LivePricingResult, LivePricingService, LiveSellNowResult,
-    LoggingGuard, MarketBrowserService, MarketDataService, MarketHistoryView, MarketRefreshOutcome,
+    InventoryView, LivePricingResult, LivePricingService, LiveSellNowResult, LoggingGuard,
+    MarketBrowserService, MarketDataService, MarketHistoryView, MarketRefreshOutcome,
     MarketSearchResult, MarketSearchRow, PriceRecommendation, PricingService,
     ResourceConverterService, ResourceConverterView, SETTINGS_KEY, SellNowService, SellNowView,
     SetComponentInsight, UpdateListingInput, enrich_account_view, init_logging,
 };
 use platscope_domain::{
-    GameMetadataSnapshot, MarketItemKind, MarketVariantKey, PrimeSetDefinition,
+    GameMetadataSnapshot, InventoryResolution, MarketItemKind, MarketVariantKey, PriceConfidence,
+    PrimeSetDefinition,
 };
 use platscope_readonly_scan::inventory::{
     InventoryScanner as ReadOnlyInventoryScanner, ReadOnlyScanResult,
 };
 use platscope_storage::{
     Database, HistoryCoverage, MarketSnapshotSummary, NewTradeEvent, ProviderHealth, TradeEvent,
-    TradeEventStatus,
+    TradeEventStatus, TradeSalesSummary,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, State};
@@ -72,6 +73,7 @@ const WFCD_IMAGE_BASE_URL: &str = "https://cdn.warframestat.us/img/";
 const COMPONENT_IMAGE_PROTOCOL: &str = "component-image";
 const COMPONENT_IMAGE_CACHE_DIRECTORY: &str = "component-images";
 const MAX_COMPONENT_IMAGE_BYTES: usize = 1024 * 1024;
+const MIN_REWARD_RECOMMENDATION_OCR_CONFIDENCE: f64 = 0.75;
 static COMPONENT_IMAGE_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
@@ -178,6 +180,8 @@ struct RewardSetPart {
 struct RewardSetOverview {
     set_name: String,
     set_price: Option<f64>,
+    completed_sets: Option<u32>,
+    target_set_number: Option<u32>,
     ready_components: Option<u32>,
     total_components: u32,
     parts: Vec<RewardSetPart>,
@@ -737,6 +741,325 @@ async fn account_disconnect(state: State<'_, AppState>) -> Result<bool, String> 
     Ok(revoked)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SellListingIntent {
+    item_id: String,
+    quantity: u32,
+    per_trade: u32,
+    rank: Option<u16>,
+    charges: Option<u16>,
+    subtype: Option<String>,
+    amber_stars: Option<u16>,
+    cyan_stars: Option<u16>,
+}
+
+impl SellListingIntent {
+    fn from_create(input: &CreateListingInput) -> Self {
+        Self {
+            item_id: input.item_id.clone(),
+            quantity: input.quantity,
+            per_trade: input.per_trade.unwrap_or(1),
+            rank: input.rank,
+            charges: input.charges,
+            subtype: input.subtype.clone(),
+            amber_stars: input.amber_stars,
+            cyan_stars: input.cyan_stars,
+        }
+    }
+
+    fn from_update(order: &AccountOrder, input: &UpdateListingInput) -> Result<Self, String> {
+        Ok(Self {
+            item_id: order.item_id.clone().ok_or_else(|| {
+                "У ордера не определён предмет; обновите список ордеров.".to_owned()
+            })?,
+            quantity: input.quantity.unwrap_or(order.quantity),
+            per_trade: input.per_trade.or(order.per_trade).unwrap_or(1),
+            rank: input.rank.or(order.rank),
+            charges: input.charges.or(order.charges),
+            subtype: input.subtype.clone().or_else(|| order.subtype.clone()),
+            amber_stars: input.amber_stars.or(order.amber_stars),
+            cyan_stars: input.cyan_stars.or(order.cyan_stars),
+        })
+    }
+
+    fn matches_order(&self, order: &AccountOrder) -> bool {
+        order.order_type == AccountOrderType::Sell
+            && order.item_id.as_deref() == Some(self.item_id.as_str())
+            && order.rank == self.rank
+            && order.charges == self.charges
+            && order.subtype == self.subtype
+            && order.amber_stars == self.amber_stars
+            && order.cyan_stars == self.cyan_stars
+    }
+
+    fn matches_inventory_key(&self, item_id: Option<&str>, key: &MarketVariantKey) -> bool {
+        item_id == Some(self.item_id.as_str())
+            && key.rank == self.rank
+            && key.charges == self.charges
+            && key.subtype == self.subtype
+            && key.amber_stars == self.amber_stars
+            && key.cyan_stars == self.cyan_stars
+    }
+}
+
+fn validate_sell_listing_inventory(
+    intent: &SellListingIntent,
+    inventory: &InventoryView,
+    existing_orders: &[AccountOrder],
+    excluded_order_id: Option<&str>,
+    prime_set: Option<&PrimeSetDefinition>,
+    set_component_reservations: &HashMap<String, u32>,
+) -> Result<(), String> {
+    if !(1..=6).contains(&intent.per_trade) || !intent.quantity.is_multiple_of(intent.per_trade) {
+        return Err("Количество должно делиться на размер одного торгового лота (1–6).".into());
+    }
+    if let Some(definition) = prime_set {
+        return validate_prime_set_listing(
+            intent,
+            inventory,
+            existing_orders,
+            excluded_order_id,
+            definition,
+            set_component_reservations,
+        );
+    }
+    let available = inventory
+        .items
+        .iter()
+        .filter(|item| {
+            item.resolution == InventoryResolution::Resolved
+                && item
+                    .key
+                    .as_ref()
+                    .is_some_and(|key| intent.matches_inventory_key(item.item_id.as_deref(), key))
+        })
+        .fold(0_u32, |total, item| {
+            total.saturating_add(item.sellable_quantity)
+        });
+    if available == 0 {
+        return Err(
+            "Этот точный вариант сейчас нельзя продать: проверьте ранг, заряды и резерв копий."
+                .into(),
+        );
+    }
+    let reserved = existing_orders
+        .iter()
+        .filter(|order| {
+            order.visible
+                && excluded_order_id != Some(order.id.as_str())
+                && intent.matches_order(order)
+        })
+        .fold(0_u32, |total, order| total.saturating_add(order.quantity));
+    let reserved_by_sets = set_component_reservations
+        .get(&intent.item_id)
+        .copied()
+        .unwrap_or(0);
+    let total_reserved = reserved.saturating_add(reserved_by_sets);
+    let free = available.saturating_sub(total_reserved);
+    if intent.quantity > free {
+        return Err(format!(
+            "Для продажи доступно {free} шт.: ещё {total_reserved} шт. уже зарезервировано активными ордерами."
+        ));
+    }
+    Ok(())
+}
+
+fn validate_prime_set_listing(
+    intent: &SellListingIntent,
+    inventory: &InventoryView,
+    existing_orders: &[AccountOrder],
+    excluded_order_id: Option<&str>,
+    definition: &PrimeSetDefinition,
+    set_component_reservations: &HashMap<String, u32>,
+) -> Result<(), String> {
+    if intent.rank.is_some()
+        || intent.charges.is_some()
+        || intent.subtype.is_some()
+        || intent.amber_stars.is_some()
+        || intent.cyan_stars.is_some()
+    {
+        return Err("Полный комплект не должен иметь ранг, заряды или вариант детали.".into());
+    }
+    let available_sets = definition
+        .components
+        .iter()
+        .filter(|component| component.required_quantity > 0)
+        .map(|component| {
+            let component_items = inventory
+                .items
+                .iter()
+                .filter(|item| {
+                    item.resolution == InventoryResolution::Resolved
+                        && item
+                            .key
+                            .as_ref()
+                            .is_some_and(|key| key.slug == component.slug)
+                })
+                .collect::<Vec<_>>();
+            let available = component_items.iter().fold(0_u32, |total, item| {
+                total.saturating_add(item.sellable_quantity)
+            });
+            let reserved = existing_orders
+                .iter()
+                .filter(|order| {
+                    order.visible
+                        && excluded_order_id != Some(order.id.as_str())
+                        && component_items.iter().any(|item| {
+                            item.key.as_ref().is_some_and(|key| {
+                                order.order_type == AccountOrderType::Sell
+                                    && order.item_id.as_deref() == item.item_id.as_deref()
+                                    && order.rank == key.rank
+                                    && order.charges == key.charges
+                                    && order.subtype == key.subtype
+                                    && order.amber_stars == key.amber_stars
+                                    && order.cyan_stars == key.cyan_stars
+                            })
+                        })
+                })
+                .fold(0_u32, |total, order| total.saturating_add(order.quantity));
+            let reserved_by_sets = component_items
+                .iter()
+                .filter_map(|item| item.item_id.as_deref())
+                .collect::<HashSet<_>>()
+                .into_iter()
+                .fold(0_u32, |total, item_id| {
+                    total.saturating_add(
+                        set_component_reservations
+                            .get(item_id)
+                            .copied()
+                            .unwrap_or(0),
+                    )
+                });
+            available.saturating_sub(reserved.saturating_add(reserved_by_sets))
+                / component.required_quantity
+        })
+        .min()
+        .unwrap_or(0);
+    if intent.quantity > available_sets {
+        return Err(format!(
+            "Для продажи доступно полных комплектов: {available_sets}. Проверьте резерв копий и активные ордера на детали."
+        ));
+    }
+    Ok(())
+}
+
+fn prime_set_for_listing(
+    state: &AppState,
+    item_id: &str,
+) -> Result<Option<PrimeSetDefinition>, String> {
+    let database = state
+        .database
+        .lock()
+        .map_err(|_| "database state is unavailable".to_owned())?;
+    let Some(catalog) = database
+        .load_current_catalog()
+        .map_err(|error| error.to_string())?
+    else {
+        return Ok(None);
+    };
+    let Some(set_slug) = catalog
+        .items
+        .iter()
+        .find(|item| item.item_id == item_id)
+        .map(|item| item.slug.as_str())
+    else {
+        return Ok(None);
+    };
+    Ok(database
+        .load_current_game_metadata()
+        .map_err(|error| error.to_string())?
+        .and_then(|metadata| {
+            metadata
+                .prime_sets
+                .into_iter()
+                .find(|definition| definition.set_slug == set_slug)
+        }))
+}
+
+fn active_set_component_reservations(
+    state: &AppState,
+    orders: &[AccountOrder],
+    excluded_order_id: Option<&str>,
+) -> Result<HashMap<String, u32>, String> {
+    let database = state
+        .database
+        .lock()
+        .map_err(|_| "database state is unavailable".to_owned())?;
+    let Some(catalog) = database
+        .load_current_catalog()
+        .map_err(|error| error.to_string())?
+    else {
+        return Ok(HashMap::new());
+    };
+    let Some(metadata) = database
+        .load_current_game_metadata()
+        .map_err(|error| error.to_string())?
+    else {
+        return Ok(HashMap::new());
+    };
+    let slug_by_item_id = catalog
+        .items
+        .iter()
+        .map(|item| (item.item_id.as_str(), item.slug.as_str()))
+        .collect::<HashMap<_, _>>();
+    let item_id_by_slug = catalog
+        .items
+        .iter()
+        .map(|item| (item.slug.as_str(), item.item_id.as_str()))
+        .collect::<HashMap<_, _>>();
+    let set_by_slug = metadata
+        .prime_sets
+        .iter()
+        .map(|definition| (definition.set_slug.as_str(), definition))
+        .collect::<HashMap<_, _>>();
+    let mut reservations = HashMap::<String, u32>::new();
+    for order in orders.iter().filter(|order| {
+        order.visible
+            && order.order_type == AccountOrderType::Sell
+            && excluded_order_id != Some(order.id.as_str())
+            && order.rank.is_none()
+            && order.charges.is_none()
+            && order.subtype.is_none()
+            && order.amber_stars.is_none()
+            && order.cyan_stars.is_none()
+    }) {
+        let Some(set_slug) = order
+            .item_id
+            .as_deref()
+            .and_then(|item_id| slug_by_item_id.get(item_id).copied())
+        else {
+            continue;
+        };
+        let Some(definition) = set_by_slug.get(set_slug).copied() else {
+            continue;
+        };
+        for component in &definition.components {
+            let Some(item_id) = item_id_by_slug.get(component.slug.as_str()).copied() else {
+                continue;
+            };
+            let quantity = order.quantity.saturating_mul(component.required_quantity);
+            reservations
+                .entry(item_id.to_owned())
+                .and_modify(|reserved| *reserved = reserved.saturating_add(quantity))
+                .or_insert(quantity);
+        }
+    }
+    Ok(reservations)
+}
+
+fn inventory_for_listing(state: &AppState) -> Result<InventoryView, String> {
+    let settings = state
+        .database
+        .lock()
+        .map_err(|_| "database state is unavailable".to_owned())?
+        .get_setting::<AppSettings>(SETTINGS_KEY)
+        .map_err(|error| error.to_string())?
+        .unwrap_or_default();
+    InventoryService::view(&state.database, &settings)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "Сначала обновите инвентарь из Warframe.".to_owned())
+}
+
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)] // Tauri deserializes command values by ownership.
 async fn account_create_listing(
@@ -744,6 +1067,26 @@ async fn account_create_listing(
     confirmed: bool,
     state: State<'_, AppState>,
 ) -> Result<AccountOrder, String> {
+    input.validate().map_err(|error| error.to_string())?;
+    if input.order_type == AccountOrderType::Sell {
+        let inventory = inventory_for_listing(&state)?;
+        let prime_set = prime_set_for_listing(&state, &input.item_id)?;
+        let account = state
+            .account_service
+            .view()
+            .await
+            .map_err(|error| error.to_string())?;
+        let set_component_reservations =
+            active_set_component_reservations(&state, &account.orders, None)?;
+        validate_sell_listing_inventory(
+            &SellListingIntent::from_create(&input),
+            &inventory,
+            &account.orders,
+            None,
+            prime_set.as_ref(),
+            &set_component_reservations,
+        )?;
+    }
     let order = state
         .account_service
         .create_listing(&input, confirmed)
@@ -764,6 +1107,43 @@ async fn account_update_listing(
     confirmed: bool,
     state: State<'_, AppState>,
 ) -> Result<AccountOrder, String> {
+    input.validate().map_err(|error| error.to_string())?;
+    let account = state
+        .account_service
+        .view()
+        .await
+        .map_err(|error| error.to_string())?;
+    let current = account
+        .orders
+        .iter()
+        .find(|order| order.id == id)
+        .ok_or_else(|| "Ордер не найден; обновите список ордеров.".to_owned())?;
+    let effective_quantity = input.quantity.unwrap_or(current.quantity);
+    let effective_per_trade = input.per_trade.or(current.per_trade).unwrap_or(1);
+    if !(1..=6).contains(&effective_per_trade)
+        || !effective_quantity.is_multiple_of(effective_per_trade)
+    {
+        return Err(
+            "После изменения количество должно делиться на размер одного торгового лота (1–6)."
+                .into(),
+        );
+    }
+    let final_visible = input.visible.unwrap_or(current.visible);
+    if current.order_type == AccountOrderType::Sell && final_visible {
+        let inventory = inventory_for_listing(&state)?;
+        let intent = SellListingIntent::from_update(current, &input)?;
+        let prime_set = prime_set_for_listing(&state, &intent.item_id)?;
+        let set_component_reservations =
+            active_set_component_reservations(&state, &account.orders, Some(&id))?;
+        validate_sell_listing_inventory(
+            &intent,
+            &inventory,
+            &account.orders,
+            Some(&id),
+            prime_set.as_ref(),
+            &set_component_reservations,
+        )?;
+    }
     let order = state
         .account_service
         .update_listing(&id, &input, confirmed)
@@ -803,6 +1183,17 @@ fn trade_events(state: State<'_, AppState>) -> Result<Vec<TradeEvent>, String> {
         .lock()
         .map_err(|_| "database state is unavailable".to_owned())?
         .recent_trade_events(30)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command(async)]
+#[allow(clippy::needless_pass_by_value)] // Tauri command extractor owns State.
+fn trade_sales_summary(state: State<'_, AppState>) -> Result<TradeSalesSummary, String> {
+    state
+        .database
+        .lock()
+        .map_err(|_| "database state is unavailable".to_owned())?
+        .trade_sales_summary()
         .map_err(|error| error.to_string())
 }
 
@@ -871,7 +1262,7 @@ async fn live_price_current_variant(
         .unwrap_or_default();
     state
         .live_pricing_service
-        .price_current_variant(&state.database, &key, item_kind, &settings)
+        .price_current_variant(&state.database, &key, item_kind, &settings, None)
         .await
         .map_err(|error| error.to_string())
 }
@@ -1309,17 +1700,7 @@ fn build_reward_scan_view(
         )?);
     }
 
-    if let Some(best_value) = rewards
-        .iter()
-        .filter_map(|reward| reward.choice_value)
-        .reduce(f64::max)
-    {
-        for reward in &mut rewards {
-            reward.recommended = reward
-                .choice_value
-                .is_some_and(|value| (value - best_value).abs() < 0.01);
-        }
-    }
+    mark_recommended_reward(&mut rewards);
 
     Ok(RelicRewardScanView {
         status: response.status,
@@ -1348,21 +1729,16 @@ fn build_reward_choice(
     catalog: &RewardCatalogDetails,
     reward: RewardOcrMatch,
 ) -> Result<RelicRewardChoice, String> {
-    let mut market = if let (Some(item_id), Some(name)) = (&reward.item_id, &reward.name) {
-        MarketBrowserService::search(
-            &state.reward_database,
-            name,
-            12,
-            Language::Russian,
-            settings.platform,
-        )
-        .map_err(|error| error.to_string())?
-        .rows
-        .into_iter()
-        .find(|row| row.item_id == *item_id)
-    } else {
-        None
-    };
+    // OCR уже возвращает канонические id и slug из каталога. Цена по точному ключу не теряет
+    // награду из-за того, что нечёткий текстовый поиск обрезал выдачу на двенадцатой строке.
+    let mut market = reward_market_row(
+        &state.reward_database,
+        settings,
+        catalog,
+        reward.item_id.as_deref(),
+        reward.slug.as_deref(),
+        reward.name.as_deref(),
+    )?;
     override_reward_market_image(&mut market, metadata, reward.slug.as_deref());
     let completes_set = reward
         .slug
@@ -1402,12 +1778,7 @@ fn build_reward_choice(
         })
         .transpose()?
         .flatten();
-    let part_value = market.as_ref().and_then(|row| {
-        row.recommendation
-            .fair_price
-            .or(row.recommendation.list_price)
-            .or(row.recommendation.quick_sell)
-    });
+    let part_value = market.as_ref().and_then(credible_reward_market_value);
     let choice_value = [
         part_value,
         completes_set
@@ -1433,6 +1804,88 @@ fn build_reward_choice(
         choice_value,
         recommended: false,
     })
+}
+
+fn reward_market_row(
+    database: &Mutex<Database>,
+    settings: &AppSettings,
+    catalog: &RewardCatalogDetails,
+    item_id: Option<&str>,
+    slug: Option<&str>,
+    fallback_name: Option<&str>,
+) -> Result<Option<MarketSearchRow>, String> {
+    let (Some(item_id), Some(slug)) = (item_id, slug) else {
+        return Ok(None);
+    };
+    let key = MarketVariantKey::new(slug.to_owned(), settings.platform, None, None::<String>)
+        .map_err(|error| error.to_string())?;
+    let recommendation =
+        PricingService::price_current_variant(database, &key, MarketItemKind::Standard)
+            .map_err(|error| error.to_string())?;
+    Ok(recommendation.map(|recommendation| {
+        let details = catalog.get(slug);
+        MarketSearchRow {
+            item_id: item_id.to_owned(),
+            display_name: fallback_name
+                .map(str::to_owned)
+                .or_else(|| details.map(|(name, _)| name.clone()))
+                .unwrap_or_else(|| slug.to_owned()),
+            image_url: details.and_then(|(_, image_url)| image_url.clone()),
+            item_kind: MarketItemKind::Standard,
+            mastery_requirement: None,
+            recommendation,
+        }
+    }))
+}
+
+fn credible_reward_market_value(row: &MarketSearchRow) -> Option<f64> {
+    credible_reward_value(
+        row.recommendation.confidence,
+        row.recommendation.fair_price,
+        row.recommendation.list_price,
+        row.recommendation.quick_sell,
+    )
+}
+
+fn credible_reward_value(
+    confidence: PriceConfidence,
+    fair_price: Option<f64>,
+    list_price: Option<f64>,
+    quick_sell: Option<f64>,
+) -> Option<f64> {
+    if !matches!(confidence, PriceConfidence::High | PriceConfidence::Medium) {
+        return None;
+    }
+    fair_price
+        .or(list_price)
+        .or(quick_sell)
+        .filter(|value| value.is_finite() && *value > 0.0)
+}
+
+fn mark_recommended_reward(rewards: &mut [RelicRewardChoice]) {
+    for reward in rewards.iter_mut() {
+        reward.recommended = false;
+    }
+    let best = rewards
+        .iter()
+        .enumerate()
+        .filter(|(_, reward)| {
+            reward.item_id.is_some()
+                && reward.confidence.is_finite()
+                && reward.confidence >= MIN_REWARD_RECOMMENDATION_OCR_CONFIDENCE
+        })
+        .max_by(|(_, left), (_, right)| {
+            left.choice_value
+                .unwrap_or(f64::NEG_INFINITY)
+                .total_cmp(&right.choice_value.unwrap_or(f64::NEG_INFINITY))
+                .then_with(|| left.ducats.unwrap_or(0).cmp(&right.ducats.unwrap_or(0)))
+                .then_with(|| left.confidence.total_cmp(&right.confidence))
+                .then_with(|| right.slot.cmp(&left.slot))
+        })
+        .map(|(index, _)| index);
+    if let Some(index) = best {
+        rewards[index].recommended = true;
+    }
 }
 
 fn reward_display_name(
@@ -1559,9 +2012,24 @@ fn reward_set_overview(
     }) {
         let set_price = reward_set_price(database, settings, definition)?;
         let mut parts = Vec::with_capacity(definition.components.len());
+        let completed_sets = inventory.map(|inventory| {
+            definition
+                .components
+                .iter()
+                .filter(|component| component.required_quantity > 0)
+                .map(|component| {
+                    reward_owned_quantity(Some(inventory), &component.slug).unwrap_or(0)
+                        / component.required_quantity
+                })
+                .min()
+                .unwrap_or(0)
+        });
         let mut ready_components = inventory.map(|_| 0_u32);
         for component in &definition.components {
-            let owned_quantity = reward_owned_quantity(inventory, &component.slug).unwrap_or(0);
+            let total_owned = reward_owned_quantity(inventory, &component.slug).unwrap_or(0);
+            let owned_quantity = completed_sets.map_or(total_owned, |completed| {
+                next_set_owned_quantity(total_owned, component.required_quantity, completed)
+            });
             if let Some(ready) = &mut ready_components
                 && owned_quantity >= component.required_quantity
             {
@@ -1589,6 +2057,8 @@ fn reward_set_overview(
                 .get(&definition.set_slug)
                 .map_or_else(|| "Прайм-комплект".to_owned(), |(name, _)| name.clone()),
             set_price,
+            completed_sets,
+            target_set_number: completed_sets.map(|count| count.saturating_add(1)),
             ready_components,
             total_components,
             parts,
@@ -1610,6 +2080,10 @@ fn reward_set_overview(
     Ok(best)
 }
 
+fn next_set_owned_quantity(total_owned: u32, required: u32, completed_sets: u32) -> u32 {
+    total_owned.saturating_sub(completed_sets.saturating_mul(required))
+}
+
 fn reward_set_price(
     database: &Mutex<Database>,
     settings: &AppSettings,
@@ -1624,8 +2098,15 @@ fn reward_set_price(
     .map_err(|error| error.to_string())?;
     PricingService::price_current_variant(database, &key, MarketItemKind::Standard)
         .map(|recommendation| {
-            recommendation
-                .and_then(|price| price.fair_price.or(price.list_price).or(price.quick_sell))
+            recommendation.and_then(|price| {
+                matches!(
+                    price.confidence,
+                    PriceConfidence::High | PriceConfidence::Medium
+                )
+                .then(|| price.fair_price.or(price.list_price).or(price.quick_sell))
+                .flatten()
+                .filter(|value| value.is_finite() && *value > 0.0)
+            })
         })
         .map_err(|error| error.to_string())
 }
@@ -2196,10 +2677,22 @@ fn reward_set_completion(
             let price =
                 PricingService::price_current_variant(database, &key, MarketItemKind::Standard)
                     .map_err(|error| error.to_string())?
-                    .and_then(|price| price.fair_price);
-            let owned = reward_owned_quantity(Some(inventory), &component.slug)
-                .unwrap_or(0)
-                .min(component.required_quantity);
+                    .and_then(|price| {
+                        matches!(
+                            price.confidence,
+                            PriceConfidence::High | PriceConfidence::Medium
+                        )
+                        .then_some(price.fair_price)
+                        .flatten()
+                    });
+            // Копии прошлых полных комплектов уже израсходованы. Альтернативная стоимость
+            // учитывает только детали, выделенные на новый завершаемый комплект.
+            let owned = next_set_owned_quantity(
+                reward_owned_quantity(Some(inventory), &component.slug).unwrap_or(0),
+                component.required_quantity,
+                before,
+            )
+            .min(component.required_quantity);
             owned_parts_value = owned_parts_value
                 .zip(price)
                 .map(|(total, price)| total + price * f64::from(owned));
@@ -2887,6 +3380,7 @@ pub fn run() {
             account_update_listing,
             account_delete_listing,
             trade_events,
+            trade_sales_summary,
             trade_event_reconciled,
             trade_event_ignore,
             trade_event_restore,
@@ -2913,6 +3407,296 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use platscope_core::{InventorySummary, InventoryViewItem};
+    use platscope_domain::{InventorySnapshotMetadata, InventorySource, VaultStatus};
+
+    fn listing_inventory(sellable_quantity: u32) -> InventoryView {
+        InventoryView {
+            metadata: InventorySnapshotMetadata {
+                source: InventorySource::TestFixture,
+                observed_at: Utc::now(),
+                schema_version: 2,
+                item_count: 1,
+                checksum_sha256: "inventory".into(),
+            },
+            keep_copies: 1,
+            mod_usage_scanned: true,
+            summary: InventorySummary {
+                owned_quantity: 4,
+                sellable_quantity: u64::from(sellable_quantity),
+                resolved_rows: 1,
+                attention_rows: 0,
+            },
+            items: vec![InventoryViewItem {
+                canonical_game_id: "/Lotus/Test/Mod".into(),
+                item_id: Some("item-id".into()),
+                bulk_tradable: true,
+                display_name: "Тестовый мод".into(),
+                image_url: None,
+                tags: vec!["mod".into()],
+                key: Some(
+                    MarketVariantKey::new(
+                        "test_mod",
+                        platscope_domain::Platform::Pc,
+                        Some(5),
+                        None::<String>,
+                    )
+                    .expect("key")
+                    .with_charges(Some(2)),
+                ),
+                rank: Some(5),
+                subtype: None,
+                owned_quantity: 4,
+                tradeable_quantity: 4,
+                untradeable_quantity: 0,
+                unknown_quantity: 0,
+                leveled_quantity: 4,
+                equipped_quantity: 0,
+                equipped_placements: Vec::new(),
+                sellable_quantity,
+                resolution: InventoryResolution::Resolved,
+                vault_status: VaultStatus::Unknown,
+            }],
+        }
+    }
+
+    fn listing_intent(quantity: u32, per_trade: u32) -> SellListingIntent {
+        SellListingIntent {
+            item_id: "item-id".into(),
+            quantity,
+            per_trade,
+            rank: Some(5),
+            charges: Some(2),
+            subtype: None,
+            amber_stars: None,
+            cyan_stars: None,
+        }
+    }
+
+    fn existing_sell_order(quantity: u32) -> AccountOrder {
+        AccountOrder {
+            id: "existing".into(),
+            item_id: Some("item-id".into()),
+            order_type: AccountOrderType::Sell,
+            platinum: 10,
+            quantity,
+            per_trade: Some(1),
+            rank: Some(5),
+            charges: Some(2),
+            subtype: None,
+            amber_stars: None,
+            cyan_stars: None,
+            visible: true,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    fn set_listing_fixture() -> (InventoryView, SellListingIntent, PrimeSetDefinition) {
+        let mut inventory = listing_inventory(0);
+        inventory.metadata.item_count = 2;
+        inventory.summary.owned_quantity = 6;
+        inventory.summary.sellable_quantity = 6;
+        inventory.summary.resolved_rows = 2;
+        inventory.items = [
+            ("set_part_a", "part-a-id", 2_u32),
+            ("set_part_b", "part-b-id", 4_u32),
+        ]
+        .into_iter()
+        .map(|(slug, item_id, quantity)| InventoryViewItem {
+            canonical_game_id: format!("/Lotus/Test/{slug}"),
+            item_id: Some(item_id.into()),
+            bulk_tradable: false,
+            display_name: slug.into(),
+            image_url: None,
+            tags: vec!["prime".into()],
+            key: Some(
+                MarketVariantKey::new(slug, platscope_domain::Platform::Pc, None, None::<String>)
+                    .expect("component key"),
+            ),
+            rank: None,
+            subtype: None,
+            owned_quantity: quantity,
+            tradeable_quantity: quantity,
+            untradeable_quantity: 0,
+            unknown_quantity: 0,
+            leveled_quantity: 0,
+            equipped_quantity: 0,
+            equipped_placements: Vec::new(),
+            sellable_quantity: quantity,
+            resolution: InventoryResolution::Resolved,
+            vault_status: VaultStatus::Unknown,
+        })
+        .collect();
+        let intent = SellListingIntent {
+            item_id: "set-id".into(),
+            quantity: 2,
+            per_trade: 1,
+            rank: None,
+            charges: None,
+            subtype: None,
+            amber_stars: None,
+            cyan_stars: None,
+        };
+        let definition = PrimeSetDefinition {
+            set_slug: "test_prime_set".into(),
+            set_game_ref: "/Lotus/Test/Set".into(),
+            display_name_en: "Test Prime Set".into(),
+            vault_status: VaultStatus::Unknown,
+            components: vec![
+                platscope_domain::PrimeSetComponentDefinition {
+                    slug: "set_part_a".into(),
+                    game_ref: "/Lotus/Test/set_part_a".into(),
+                    required_quantity: 1,
+                    ducats: Some(15),
+                    image_url: None,
+                },
+                platscope_domain::PrimeSetComponentDefinition {
+                    slug: "set_part_b".into(),
+                    game_ref: "/Lotus/Test/set_part_b".into(),
+                    required_quantity: 2,
+                    ducats: Some(45),
+                    image_url: None,
+                },
+            ],
+        };
+        (inventory, intent, definition)
+    }
+
+    #[test]
+    fn listing_validation_reserves_existing_orders_and_checks_lot_size() {
+        let inventory = listing_inventory(3);
+        assert!(
+            validate_sell_listing_inventory(
+                &listing_intent(1, 1),
+                &inventory,
+                &[existing_sell_order(2)],
+                None,
+                None,
+                &HashMap::new(),
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_sell_listing_inventory(
+                &listing_intent(2, 1),
+                &inventory,
+                &[existing_sell_order(2)],
+                None,
+                None,
+                &HashMap::new(),
+            )
+            .is_err()
+        );
+        assert!(
+            validate_sell_listing_inventory(
+                &listing_intent(3, 2),
+                &inventory,
+                &[],
+                None,
+                None,
+                &HashMap::new(),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn listing_validation_requires_the_exact_charged_variant() {
+        let inventory = listing_inventory(3);
+        let mut wrong = listing_intent(1, 1);
+        wrong.charges = Some(1);
+        assert!(
+            validate_sell_listing_inventory(&wrong, &inventory, &[], None, None, &HashMap::new(),)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn set_listing_validation_uses_components_and_reserves_component_orders() {
+        let (inventory, intent, definition) = set_listing_fixture();
+        assert!(
+            validate_sell_listing_inventory(
+                &intent,
+                &inventory,
+                &[],
+                None,
+                Some(&definition),
+                &HashMap::new(),
+            )
+            .is_ok()
+        );
+
+        let component_order = AccountOrder {
+            id: "component-order".into(),
+            item_id: Some("part-b-id".into()),
+            order_type: AccountOrderType::Sell,
+            platinum: 5,
+            quantity: 2,
+            per_trade: None,
+            rank: None,
+            charges: None,
+            subtype: None,
+            amber_stars: None,
+            cyan_stars: None,
+            visible: true,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        assert!(
+            validate_sell_listing_inventory(
+                &intent,
+                &inventory,
+                &[component_order],
+                None,
+                Some(&definition),
+                &HashMap::new(),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn listing_validation_does_not_reuse_parts_reserved_by_set_orders() {
+        let (inventory, intent, definition) = set_listing_fixture();
+        let set_reservations = HashMap::from([
+            ("part-a-id".to_owned(), 1_u32),
+            ("part-b-id".to_owned(), 2_u32),
+        ]);
+        assert!(
+            validate_sell_listing_inventory(
+                &intent,
+                &inventory,
+                &[],
+                None,
+                Some(&definition),
+                &set_reservations,
+            )
+            .is_err()
+        );
+
+        let component_intent = SellListingIntent {
+            item_id: "part-a-id".into(),
+            quantity: 1,
+            per_trade: 1,
+            rank: None,
+            charges: None,
+            subtype: None,
+            amber_stars: None,
+            cyan_stars: None,
+        };
+        assert!(
+            validate_sell_listing_inventory(
+                &component_intent,
+                &inventory,
+                &[],
+                None,
+                None,
+                &HashMap::from([("part-a-id".to_owned(), 2_u32)]),
+            )
+            .is_err()
+        );
+    }
 
     #[test]
     fn old_settings_receive_current_overlay_defaults() {
@@ -3127,6 +3911,74 @@ mod tests {
         );
         assert_eq!(russian_reward_ocr_name(Some("   ".into())), None);
         assert_eq!(russian_reward_ocr_name(None), None);
+    }
+
+    fn reward_choice_for_ranking(
+        slot: u8,
+        confidence: f64,
+        choice_value: Option<f64>,
+        ducats: Option<u32>,
+    ) -> RelicRewardChoice {
+        RelicRewardChoice {
+            slot,
+            raw_text: String::new(),
+            confidence,
+            item_id: Some(format!("item-{slot}")),
+            slug: Some(format!("reward-{slot}")),
+            display_name: Some(format!("Reward {slot}")),
+            market: None,
+            ducats,
+            owned_quantity: Some(0),
+            set: None,
+            completes_set: None,
+            choice_value,
+            recommended: false,
+        }
+    }
+
+    #[test]
+    fn reward_recommendation_rejects_uncertain_ocr_even_with_a_high_price() {
+        let mut rewards = [
+            reward_choice_for_ranking(0, 0.60, Some(1_000.0), Some(100)),
+            reward_choice_for_ranking(1, 0.95, Some(20.0), Some(15)),
+        ];
+
+        mark_recommended_reward(&mut rewards);
+
+        assert!(!rewards[0].recommended);
+        assert!(rewards[1].recommended);
+    }
+
+    #[test]
+    fn reward_value_does_not_treat_low_confidence_as_a_full_price() {
+        assert_eq!(
+            credible_reward_value(PriceConfidence::Low, Some(500.0), None, None),
+            None
+        );
+        assert_eq!(
+            credible_reward_value(PriceConfidence::Medium, Some(20.0), None, None),
+            Some(20.0)
+        );
+    }
+
+    #[test]
+    fn reward_recommendation_uses_ducats_as_a_price_tie_breaker() {
+        let mut rewards = [
+            reward_choice_for_ranking(0, 0.95, Some(20.0), Some(15)),
+            reward_choice_for_ranking(1, 0.95, Some(20.0), Some(100)),
+        ];
+
+        mark_recommended_reward(&mut rewards);
+
+        assert!(!rewards[0].recommended);
+        assert!(rewards[1].recommended);
+    }
+
+    #[test]
+    fn reward_set_progress_excludes_copies_used_by_previous_sets() {
+        assert_eq!(next_set_owned_quantity(2, 1, 1), 1);
+        assert_eq!(next_set_owned_quantity(5, 2, 2), 1);
+        assert_eq!(next_set_owned_quantity(1, 1, 2), 0);
     }
 
     #[test]

@@ -24,6 +24,7 @@
     visibleTradeHistory,
     type OrderHealth,
     type TradeEvent,
+    type TradeSalesSummary,
     type TradeReconciliationAction,
     type TradeShiftRow,
   } from "./tradeShift";
@@ -34,6 +35,7 @@
   let account: AccountView | null = null;
   let inventory: InventoryView | null = null;
   let events: TradeEvent[] = [];
+  let tradeSales: TradeSalesSummary = { saleCount: 0, platinumReceived: 0 };
   let recommendations = new Map<string, PriceRecommendation | null>();
   let loading = true;
   let refreshingLive = false;
@@ -66,11 +68,8 @@
   $: visibleRows = rows;
   $: actionableRows = rows.filter((row) => row.needsAction && rowChange(row) !== null);
   $: selectedRows = actionableRows.filter((row) => selectedIds.has(row.order.id));
-  $: saleEvents = events.filter(isSaleTrade);
   $: pendingEvents = pendingSaleEvents(events);
   $: historyEvents = visibleTradeHistory(events);
-  $: reconciledSales = saleEvents.filter((event) => event.status === "reconciled");
-  $: earnedPlatinum = reconciledSales.reduce((total, event) => total + event.platinumReceived, 0);
   $: attentionCount = rows.filter((row) => row.needsAction).length + pendingEvents.length;
   $: summary = summarize(rows);
 
@@ -97,14 +96,16 @@
     errorMessage = "";
     actionMessage = "";
     try {
-      const [nextAccount, nextInventory, nextEvents] = await Promise.all([
+      const [nextAccount, nextInventory, nextEvents, nextTradeSales] = await Promise.all([
         invoke<AccountView>("account_status"),
         invoke<InventoryView | null>("load_inventory"),
         invoke<TradeEvent[]>("trade_events"),
+        invoke<TradeSalesSummary>("trade_sales_summary"),
       ]);
       account = nextAccount;
       inventory = nextInventory;
       events = nextEvents;
+      tradeSales = nextTradeSales;
       selectedIds = new Set();
       reviewOpen = false;
       await loadSavedPrices();
@@ -126,7 +127,10 @@
 
   async function loadEvents(announce = false): Promise<void> {
     try {
-      events = await invoke<TradeEvent[]>("trade_events");
+      [events, tradeSales] = await Promise.all([
+        invoke<TradeEvent[]>("trade_events"),
+        invoke<TradeSalesSummary>("trade_sales_summary"),
+      ]);
       if (announce) actionMessage = "Сделка записана. Для продажи проверьте ордер.";
     } catch {
       if (announce) actionMessage = "Сделка обнаружена, но журнал пока не открылся. Обновите ордера.";
@@ -255,7 +259,13 @@
 
   function reviewManualEdit(event: SubmitEvent): void {
     event.preventDefault();
-    editError = validateListingNumbers(editPlatinum, editQuantity, null, "ru") ?? "";
+    editError = validateListingNumbers(
+      editPlatinum,
+      editQuantity,
+      editingOrder?.perTrade ?? null,
+      "ru",
+      rows.find((row) => row.order.id === editingOrder?.id)?.inventory?.sellableQuantity ?? null,
+    ) ?? "";
     if (!editError) manualReviewOpen = true;
   }
 
@@ -336,7 +346,7 @@
   async function applyTrade(event: TradeEvent): Promise<void> {
     if (!account || applying) return;
     const plan = planTradeReconciliation(event, account);
-    if (plan.actions.length !== 1 || plan.unmatched.length || plan.unsafe.length) return;
+    if (!plan.actions.length || plan.unmatched.length || plan.unsafe.length) return;
     applying = true;
     const completed: TradeReconciliationAction[] = [];
     for (const action of plan.actions) {
@@ -501,13 +511,32 @@
   }
 
   function eventTitle(event: TradeEvent): string {
-    if (event.platinumReceived > 0 && event.platinumGiven === 0) return `Продажа · +${event.platinumReceived}p`;
+    if (isSaleTrade(event)) return `Продажа · +${event.platinumReceived}p`;
     if (event.platinumGiven > 0 && event.platinumReceived === 0) return `Покупка · −${event.platinumGiven}p`;
     return "Обмен предметами";
   }
 
   function soldItems(event: TradeEvent): string {
+    const matched = matchedSaleItems(event);
+    if (matched) return matched;
     return event.givenItems.map((item) => `${localizedTradeName(item.name)} ×${item.quantity}`).join(", ") || "без предметов";
+  }
+
+  function matchedSaleItems(event: TradeEvent): string | null {
+    let actions: TradeReconciliationAction[] = [];
+    if (event.status === "pending" && account) {
+      const plan = planTradeReconciliation(event, account);
+      if (plan.unmatched.length === 0 && plan.unsafe.length === 0) actions = plan.actions;
+    } else if (event.reconciliationJson) {
+      try {
+        actions = JSON.parse(event.reconciliationJson) as TradeReconciliationAction[];
+      } catch {
+        return null;
+      }
+    }
+    return actions.length > 0
+      ? actions.map((action) => `${action.itemName} ×${action.soldQuantity}`).join(", ")
+      : null;
   }
 
   function receivedItems(event: TradeEvent): string {
@@ -521,16 +550,25 @@
   }
 
   function localizedTradeName(name: string): string {
-    const matched = Object.values(account?.orderItems ?? {}).find(
-      (item) => normalizeTradeName(item.displayNameEn) === normalizeTradeName(name),
-    );
-    return matched?.displayName ?? name;
+    const normalized = normalizeTradeName(name);
+    for (const item of Object.values(account?.orderItems ?? {})) {
+      if ([item.displayName, item.displayNameEn]
+        .some((candidate) => normalizeTradeName(candidate) === normalized)) {
+        return item.displayName;
+      }
+      const component = item.setComponents?.find((candidate) =>
+        [candidate.displayName, candidate.displayNameEn]
+          .some((candidateName) => normalizeTradeName(candidateName) === normalized)
+      );
+      if (component) return component.displayName;
+    }
+    return name;
   }
 
   function eventCanApply(event: TradeEvent): boolean {
     if (!account) return false;
     const plan = planTradeReconciliation(event, account);
-    return plan.actions.length === 1 && plan.unmatched.length === 0 && plan.unsafe.length === 0;
+    return plan.actions.length > 0 && plan.unmatched.length === 0 && plan.unsafe.length === 0;
   }
 
   function summarize(source: TradeShiftRow[]) {
@@ -538,6 +576,19 @@
       total: source.length,
       visible: source.filter((row) => row.order.visible).length,
     };
+  }
+
+  function saleCountLabel(count: number): string {
+    const mod100 = count % 100;
+    const mod10 = count % 10;
+    const noun = mod100 >= 11 && mod100 <= 14
+      ? "сделок"
+      : mod10 === 1
+        ? "сделка"
+        : mod10 >= 2 && mod10 <= 4
+          ? "сделки"
+          : "сделок";
+    return `${count} ${noun}`;
   }
 </script>
 
@@ -594,7 +645,7 @@
     <dl class="sales-summary">
       <div class:attention={attentionCount > 0}><dt>Требуют действий</dt><dd>{attentionCount}</dd></div>
       <div><dt>Активные ордера</dt><dd>{summary.visible} <small>из {summary.total}</small></dd></div>
-      <div><dt>Получено по продажам</dt><dd>{earnedPlatinum ? `${earnedPlatinum}p` : "—"}</dd></div>
+      <div><dt>Получено по зафиксированным продажам</dt><dd>{tradeSales.platinumReceived ? `${tradeSales.platinumReceived}p` : "—"} <small>{tradeSales.saleCount ? saleCountLabel(tradeSales.saleCount) : ""}</small></dd></div>
     </dl>
 
     {#if !account.profile?.verification}

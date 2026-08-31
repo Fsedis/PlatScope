@@ -297,6 +297,7 @@ struct RawOrder {
     per_trade: u32,
     visible: bool,
     rank: Option<u16>,
+    charges: Option<u16>,
     subtype: Option<String>,
     amber_stars: Option<u16>,
     cyan_stars: Option<u16>,
@@ -352,6 +353,7 @@ fn normalize_order(order: &RawOrder, key: &MarketVariantKey) -> Option<LiveOrder
         || order.quantity == 0
         || order.per_trade == 0
         || order.rank != key.rank
+        || order.charges != key.charges
         || order.subtype.as_deref() != key.subtype.as_deref()
         || order.amber_stars != key.amber_stars
         || order.cyan_stars != key.cyan_stars
@@ -381,6 +383,9 @@ fn exact_variant_query(key: &MarketVariantKey) -> Vec<(&'static str, String)> {
     let mut query = Vec::new();
     if let Some(rank) = key.rank {
         query.push(("rank", rank.to_string()));
+    }
+    if let Some(charges) = key.charges {
+        query.push(("charges", charges.to_string()));
     }
     if let Some(subtype) = &key.subtype {
         query.push(("subtype", subtype.clone()));
@@ -451,16 +456,41 @@ mod tests {
     fn exact_dimensions_become_query_parameters() {
         let key = MarketVariantKey::new("axi_s18_relic", Platform::Pc, Some(3), Some("radiant"))
             .expect("valid key")
+            .with_charges(Some(4))
             .with_stars(Some(2), Some(1));
         assert_eq!(
             exact_variant_query(&key),
             vec![
                 ("rank", "3".to_owned()),
+                ("charges", "4".to_owned()),
                 ("subtype", "radiant".to_owned()),
                 ("amberStars", "2".to_owned()),
                 ("cyanStars", "1".to_owned()),
             ]
         );
+    }
+
+    #[test]
+    fn top_orders_keep_only_exact_charges() {
+        let body = br#"{
+          "data": {
+            "sell": [
+              {"type":"sell","platinum":30,"quantity":1,"perTrade":1,"visible":true,"rank":0,"charges":2,"user":{"status":"online"}},
+              {"type":"sell","platinum":1,"quantity":1,"perTrade":1,"visible":true,"rank":0,"charges":1,"user":{"status":"online"}},
+              {"type":"sell","platinum":2,"quantity":1,"perTrade":1,"visible":true,"rank":0,"user":{"status":"online"}}
+            ],
+            "buy": []
+          },
+          "error": null
+        }"#;
+        let key = MarketVariantKey::new("charged_mod", Platform::Pc, Some(0), None::<String>)
+            .expect("valid key")
+            .with_charges(Some(2));
+
+        let book = normalize_top_orders(body, &key).expect("orders normalize");
+
+        assert_eq!(book.orders.len(), 1);
+        assert_eq!(book.orders[0].platinum, 30);
     }
 
     #[tokio::test]

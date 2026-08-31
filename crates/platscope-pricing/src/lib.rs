@@ -2,12 +2,13 @@
 
 use chrono::NaiveDate;
 use platscope_domain::{
-    LiveOrderBook, LiveOrderSide, MarketItemKind, MarketOrderType, MarketRecord, MarketVariantKey,
-    PriceConfidence, PriceFreshness, ProviderId, UserStatus,
+    LiveOrder, LiveOrderBook, LiveOrderSide, MarketItemKind, MarketOrderType, MarketRecord,
+    MarketVariantKey, PriceConfidence, PriceFreshness, ProviderId, UserStatus,
 };
 use serde::{Deserialize, Serialize};
 
 pub const MIN_TRUSTED_CLOSED_VOLUME: f64 = 3.0;
+pub const MIN_TRUSTED_SELL_VOLUME: f64 = 3.0;
 pub const THIN_MARKET_VOLUME: f64 = 5.0;
 pub const FRESH_DAYS: i64 = 2;
 pub const AGING_DAYS: i64 = 7;
@@ -22,6 +23,9 @@ pub struct PricingContext<'a> {
     pub source_is_fallback: bool,
     pub bulk_records: &'a [MarketRecord],
     pub live_order_book: Option<&'a LiveOrderBook>,
+    /// Количество единиц, которыми пользователь реально может исполнить buy-ордер.
+    /// `None` запрещает выдавать Quick Sell, потому что исполнимость лота неизвестна.
+    pub available_quantity: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -29,6 +33,7 @@ pub struct PricingContext<'a> {
 pub enum PriceReasonCode {
     TrustedClosedTrades,
     ClosedVolumeTooLow,
+    SellVolumeTooLow,
     ConservativeSellAdjustment,
     SellOnlyFallback,
     RelicSellIgnored,
@@ -40,6 +45,7 @@ pub enum PriceReasonCode {
     LiveMarketAgreement,
     LiveMarketDisagreement,
     LiveTopBuy,
+    BuyLotUnavailable,
     NoLiveTopBuy,
     SourceFresh,
     SourceAging,
@@ -102,6 +108,7 @@ pub fn recommend(context: PricingContext<'_>) -> PriceRecommendation {
     let closed = signal(&exact_records, MarketOrderType::Closed);
     let sell = signal(&exact_records, MarketOrderType::Sell);
     let trusted_closed = closed.filter(|record| record.volume >= MIN_TRUSTED_CLOSED_VOLUME);
+    let trusted_sell = trusted_sell_record(sell, &mut reasons);
     if exact_records.is_empty() {
         push_reason(
             &mut reasons,
@@ -120,30 +127,22 @@ pub fn recommend(context: PricingContext<'_>) -> PriceRecommendation {
             ),
         );
     }
-
-    let (fair_price, fair_basis) =
-        fair_price(context.item_kind, trusted_closed, sell, &mut reasons);
+    let (fair_price, fair_basis) = fair_price(
+        context.item_kind,
+        trusted_closed,
+        trusted_sell,
+        &mut reasons,
+    );
     let live = live_stats(
         context.key,
         context.live_order_book,
         fair_price,
+        context.available_quantity,
         &mut reasons,
     );
     let list_price = listing_price(fair_price, trusted_closed, &live, &mut reasons);
     let quick_sell = live.top_buy;
-    if let Some(price) = quick_sell {
-        push_reason(
-            &mut reasons,
-            PriceReasonCode::LiveTopBuy,
-            format!("Quick Sell основан на лучшем активном buy order: {price:.2}p."),
-        );
-    } else {
-        push_reason(
-            &mut reasons,
-            PriceReasonCode::NoLiveTopBuy,
-            "Активного live buy order нет; исторический buy signal не выдан за Quick Sell.",
-        );
-    }
+    explain_quick_sell(quick_sell, &live, context.available_quantity, &mut reasons);
 
     let confidence = confidence(
         fair_price,
@@ -178,6 +177,54 @@ pub fn recommend(context: PricingContext<'_>) -> PriceRecommendation {
         freshness,
         reasons,
     }
+}
+
+fn explain_quick_sell(
+    quick_sell: Option<f64>,
+    live: &LiveStats,
+    available_quantity: Option<u32>,
+    reasons: &mut Vec<PriceReason>,
+) {
+    let (code, message) = if let Some(price) = quick_sell {
+        (
+            PriceReasonCode::LiveTopBuy,
+            format!("Quick Sell основан на лучшем исполнимом buy-ордере: {price:.2}p за единицу."),
+        )
+    } else if live.buy_count > 0 {
+        let message = available_quantity.map_or_else(
+            || "Quick Sell не рассчитан: доступное количество неизвестно.".to_owned(),
+            |quantity| {
+                format!("Активные buy-ордера требуют больший лот; доступно только {quantity} шт.")
+            },
+        );
+        (PriceReasonCode::BuyLotUnavailable, message)
+    } else {
+        (
+            PriceReasonCode::NoLiveTopBuy,
+            "Активного live buy-ордера нет; историческая покупка не выдана за Quick Sell."
+                .to_owned(),
+        )
+    };
+    push_reason(reasons, code, message);
+}
+
+fn trusted_sell_record<'a>(
+    sell: Option<&'a MarketRecord>,
+    reasons: &mut Vec<PriceReason>,
+) -> Option<&'a MarketRecord> {
+    let record = sell?;
+    if record.volume >= MIN_TRUSTED_SELL_VOLUME {
+        return Some(record);
+    }
+    push_reason(
+        reasons,
+        PriceReasonCode::SellVolumeTooLow,
+        format!(
+            "Ордеров продавцов недостаточно для оценки: {:.0}, требуется не менее {:.0}.",
+            record.volume, MIN_TRUSTED_SELL_VOLUME
+        ),
+    );
+    None
 }
 
 fn unsupported_riven_recommendation(
@@ -290,6 +337,7 @@ fn live_stats(
     key: &MarketVariantKey,
     book: Option<&LiveOrderBook>,
     fair: Option<f64>,
+    available_quantity: Option<u32>,
     reasons: &mut Vec<PriceReason>,
 ) -> LiveStats {
     let Some(book) = book else {
@@ -306,17 +354,19 @@ fn live_stats(
 
     let mut asks: Vec<(f64, u32)> = Vec::new();
     let mut buys = Vec::new();
+    let mut buy_count = 0_u32;
     for order in &book.orders {
-        if order.user_status == UserStatus::Offline
-            || order.platinum == 0
-            || order.quantity == 0
-            || order.per_trade == 0
-        {
+        let Some((unit_price, executable_units)) = executable_order(order) else {
             continue;
-        }
+        };
         match order.side {
-            LiveOrderSide::Sell => asks.push((f64::from(order.platinum), order.quantity)),
-            LiveOrderSide::Buy => buys.push(f64::from(order.platinum)),
+            LiveOrderSide::Sell => asks.push((unit_price, executable_units)),
+            LiveOrderSide::Buy => {
+                buy_count = buy_count.saturating_add(1);
+                if available_quantity.is_some_and(|quantity| quantity >= order.per_trade) {
+                    buys.push(unit_price);
+                }
+            }
         }
     }
     asks.sort_by(|left, right| left.0.total_cmp(&right.0));
@@ -384,11 +434,28 @@ fn live_stats(
         depth_five,
         top_buy: buys.last().copied(),
         sell_count: u32::try_from(asks.len()).unwrap_or(u32::MAX),
-        buy_count: u32::try_from(buys.len()).unwrap_or(u32::MAX),
+        buy_count,
         cluster_shift,
         agrees_with_fair,
         disagrees_with_fair,
     }
+}
+
+fn executable_order(order: &LiveOrder) -> Option<(f64, u32)> {
+    if order.user_status == UserStatus::Offline
+        || order.platinum == 0
+        || order.quantity == 0
+        || order.per_trade == 0
+    {
+        return None;
+    }
+    let executable_units = order.quantity - order.quantity % order.per_trade;
+    (executable_units > 0).then(|| {
+        (
+            f64::from(order.platinum) / f64::from(order.per_trade),
+            executable_units,
+        )
+    })
 }
 
 fn listing_price(
@@ -502,7 +569,10 @@ fn depth_average(orders: &[(f64, u32)], target_units: u32) -> Option<f64> {
         units = units.saturating_add(taken);
         remaining -= taken;
     }
-    (units > 0).then(|| total / f64::from(units))
+    // Depth N means that all N units are executable at the quoted average.
+    // Returning a partial average here made one available unit look like
+    // sufficient market depth for buying three or five set components.
+    (remaining == 0 && units == target_units).then(|| total / f64::from(units))
 }
 
 fn mean(values: impl Iterator<Item = f64>) -> Option<f64> {
@@ -605,11 +675,21 @@ mod tests {
     }
 
     fn order(side: LiveOrderSide, price: u32, status: UserStatus) -> LiveOrder {
+        lot_order(side, price, 1, 1, status)
+    }
+
+    fn lot_order(
+        side: LiveOrderSide,
+        total_price: u32,
+        quantity: u32,
+        per_trade: u32,
+        status: UserStatus,
+    ) -> LiveOrder {
         LiveOrder {
             side,
-            platinum: price,
-            quantity: 1,
-            per_trade: 1,
+            platinum: total_price,
+            quantity,
+            per_trade,
             user_status: status,
         }
     }
@@ -629,6 +709,7 @@ mod tests {
             source_is_fallback: false,
             bulk_records: records,
             live_order_book: book,
+            available_quantity: Some(1),
         }
     }
 
@@ -735,7 +816,7 @@ mod tests {
         assert_price(result.list_price, 39.0);
         assert_price(result.quick_sell, 35.0);
         assert_price(result.depth_three, 40.0);
-        assert_price(result.depth_price, 40.5);
+        assert_eq!(result.depth_price, None);
         assert_eq!(result.confidence, PriceConfidence::High);
     }
 
@@ -762,6 +843,110 @@ mod tests {
 
         assert_price(result.depth_three, 40.0 / 3.0);
         assert_price(result.depth_price, 16.0);
+    }
+
+    #[test]
+    fn depth_signal_is_absent_when_the_requested_quantity_is_not_available() {
+        let key = key(None, None);
+        let records = vec![record(&key, MarketOrderType::Closed, 15.0, 20.0)];
+        let mut only_order = order(LiveOrderSide::Sell, 10, UserStatus::Online);
+        only_order.quantity = 2;
+        let book = LiveOrderBook {
+            key: key.clone(),
+            fetched_at: Utc::now(),
+            orders: vec![only_order],
+        };
+
+        let result = recommend(context(
+            &key,
+            &records,
+            Some(&book),
+            MarketItemKind::Standard,
+        ));
+
+        assert_price(result.lowest_ask, 10.0);
+        assert_eq!(result.depth_three, None);
+        assert_eq!(result.depth_price, None);
+    }
+
+    #[test]
+    fn bulk_sell_orders_use_unit_price_and_only_executable_units() {
+        let key = key(None, None);
+        let records = vec![record(&key, MarketOrderType::Closed, 2.5, 20.0)];
+        let book = LiveOrderBook {
+            key: key.clone(),
+            fetched_at: Utc::now(),
+            orders: vec![
+                // Цена 4p относится ко всему лоту из 2 шт. Из quantity=3
+                // исполнить можно только 2 единицы.
+                lot_order(LiveOrderSide::Sell, 4, 3, 2, UserStatus::Online),
+                lot_order(LiveOrderSide::Sell, 3, 3, 1, UserStatus::Online),
+            ],
+        };
+
+        let result = recommend(context(
+            &key,
+            &records,
+            Some(&book),
+            MarketItemKind::Standard,
+        ));
+
+        assert_price(result.lowest_ask, 2.0);
+        assert_price(result.depth_three, 7.0 / 3.0);
+        assert_price(result.depth_price, 13.0 / 5.0);
+    }
+
+    #[test]
+    fn quick_sell_uses_unit_price_and_requires_an_executable_lot() {
+        let key = key(None, None);
+        let records = vec![record(&key, MarketOrderType::Closed, 7.0, 20.0)];
+        let book = LiveOrderBook {
+            key: key.clone(),
+            fetched_at: Utc::now(),
+            orders: vec![
+                lot_order(LiveOrderSide::Buy, 37, 6, 6, UserStatus::Online),
+                lot_order(LiveOrderSide::Buy, 6, 1, 1, UserStatus::Online),
+            ],
+        };
+
+        let one_available = recommend(context(
+            &key,
+            &records,
+            Some(&book),
+            MarketItemKind::Standard,
+        ));
+        assert_price(one_available.quick_sell, 6.0);
+
+        let mut six_context = context(&key, &records, Some(&book), MarketItemKind::Standard);
+        six_context.available_quantity = Some(6);
+        let six_available = recommend(six_context);
+        assert_price(six_available.quick_sell, 37.0 / 6.0);
+    }
+
+    #[test]
+    fn unavailable_or_unknown_buy_lot_never_becomes_quick_sell() {
+        let key = key(None, None);
+        let records = vec![record(&key, MarketOrderType::Closed, 7.0, 20.0)];
+        let book = LiveOrderBook {
+            key: key.clone(),
+            fetched_at: Utc::now(),
+            orders: vec![lot_order(LiveOrderSide::Buy, 37, 6, 6, UserStatus::Online)],
+        };
+
+        for available_quantity in [Some(5), None] {
+            let mut pricing_context =
+                context(&key, &records, Some(&book), MarketItemKind::Standard);
+            pricing_context.available_quantity = available_quantity;
+            let result = recommend(pricing_context);
+
+            assert_eq!(result.quick_sell, None);
+            assert!(
+                result
+                    .reasons
+                    .iter()
+                    .any(|reason| reason.code == PriceReasonCode::BuyLotUnavailable)
+            );
+        }
     }
 
     #[test]
@@ -874,7 +1059,7 @@ mod tests {
     }
 
     #[test]
-    fn thin_market_cluster_cannot_raise_sell_recommendation_unreasonably() {
+    fn unconfirmed_bulk_sell_does_not_become_fair_price() {
         let key = key(None, None);
         let records = vec![record(&key, MarketOrderType::Sell, 10.0, 2.0)];
         let book = LiveOrderBook {
@@ -891,13 +1076,51 @@ mod tests {
             MarketItemKind::Standard,
         ));
 
-        assert_price(result.list_price, 10.0);
+        assert_eq!(result.fair_price, None);
+        assert_price(result.list_price, 100.0);
         assert_eq!(result.confidence, PriceConfidence::Low);
         assert!(
             result
                 .reasons
                 .iter()
-                .any(|reason| { reason.code == PriceReasonCode::ThinMarketProtection })
+                .any(|reason| { reason.code == PriceReasonCode::SellVolumeTooLow })
+        );
+    }
+
+    #[test]
+    fn single_sell_order_cannot_create_fair_price() {
+        let key = key(None, None);
+        let records = vec![record(&key, MarketOrderType::Sell, 1_500.0, 1.0)];
+
+        let result = recommend(context(&key, &records, None, MarketItemKind::Standard));
+
+        assert_eq!(result.fair_price, None);
+        assert_eq!(result.list_price, None);
+        assert_eq!(result.confidence, PriceConfidence::Unknown);
+        assert!(
+            result
+                .reasons
+                .iter()
+                .any(|reason| reason.code == PriceReasonCode::SellVolumeTooLow)
+        );
+    }
+
+    #[test]
+    fn single_sell_order_cannot_override_trusted_closed_price() {
+        let key = key(None, None);
+        let records = vec![
+            record(&key, MarketOrderType::Closed, 100.0, 100.0),
+            record(&key, MarketOrderType::Sell, 1.0, 1.0),
+        ];
+
+        let result = recommend(context(&key, &records, None, MarketItemKind::Standard));
+
+        assert_price(result.fair_price, 100.0);
+        assert!(
+            !result
+                .reasons
+                .iter()
+                .any(|reason| { reason.code == PriceReasonCode::ConservativeSellAdjustment })
         );
     }
 

@@ -9,6 +9,7 @@ export interface MarketVariantKey {
   slug: string;
   platform: string;
   rank: number | null;
+  charges: number | null;
   subtype: string | null;
   amberStars: number | null;
   cyanStars: number | null;
@@ -23,6 +24,7 @@ export function priceReasonMessage(reason: PriceReason, locale: UiLocale = "ru")
   const messages: Record<string, string> = locale === "ru" ? {
     trusted_closed_trades: "Цена подтверждается завершёнными сделками именно для этого варианта.",
     closed_volume_too_low: "Сделок пока мало, поэтому цена рассчитана осторожно.",
+    sell_volume_too_low: "Одиночных ордеров продажи недостаточно, чтобы считать их рыночной ценой.",
     conservative_sell_adjustment: "Рекомендуемая цена немного снижена, чтобы повысить шанс продажи.",
     sell_only_fallback: "Есть только ордера на продажу; подтверждённых сделок недостаточно.",
     relic_sell_ignored: "Ордера на продажу реликвии не использовались как подтверждённая цена.",
@@ -35,6 +37,7 @@ export function priceReasonMessage(reason: PriceReason, locale: UiLocale = "ru")
     live_market_disagreement: "Текущие ордера расходятся с историей сделок. Проверьте цену перед публикацией.",
     live_top_buy: "Лучшая покупка сейчас взята из самой высокой активной заявки покупателя.",
     no_live_top_buy: "Активных заявок покупателей нет, поэтому мгновенную цену показать нельзя.",
+    buy_lot_unavailable: "Для заявки покупателя нужен больший лот, чем сейчас можно продать.",
     source_fresh: "Цена рассчитана по свежим данным.",
     source_aging: "Данные начинают устаревать; перед публикацией лучше проверить текущие ордера.",
     source_stale: "Данные устарели; обновите рынок перед публикацией ордера.",
@@ -45,6 +48,7 @@ export function priceReasonMessage(reason: PriceReason, locale: UiLocale = "ru")
   } : {
     trusted_closed_trades: "Fair price is supported by exact-variant closed trades.",
     closed_volume_too_low: "Closed-trade volume is too low for a strong signal.",
+    sell_volume_too_low: "There are too few sell orders to use them as a reliable market price.",
     conservative_sell_adjustment: "The sell estimate was adjusted conservatively.",
     sell_only_fallback: "Only sell orders are available; completed trades are insufficient.",
     relic_sell_ignored: "Sell-only relic data was not used as fair value.",
@@ -57,6 +61,7 @@ export function priceReasonMessage(reason: PriceReason, locale: UiLocale = "ru")
     live_market_disagreement: "Live orders disagree with completed trades. Check the price before listing.",
     live_top_buy: "Quick Sell uses the best active buy order for the exact variant.",
     no_live_top_buy: "No active exact-variant buy order is available for Quick Sell.",
+    buy_lot_unavailable: "The active buy lot is larger than the quantity available to sell.",
     source_fresh: "The bulk snapshot is fresh.",
     source_aging: "The bulk snapshot is aging.",
     source_stale: "The bulk snapshot is stale.",
@@ -192,6 +197,7 @@ export function freshnessLabel(value: PriceFreshness, locale: UiLocale = "ru"): 
 export function variantLabel(key: MarketVariantKey, locale: UiLocale = "ru"): string {
   const parts: string[] = [];
   if (key.rank !== null) parts.push(locale === "en" ? `rank ${key.rank}` : `ранг ${key.rank}`);
+  if (key.charges !== null) parts.push(locale === "en" ? `charges ${key.charges}` : `заряды ${key.charges}`);
   if (key.subtype) parts.push(key.subtype);
   if (key.amberStars !== null || key.cyanStars !== null) {
     parts.push(`${locale === "en" ? "stars" : "звёзды"} ${key.amberStars ?? 0}/${key.cyanStars ?? 0}`);
@@ -205,6 +211,7 @@ export function rowIdentity(row: MarketSearchRow): string {
     key.slug,
     key.platform,
     key.rank ?? "",
+    key.charges ?? "",
     key.subtype ?? "",
     key.amberStars ?? "",
     key.cyanStars ?? "",
@@ -223,6 +230,8 @@ export function filterAndSortRows(
   });
   const multiplier = direction === "asc" ? 1 : -1;
   return [...filtered].sort((left, right) => {
+    const missingOrder = numericMissingOrder(left, right, sortKey);
+    if (missingOrder !== 0) return missingOrder;
     let comparison = 0;
     switch (sortKey) {
       case "name":
@@ -252,4 +261,22 @@ function nullableNumber(left: number | null, right: number | null): number {
   if (left === null) return -1;
   if (right === null) return 1;
   return left - right;
+}
+
+function numericMissingOrder(
+  left: MarketSearchRow,
+  right: MarketSearchRow,
+  sortKey: MarketSortKey,
+): number {
+  if (sortKey === "name") return 0;
+  const leftValue = sortKey === "fair"
+    ? left.recommendation.fairPrice
+    : left.recommendation.closedVolume;
+  const rightValue = sortKey === "fair"
+    ? right.recommendation.fairPrice
+    : right.recommendation.closedVolume;
+  if (leftValue === null && rightValue === null) return 0;
+  if (leftValue === null) return 1;
+  if (rightValue === null) return -1;
+  return 0;
 }

@@ -43,6 +43,14 @@ export interface AccountOrderItem {
   displayNameEn: string;
   imageUrl: string | null;
   itemKind: MarketItemKind;
+  setComponents?: AccountSetComponent[];
+}
+
+export interface AccountSetComponent {
+  slug: string;
+  requiredQuantity: number;
+  displayName: string;
+  displayNameEn: string;
 }
 
 export function orderEnglishName(item: AccountOrderItem | undefined): string | null {
@@ -92,7 +100,7 @@ export function createListingInput(
     visible,
     perTrade,
     rank: row.recommendation.key.rank,
-    charges: null,
+    charges: row.recommendation.key.charges,
     subtype: row.recommendation.key.subtype,
     amberStars: row.recommendation.key.amberStars,
     cyanStars: row.recommendation.key.cyanStars,
@@ -115,7 +123,7 @@ export function createListingInputFromInventory(
     visible,
     perTrade: item.bulkTradable ? perTrade : null,
     rank: item.key.rank,
-    charges: null,
+    charges: item.key.charges,
     subtype: item.key.subtype,
     amberStars: item.key.amberStars,
     cyanStars: item.key.cyanStars,
@@ -147,6 +155,19 @@ export function accountActionErrorMessage(
       ? "WFM is temporarily limiting requests. Wait a moment and try again."
       : "Warframe Market временно ограничил запросы. Подождите немного и повторите действие.";
   }
+  if (normalized.includes("зарезерв") || normalized.includes("недостаточно доступ")
+    || normalized.includes("available quantity") || normalized.includes("cannot sell")) {
+    return locale === "en"
+      ? "The order exceeds the unreserved quantity in your inventory. Check existing orders and protected copies."
+      : "Ордер превышает свободное количество в инвентаре. Проверьте существующие ордера и оставляемые копии.";
+  }
+  if (normalized.includes("точный вариант") || normalized.includes("exact variant")
+    || normalized.includes("ранг") || normalized.includes("rank")
+    || normalized.includes("заряд") || normalized.includes("charges")) {
+    return locale === "en"
+      ? "This exact rank or charged variant is not available for sale. Refresh the inventory and select the matching copy."
+      : "Точного варианта с таким рангом или зарядами нет для продажи. Обновите инвентарь и выберите подходящую копию.";
+  }
   if (normalized.includes("400") || normalized.includes("bad request") || normalized.includes("validation")) {
     return locale === "en"
       ? "WFM rejected the order parameters. Refresh market data, check the exact variant and quantity, then try again."
@@ -166,6 +187,7 @@ export function matchingSellOrder(
     order.type === "sell" &&
     order.itemId === item.itemId &&
     order.rank === item.key?.rank &&
+    order.charges === item.key?.charges &&
     order.subtype === item.key?.subtype &&
     order.amberStars === item.key?.amberStars &&
     order.cyanStars === item.key?.cyanStars
@@ -177,12 +199,18 @@ export function validateListingNumbers(
   quantity: number,
   perTrade: number | null,
   locale: UiLocale = "ru",
+  maxQuantity: number | null = null,
 ): string | null {
   if (!Number.isInteger(platinum) || platinum < 1 || platinum > 900_000) {
     return locale === "en" ? "Enter a whole-number price from 1 to 900,000 platinum." : "Укажите цену целым числом от 1 до 900 000 платины.";
   }
   if (!Number.isInteger(quantity) || quantity < 1 || quantity > 9_999) {
     return locale === "en" ? "Enter a whole-number quantity from 1 to 9,999." : "Укажите количество целым числом от 1 до 9 999.";
+  }
+  if (maxQuantity !== null && quantity > maxQuantity) {
+    return locale === "en"
+      ? `Only ${maxQuantity} confirmed copies are available for sale.`
+      : `Для продажи доступно только ${maxQuantity} подтверждённых копий.`;
   }
   if (
     perTrade !== null &&

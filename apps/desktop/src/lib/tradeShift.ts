@@ -1,6 +1,7 @@
 import type {
   AccountOrder,
   AccountOrderItem,
+  AccountSetComponent,
   AccountView,
   UpdateListingInput,
 } from "./account";
@@ -40,10 +41,16 @@ export interface TradeEvent {
   reconciliationJson: string | null;
 }
 
+export interface TradeSalesSummary {
+  saleCount: number;
+  platinumReceived: number;
+}
+
 export function isSaleTrade(event: TradeEvent): boolean {
   return event.platinumReceived > 0
     && event.platinumGiven === 0
-    && event.givenItems.length > 0;
+    && event.givenItems.length > 0
+    && event.receivedItems.length === 0;
 }
 
 export function pendingSaleEvents(events: readonly TradeEvent[]): TradeEvent[] {
@@ -93,8 +100,9 @@ export function orderVariantKey(
   if (!item) return null;
   return {
     slug: item.slug,
-    platform,
+    platform: normalizeMarketPlatform(platform),
     rank: order.rank,
+    charges: order.charges,
     subtype: order.subtype,
     amberStars: order.amberStars,
     cyanStars: order.cyanStars,
@@ -106,6 +114,7 @@ export function recommendationIdentity(key: MarketVariantKey): string {
     key.slug,
     key.platform,
     key.rank ?? "",
+    key.charges ?? "",
     key.subtype ?? "",
     key.amberStars ?? "",
     key.cyanStars ?? "",
@@ -124,9 +133,7 @@ export function buildTradeShiftRows(
     .map((order) => {
       const item = order.itemId ? account.orderItems?.[order.itemId] : undefined;
       const key = orderVariantKey(order, item, platform);
-      const owned = inventory?.items.find((candidate) =>
-        sameInventoryVariant(candidate, order, order.itemId)
-      ) ?? null;
+      const owned = availableInventoryForOrder(account, inventory, order, item, key);
       const recommendation = key
         ? recommendations.get(recommendationIdentity(key)) ?? null
         : null;
@@ -151,12 +158,13 @@ export function updateInput(changes: {
   platinum?: number;
   quantity?: number;
   visible?: boolean;
+  perTrade?: number;
 }): UpdateListingInput {
   return {
     platinum: changes.platinum ?? null,
     quantity: changes.quantity ?? null,
     visible: changes.visible ?? null,
-    perTrade: null,
+    perTrade: changes.perTrade ?? null,
     rank: null,
     charges: null,
     subtype: null,
@@ -170,36 +178,58 @@ export function planTradeReconciliation(
   account: AccountView,
 ): TradeMatchPlan {
   const result: TradeMatchPlan = { actions: [], unmatched: [], unsafe: [] };
-  if (event.platinumReceived <= 0 || event.platinumGiven > 0) {
+  if (!isSaleTrade(event)) {
     result.unsafe.push(...event.givenItems);
     return result;
   }
-  for (const sold of event.givenItems) {
+  const soldItems = aggregateTradeItems(event.givenItems);
+  const completeSetCandidates = account.orders.flatMap((order) => {
+    if (order.type !== "sell" || !order.itemId) return [];
+    const item = account.orderItems?.[order.itemId];
+    if (!item?.setComponents?.length) return [];
+    const soldQuantity = completeSetQuantity(soldItems, item.setComponents);
+    return soldQuantity === null ? [] : [{ order, item, soldQuantity }];
+  });
+  if (completeSetCandidates.length > 0) {
+    if (completeSetCandidates.length !== 1) {
+      result.unsafe.push(...soldItems);
+      return result;
+    }
+    const [{ order, item, soldQuantity }] = completeSetCandidates;
+    if (soldQuantity > order.quantity || !isSafeOrderMatch(order, soldQuantity, event)) {
+      result.unsafe.push(...soldItems);
+      return result;
+    }
+    result.actions.push({
+      kind: order.quantity > soldQuantity ? "update" : "delete",
+      before: order,
+      itemName: item.displayName,
+      soldQuantity,
+    });
+    return result;
+  }
+  const usedOrderIds = new Set<string>();
+  for (const sold of soldItems) {
     const candidates = account.orders.filter((order) => {
       if (order.type !== "sell" || !order.itemId) return false;
       const item = account.orderItems?.[order.itemId];
-      return item
-        && normalizeTradeName(item.displayNameEn) === normalizeTradeName(sold.name);
+      return item && itemMatchesTradeName(item, sold.name);
     });
     if (candidates.length !== 1) {
       result.unmatched.push(sold);
       continue;
     }
     const order = candidates[0];
-    const orderItem = order.itemId ? account.orderItems?.[order.itemId] : undefined;
-    if (
-      order.rank !== null
-      || order.charges !== null
-      || order.subtype !== null
-      || order.amberStars !== null
-      || order.cyanStars !== null
-      || new Date(order.updatedAt).getTime() > new Date(event.occurredAt).getTime()
-      || (order.perTrade !== null && order.quantity > sold.quantity
-        && (order.quantity - sold.quantity) % order.perTrade !== 0)
-    ) {
+    if (usedOrderIds.has(order.id) || sold.quantity > order.quantity) {
       result.unsafe.push(sold);
       continue;
     }
+    const orderItem = order.itemId ? account.orderItems?.[order.itemId] : undefined;
+    if (!isSafeOrderMatch(order, sold.quantity, event)) {
+      result.unsafe.push(sold);
+      continue;
+    }
+    usedOrderIds.add(order.id);
     result.actions.push({
       kind: order.quantity > sold.quantity ? "update" : "delete",
       before: order,
@@ -210,11 +240,95 @@ export function planTradeReconciliation(
   return result;
 }
 
+function completeSetQuantity(
+  soldItems: readonly TradeItem[],
+  components: readonly AccountSetComponent[],
+): number | null {
+  if (components.length === 0 || soldItems.length !== components.length) return null;
+  const usedItems = new Set<number>();
+  let completeSets: number | null = null;
+  for (const component of components) {
+    if (!Number.isInteger(component.requiredQuantity) || component.requiredQuantity <= 0) {
+      return null;
+    }
+    const aliases = new Set([
+      normalizeTradeName(component.displayName),
+      normalizeTradeName(component.displayNameEn),
+    ]);
+    const matchingIndexes = soldItems
+      .map((sold, index) => ({ sold, index }))
+      .filter(({ sold, index }) =>
+        !usedItems.has(index) && aliases.has(normalizeTradeName(sold.name))
+      );
+    if (matchingIndexes.length !== 1) return null;
+    const [{ sold, index }] = matchingIndexes;
+    if (sold.quantity % component.requiredQuantity !== 0) return null;
+    const quantity = sold.quantity / component.requiredQuantity;
+    if (quantity <= 0 || (completeSets !== null && completeSets !== quantity)) return null;
+    completeSets = quantity;
+    usedItems.add(index);
+  }
+  return usedItems.size === soldItems.length ? completeSets : null;
+}
+
+function itemMatchesTradeName(item: AccountOrderItem, tradeName: string): boolean {
+  const normalized = normalizeTradeName(tradeName);
+  return [item.displayName, item.displayNameEn]
+    .some((name) => normalizeTradeName(name) === normalized);
+}
+
+function isSafeOrderMatch(
+  order: AccountOrder,
+  soldQuantity: number,
+  event: TradeEvent,
+): boolean {
+  return order.rank === null
+    && order.charges === null
+    && order.subtype === null
+    && order.amberStars === null
+    && order.cyanStars === null
+    && new Date(order.updatedAt).getTime() <= new Date(event.occurredAt).getTime()
+    && (order.perTrade === null || (
+      soldQuantity % order.perTrade === 0
+      && (order.quantity <= soldQuantity
+        || (order.quantity - soldQuantity) % order.perTrade === 0)
+    ));
+}
+
+function aggregateTradeItems(items: readonly TradeItem[]): TradeItem[] {
+  const aggregated = new Map<string, TradeItem>();
+  for (const item of items) {
+    if (!Number.isInteger(item.quantity) || item.quantity <= 0) continue;
+    const identity = normalizeTradeName(item.name);
+    const existing = aggregated.get(identity);
+    if (existing) existing.quantity += item.quantity;
+    else aggregated.set(identity, { name: item.name, quantity: item.quantity });
+  }
+  return [...aggregated.values()];
+}
+
+function normalizeMarketPlatform(platform: string): string {
+  switch (platform.toLowerCase()) {
+    case "ps4":
+    case "ps5":
+      return "playstation";
+    case "xb1":
+    case "xboxone":
+      return "xbox";
+    default:
+      return platform.toLowerCase();
+  }
+}
+
 export function normalizeTradeName(value: string): string {
   return value
     .normalize("NFKC")
-    .toLocaleLowerCase("en")
-    .replace(/[’']/g, "")
+    .toLocaleLowerCase("ru-RU")
+    .replace(/ё/g, "е")
+    .replace(/^\s*(?:чертеж|blueprint)\s*:\s*/u, "")
+    .replace(/\s*\((?:чертеж|blueprint)\)\s*$/u, "")
+    .replace(/[’'ʼ]/g, "")
+    .replace(/\s*:\s*/g, ":")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -226,9 +340,166 @@ function sameInventoryVariant(
 ): boolean {
   return item.itemId === itemId
     && item.key?.rank === order.rank
+    && item.key?.charges === order.charges
     && item.key?.subtype === order.subtype
     && item.key?.amberStars === order.amberStars
     && item.key?.cyanStars === order.cyanStars;
+}
+
+function aggregateInventoryVariant(
+  inventory: InventoryView | null,
+  order: AccountOrder,
+  itemId: string | null,
+): InventoryViewItem | null {
+  if (!inventory) return null;
+  const matches = inventory.items.filter((candidate) =>
+    sameInventoryVariant(candidate, order, itemId)
+  );
+  if (matches.length === 0) return null;
+  return matches.slice(1).reduce<InventoryViewItem>((total, item) => ({
+    ...total,
+    ownedQuantity: total.ownedQuantity + item.ownedQuantity,
+    tradeableQuantity: total.tradeableQuantity + item.tradeableQuantity,
+    untradeableQuantity: total.untradeableQuantity + item.untradeableQuantity,
+    unknownQuantity: total.unknownQuantity + item.unknownQuantity,
+    leveledQuantity: total.leveledQuantity + item.leveledQuantity,
+    equippedQuantity: total.equippedQuantity + item.equippedQuantity,
+    equippedPlacements: [...total.equippedPlacements, ...item.equippedPlacements],
+    sellableQuantity: total.sellableQuantity + item.sellableQuantity,
+  }), { ...matches[0], equippedPlacements: [...matches[0].equippedPlacements] });
+}
+
+function availableInventoryForOrder(
+  account: AccountView,
+  inventory: InventoryView | null,
+  order: AccountOrder,
+  item: AccountOrderItem | undefined,
+  key: MarketVariantKey | null,
+): InventoryViewItem | null {
+  if (!inventory) return null;
+  if (item?.setComponents?.length) {
+    return aggregateSetInventory(account, inventory, order, item, key);
+  }
+  const aggregated = aggregateInventoryVariant(inventory, order, order.itemId);
+  if (!aggregated) return null;
+  const directReservations = account.orders
+    .filter((candidate) =>
+      candidate.id !== order.id
+      && candidate.visible
+      && candidate.type === "sell"
+      && sameOrderVariant(candidate, order)
+    )
+    .reduce((total, candidate) => total + candidate.quantity, 0);
+  const setReservations = item
+    ? activeSetComponentReservations(account, order.id).get(item.slug) ?? 0
+    : 0;
+  return {
+    ...aggregated,
+    sellableQuantity: Math.max(
+      0,
+      aggregated.sellableQuantity - directReservations - setReservations,
+    ),
+  };
+}
+
+function aggregateSetInventory(
+  account: AccountView,
+  inventory: InventoryView,
+  order: AccountOrder,
+  item: AccountOrderItem,
+  key: MarketVariantKey | null,
+): InventoryViewItem {
+  const setReservations = activeSetComponentReservations(account, order.id);
+  const availableSets = item.setComponents
+    ?.filter((component) => component.requiredQuantity > 0)
+    .map((component) => {
+      const componentItems = inventory.items.filter((candidate) =>
+        candidate.resolution === "resolved" && candidate.key?.slug === component.slug
+      );
+      const available = componentItems.reduce(
+        (total, candidate) => total + candidate.sellableQuantity,
+        0,
+      );
+      const directReservations = account.orders
+        .filter((candidate) =>
+          candidate.id !== order.id
+          && candidate.visible
+          && candidate.type === "sell"
+          && componentItems.some((inventoryItem) =>
+            sameInventoryVariant(inventoryItem, candidate, candidate.itemId)
+          )
+        )
+        .reduce((total, candidate) => total + candidate.quantity, 0);
+      const reservedBySets = setReservations.get(component.slug) ?? 0;
+      return Math.floor(
+        Math.max(0, available - directReservations - reservedBySets)
+          / component.requiredQuantity,
+      );
+    }) ?? [];
+  const sellableQuantity = availableSets.length > 0
+    ? Math.min(...availableSets)
+    : 0;
+  return {
+    canonicalGameId: `set:${item.slug}`,
+    itemId: order.itemId,
+    bulkTradable: false,
+    displayName: item.displayName,
+    imageUrl: item.imageUrl,
+    tags: ["set"],
+    key,
+    rank: null,
+    subtype: null,
+    ownedQuantity: sellableQuantity,
+    tradeableQuantity: sellableQuantity,
+    untradeableQuantity: 0,
+    unknownQuantity: 0,
+    leveledQuantity: 0,
+    equippedQuantity: 0,
+    equippedPlacements: [],
+    sellableQuantity,
+    resolution: "resolved",
+    vaultStatus: "unknown",
+  };
+}
+
+function activeSetComponentReservations(
+  account: AccountView,
+  excludedOrderId: string,
+): Map<string, number> {
+  const reservations = new Map<string, number>();
+  for (const order of account.orders) {
+    if (
+      order.id === excludedOrderId
+      || !order.visible
+      || order.type !== "sell"
+      || order.rank !== null
+      || order.charges !== null
+      || order.subtype !== null
+      || order.amberStars !== null
+      || order.cyanStars !== null
+      || !order.itemId
+    ) continue;
+    const components = account.orderItems?.[order.itemId]?.setComponents;
+    if (!components?.length) continue;
+    for (const component of components) {
+      if (component.requiredQuantity <= 0) continue;
+      reservations.set(
+        component.slug,
+        (reservations.get(component.slug) ?? 0)
+          + order.quantity * component.requiredQuantity,
+      );
+    }
+  }
+  return reservations;
+}
+
+function sameOrderVariant(left: AccountOrder, right: AccountOrder): boolean {
+  return left.itemId === right.itemId
+    && left.rank === right.rank
+    && left.charges === right.charges
+    && left.subtype === right.subtype
+    && left.amberStars === right.amberStars
+    && left.cyanStars === right.cyanStars;
 }
 
 function evaluateOrder(
@@ -238,16 +509,23 @@ function evaluateOrder(
   inventoryAvailable: boolean,
   now: Date,
 ): Pick<TradeShiftRow, "health" | "suggestedPrice" | "suggestedQuantity" | "needsAction"> {
+  const lotSize = order.perTrade ?? 1;
+  const listPrice = recommendation?.listPrice === null || recommendation?.listPrice === undefined
+    ? null
+    : recommendation.listPrice * lotSize;
+  const fairPrice = recommendation?.fairPrice === null || recommendation?.fairPrice === undefined
+    ? null
+    : recommendation.fairPrice * lotSize;
   if (inventoryAvailable && (!inventory || order.quantity > inventory.sellableQuantity)) {
     return {
       health: "inventory_mismatch",
-      suggestedPrice: recommendation?.listPrice === null ? null : roundedPrice(recommendation?.listPrice),
-      suggestedQuantity: inventory?.sellableQuantity ?? 0,
+      suggestedPrice: roundedPrice(listPrice),
+      suggestedQuantity: inventory
+        ? executableQuantity(inventory.sellableQuantity, order.perTrade)
+        : 0,
       needsAction: true,
     };
   }
-  const listPrice = recommendation?.listPrice ?? null;
-  const fairPrice = recommendation?.fairPrice ?? null;
   if (listPrice !== null) {
     const tolerance = Math.max(1, Math.round(listPrice * 0.05));
     if (order.platinum > listPrice + tolerance) {
@@ -278,6 +556,11 @@ function evaluateOrder(
     return { health: "unknown", suggestedPrice: null, suggestedQuantity: null, needsAction: false };
   }
   return { health: "healthy", suggestedPrice: null, suggestedQuantity: null, needsAction: false };
+}
+
+function executableQuantity(quantity: number, perTrade: number | null): number {
+  if (perTrade === null) return quantity;
+  return quantity - (quantity % perTrade);
 }
 
 function roundedPrice(value: number | null | undefined): number | null {

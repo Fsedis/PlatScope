@@ -8,6 +8,8 @@ use platscope_domain::{
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
+pub const MARKET_PRICE_SCHEMA_VERSION: u32 = 2;
+
 use crate::{ProviderError, ProviderErrorCode, RawMarketDump, RawMetadataCatalog};
 
 #[derive(Debug, Clone, Copy)]
@@ -105,6 +107,9 @@ pub fn normalize_catalog(
             .transpose()?
             .unwrap_or(false);
         let max_rank = optional_u16(object, "maxRank")?;
+        let max_charges = optional_u16(object, "maxCharges")?;
+        let max_amber_stars = optional_u16(object, "maxAmberStars")?;
+        let max_cyan_stars = optional_u16(object, "maxCyanStars")?;
         let subtypes = string_array(object.get("subtypes"), "subtypes")?;
         let tags = string_array(object.get("tags"), "tags")?;
         let game_ref = object
@@ -121,6 +126,9 @@ pub fn normalize_catalog(
             game_ref,
             bulk_tradable,
             max_rank,
+            max_charges,
+            max_amber_stars,
+            max_cyan_stars,
             subtypes,
             tags,
         });
@@ -130,7 +138,7 @@ pub fn normalize_catalog(
         metadata: CatalogMetadata {
             provider: raw.provider,
             fetched_at: raw.fetched_at,
-            schema_version: 3,
+            schema_version: 4,
             item_count: items.len() as u64,
             checksum_sha256: checksum(&raw.body),
         },
@@ -238,6 +246,18 @@ pub fn normalize_market_dump(
                     item.slug
                 )));
             }
+            let rank = item.max_rank.and(rank);
+            let charges = optional_u16(object, "charges")?;
+            if charges
+                .zip(item.max_charges)
+                .is_some_and(|(charges, max)| charges > max)
+            {
+                return Err(ProviderError::validation(format!(
+                    "charges exceed maxCharges for {}",
+                    item.slug
+                )));
+            }
+            let charges = item.max_charges.and(charges);
             let subtype = object
                 .get("subtype")
                 .and_then(Value::as_str)
@@ -245,6 +265,26 @@ pub fn normalize_market_dump(
                 .or_else(|| implicit_regular_subtype(item));
             let amber_stars = optional_u16(object, "amber_stars")?;
             let cyan_stars = optional_u16(object, "cyan_stars")?;
+            if amber_stars
+                .zip(item.max_amber_stars)
+                .is_some_and(|(stars, max)| stars > max)
+            {
+                return Err(ProviderError::validation(format!(
+                    "amber stars exceed maxAmberStars for {}",
+                    item.slug
+                )));
+            }
+            if cyan_stars
+                .zip(item.max_cyan_stars)
+                .is_some_and(|(stars, max)| stars > max)
+            {
+                return Err(ProviderError::validation(format!(
+                    "cyan stars exceed maxCyanStars for {}",
+                    item.slug
+                )));
+            }
+            let amber_stars = item.max_amber_stars.and(amber_stars);
+            let cyan_stars = item.max_cyan_stars.and(cyan_stars);
             if subtype.as_ref().is_some_and(|subtype| {
                 !item.subtypes.is_empty() && !item.subtypes.contains(subtype)
             }) {
@@ -256,10 +296,12 @@ pub fn normalize_market_dump(
             let order_type = parse_order_type(required_string(object, "order_type")?)?;
             let key = MarketVariantKey::new(item.slug.clone(), Platform::Pc, rank, subtype.clone())
                 .map_err(|error| ProviderError::validation(error.to_string()))?
+                .with_charges(charges)
                 .with_stars(amber_stars, cyan_stars);
             let identity = (
                 item.slug.clone(),
                 rank,
+                charges,
                 subtype.clone(),
                 amber_stars,
                 cyan_stars,
@@ -305,7 +347,7 @@ pub fn normalize_market_dump(
             provider: raw.provider,
             source_date: raw.source_date,
             fetched_at: raw.fetched_at,
-            schema_version: 1,
+            schema_version: MARKET_PRICE_SCHEMA_VERSION,
             item_count: root.len() as u64,
             record_count: records.len() as u64,
             checksum_sha256: checksum(&raw.body),
@@ -445,13 +487,17 @@ mod tests {
       {"id":"normal","slug":"normal_item","gameRef":"/Normal","tags":["weapon"],"i18n":{"en":{"name":"Normal Item","thumb":"items/images/en/thumbs/normal.png"},"ru":{"name":"\u041e\u0431\u044b\u0447\u043d\u044b\u0439 \u043f\u0440\u0435\u0434\u043c\u0435\u0442","thumb":"items/images/ru/thumbs/normal.png"}}},
       {"id":"ranked","slug":"ranked_mod","tags":["mod"],"bulkTradable":true,"maxRank":10,"i18n":{"en":{"name":"Ranked Mod"}}},
       {"id":"variant-ranked","slug":"variant_ranked_mod","tags":["mod"],"maxRank":5,"subtypes":["regular","atragraph"],"i18n":{"en":{"name":"Variant Ranked Mod"}}},
+      {"id":"charged","slug":"charged_mod","tags":["mod"],"maxCharges":3,"i18n":{"en":{"name":"Charged Mod"}}},
+      {"id":"ayatan","slug":"ayatan_test_sculpture","tags":["ayatan_sculpture"],"maxAmberStars":2,"maxCyanStars":2,"i18n":{"en":{"name":"Ayatan Test Sculpture"}}},
       {"id":"relic","slug":"axi_test_relic","tags":["relic"],"subtypes":["intact","radiant"],"i18n":{"en":{"name":"Axi Test Relic"}}}
     ]"#;
 
     const PRICES: &[u8] = br#"{
-      "Normal Item":[{"datetime":"2026-08-26T00:00:00Z","volume":"9","min_price":25,"max_price":33,"avg_price":29,"median":"30","item_id":"normal","order_type":"closed"}],
+      "Normal Item":[{"datetime":"2026-08-26T00:00:00Z","volume":"9","min_price":25,"max_price":33,"avg_price":29,"median":"30","mod_rank":5,"item_id":"normal","order_type":"closed"}],
       "Ranked Mod":[{"datetime":"2026-08-26T00:00:00Z","volume":3,"median":12,"mod_rank":10,"item_id":"ranked","order_type":"sell"}],
       "Variant Ranked Mod":[{"datetime":"2026-08-26T00:00:00Z","volume":2,"median":10,"mod_rank":5,"item_id":"variant-ranked","order_type":"closed"}],
+      "Charged Mod":[{"datetime":"2026-08-26T00:00:00Z","volume":2,"median":9,"charges":2,"item_id":"charged","order_type":"closed"}],
+      "Ayatan Test Sculpture":[{"datetime":"2026-08-26T00:00:00Z","volume":5,"median":8,"amber_stars":2,"cyan_stars":1,"item_id":"ayatan","order_type":"closed"}],
       "Axi Test Relic":[{"datetime":"2026-08-26T00:00:00Z","volume":4,"median":7,"subtype":"radiant","item_id":"relic","order_type":"buy"}]
     }"#;
 
@@ -483,7 +529,7 @@ mod tests {
             item.thumb_ru.as_deref(),
             Some("items/images/ru/thumbs/normal.png")
         );
-        assert_eq!(catalog().metadata.schema_version, 3);
+        assert_eq!(catalog().metadata.schema_version, 4);
     }
 
     #[test]
@@ -533,13 +579,14 @@ mod tests {
         )
         .expect("fixture prices");
 
-        assert_eq!(snapshot.records.len(), 4);
+        assert_eq!(snapshot.records.len(), 6);
         let normal = snapshot
             .records
             .iter()
             .find(|record| record.key.slug == "normal_item")
             .expect("normal record");
         assert!((normal.volume - 9.0).abs() < f64::EPSILON);
+        assert_eq!(normal.key.rank, None);
         assert!(
             snapshot
                 .records
@@ -556,6 +603,16 @@ mod tests {
             record.key.slug == "variant_ranked_mod"
                 && record.key.rank == Some(5)
                 && record.key.subtype.as_deref() == Some("regular")
+        }));
+        assert!(
+            snapshot.records.iter().any(|record| {
+                record.key.slug == "charged_mod" && record.key.charges == Some(2)
+            })
+        );
+        assert!(snapshot.records.iter().any(|record| {
+            record.key.slug == "ayatan_test_sculpture"
+                && record.key.amber_stars == Some(2)
+                && record.key.cyan_stars == Some(1)
         }));
     }
 

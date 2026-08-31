@@ -27,7 +27,7 @@ import type {
 import type { LiveSellNowResult, SellNowRow, SellNowView } from "./sellNow";
 import type { RelicRewardScanView } from "./relicRewards";
 import type { ResourceConverterView } from "./resourceConverter";
-import type { TradeEvent } from "./tradeShift";
+import { isSaleTrade, type TradeEvent } from "./tradeShift";
 
 const sourceDate = "2026-08-26";
 const snapshot = {
@@ -68,6 +68,7 @@ let inventory: InventoryView = {
         slug: "nyx_prime_set",
         platform: "pc",
         rank: null,
+        charges: null,
         subtype: null,
         amberStars: null,
         cyanStars: null,
@@ -84,8 +85,6 @@ let inventory: InventoryView = {
       sellableQuantity: 2,
       resolution: "resolved",
       vaultStatus: "vaulted",
-      closedMedian48h: 59,
-      hasReliablePrice: true,
     },
     {
       canonicalGameId: "primed_flow",
@@ -98,6 +97,7 @@ let inventory: InventoryView = {
         slug: "primed_flow",
         platform: "pc",
         rank: 10,
+        charges: null,
         subtype: null,
         amberStars: null,
         cyanStars: null,
@@ -131,8 +131,6 @@ let inventory: InventoryView = {
       sellableQuantity: 2,
       resolution: "resolved",
       vaultStatus: "unknown",
-      closedMedian48h: 42,
-      hasReliablePrice: true,
     },
     {
       canonicalGameId: "primary_deadhead",
@@ -144,6 +142,7 @@ let inventory: InventoryView = {
         slug: "primary_deadhead",
         platform: "pc",
         rank: 0,
+        charges: null,
         subtype: null,
         amberStars: null,
         cyanStars: null,
@@ -160,8 +159,6 @@ let inventory: InventoryView = {
       sellableQuantity: 15,
       resolution: "resolved",
       vaultStatus: "unknown",
-      closedMedian48h: 2,
-      hasReliablePrice: true,
     },
   ],
 };
@@ -269,8 +266,6 @@ function localizeInventoryItem(item: InventoryViewItem): InventoryViewItem {
     ...item,
     displayName: localizedName(slug, item.displayName),
     key: item.key ? { ...item.key, platform: appSettings.platform } : null,
-    closedMedian48h: appSettings.platform === "pc" ? item.closedMedian48h : null,
-    hasReliablePrice: appSettings.platform === "pc" && item.hasReliablePrice,
   };
 }
 
@@ -467,6 +462,13 @@ export async function installMarketBrowserMock(): Promise<void> {
       return order;
     }
     if (command === "trade_events") return tradeEvents;
+    if (command === "trade_sales_summary") {
+      const sales = tradeEvents.filter(isSaleTrade);
+      return {
+        saleCount: sales.length,
+        platinumReceived: sales.reduce((total, event) => total + event.platinumReceived, 0),
+      };
+    }
     if (command === "trade_event_reconciled") {
       const request = args as { id?: number; orderId?: string | null; reconciliationJson?: string | null };
       tradeEvents = tradeEvents.map((event) => event.id === request.id ? {
@@ -633,6 +635,9 @@ export async function installMarketBrowserMock(): Promise<void> {
         orders: [
           { side: "sell", platinum: fair === null ? 30 : fair + 2, quantity: 3, perTrade: 1, userStatus: "in_game" },
           { side: "sell", platinum: fair === null ? 32 : fair + 3, quantity: 5, perTrade: 1, userStatus: "online" },
+          { side: "sell", platinum: fair === null ? 33 : fair + 4, quantity: 1, perTrade: 1, userStatus: "in_game" },
+          { side: "sell", platinum: fair === null ? 34 : fair + 5, quantity: 2, perTrade: 1, userStatus: "online" },
+          { side: "sell", platinum: fair === null ? 35 : fair + 6, quantity: 4, perTrade: 1, userStatus: "online" },
           { side: "buy", platinum: fair === null ? 18 : Math.max(1, fair - 10), quantity: 2, perTrade: 1, userStatus: "in_game" },
         ],
         warning: null,
@@ -962,6 +967,7 @@ function makeInsightsView(): InsightsView {
       displayName: marketComponent?.displayName ?? component.slug,
       imageUrl: marketComponent?.imageUrl,
       ownedQuantity: component.ownedQuantity,
+      sellableQuantity: component.ownedQuantity,
       recommendation: scopedRecommendation(component.slug),
     };
   });
@@ -1133,7 +1139,6 @@ function makeSellNowView(): SellNowView {
             quantity: item.sellableQuantity / 5,
             price: fair === null ? 0 : fair / (fair + 50),
             liquidity: (recommendation?.closedVolume ?? 0) / ((recommendation?.closedVolume ?? 0) + 10),
-            confidenceMultiplier: recommendation?.confidence === "high" ? 1 : 0.75,
             timingMultiplier: isNyx ? 1.05 : 1,
           },
           reasons: [
@@ -1166,13 +1171,6 @@ function makeSellNowView(): SellNowView {
       highPriorityRows: sellRows.filter(
         (row) => row.inventory.sellableQuantity > 0 && row.priority.band === "high",
       ).length,
-      inventoryNominalValue: scopedInventory.items.reduce((sum, item) => {
-        const marketRow = rows.find((row) => row.recommendation.key.slug === item.key?.slug);
-        const recommendation = marketRow
-          ? marketRowForPlatform(marketRow, appSettings.platform).recommendation
-          : null;
-        return sum + item.ownedQuantity * (recommendation?.fairPrice ?? 0);
-      }, 0),
       nominalValue: sellRows.reduce((sum, row) => sum + (row.nominalValue ?? 0), 0),
     },
     rows: sellRows,
@@ -1202,6 +1200,7 @@ function makeRow(
         slug,
         platform: "pc",
         rank,
+        charges: null,
         subtype,
         amberStars: null,
         cyanStars: null,

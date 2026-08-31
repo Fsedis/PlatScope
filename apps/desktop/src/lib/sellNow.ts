@@ -20,7 +20,6 @@ export interface SellPriorityFactors {
   quantity: number;
   price: number;
   liquidity: number;
-  confidenceMultiplier: number;
   timingMultiplier: number;
 }
 
@@ -44,7 +43,6 @@ export interface SellNowSummary {
   candidateRows: number;
   pricedRows: number;
   highPriorityRows: number;
-  inventoryNominalValue: number;
   nominalValue: number;
 }
 
@@ -126,6 +124,8 @@ export function filterAndSortSellNowRows(
       return matchesQuery && matchesCategory && matchesPreset && matchesEquipped;
     })
     .sort((left, right) => {
+      const missingOrder = nullableSortOrder(left, right, filters.sortKey);
+      if (missingOrder !== 0) return missingOrder;
       const comparison = compareRows(left, right, filters.sortKey);
       return filters.sortDirection === "asc" ? comparison : -comparison;
     });
@@ -134,7 +134,7 @@ export function filterAndSortSellNowRows(
 export function sellNowRowIdentity(row: SellNowRow): string {
   const key = row.inventory.key;
   return key
-    ? [key.slug, key.platform, key.rank ?? "", key.subtype ?? "", key.amberStars ?? "", key.cyanStars ?? ""].join(":")
+    ? [key.slug, key.platform, key.rank ?? "", key.charges ?? "", key.subtype ?? "", key.amberStars ?? "", key.cyanStars ?? ""].join(":")
     : row.inventory.canonicalGameId;
 }
 
@@ -220,4 +220,25 @@ function compareNullable(left: number | null | undefined, right: number | null |
   if (left === null || left === undefined) return right === null || right === undefined ? 0 : -1;
   if (right === null || right === undefined) return 1;
   return left - right;
+}
+
+function nullableSortOrder(
+  left: SellNowRow,
+  right: SellNowRow,
+  key: SellNowSortKey,
+): number {
+  const value = (row: SellNowRow): number | null | undefined => {
+    switch (key) {
+      case "fair": return row.recommendation?.fairPrice;
+      case "volume": return row.recommendation?.closedVolume;
+      case "trend": return row.trend?.change90d;
+      default: return 0;
+    }
+  };
+  const leftValue = value(left);
+  const rightValue = value(right);
+  const leftMissing = leftValue === null || leftValue === undefined;
+  const rightMissing = rightValue === null || rightValue === undefined;
+  if (leftMissing === rightMissing) return 0;
+  return leftMissing ? 1 : -1;
 }

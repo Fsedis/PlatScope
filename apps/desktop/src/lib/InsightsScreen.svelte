@@ -15,7 +15,10 @@
     formatPercent,
     formatRatio,
     rankRelicsToOpen,
+    reservePublishedSetListings,
     refinementLabel,
+    setLiveMinimumPrice,
+    setLiveSellOrders,
     setOpportunity,
     setRelicSupport,
     vaultLabel,
@@ -23,7 +26,12 @@
     type SetInsightRow,
     type SetOpportunityMode,
   } from "./insights";
-  import { formatPlatinum } from "./market";
+  import {
+    formatPlatinum,
+    liveQuoteLabel,
+    liveUserStatusLabel,
+    type LivePricingResult,
+  } from "./market";
   import ResourceConverter from "./ResourceConverter.svelte";
 
   export let onOpenSettings: () => void;
@@ -54,17 +62,35 @@
       clearSearch: "Очистить поиск",
       missing: "Не хватает",
       ownedRelics: "Подходящих копий",
-      usefulChance: "Шанс нужной награды",
-      chanceHint: "хотя бы одна из всех копий",
-      buyFor: "Докупить примерно",
+      usefulChance: "Шанс дособрать сет",
+      chanceHint: "получить все недостающие детали из имеющихся реликвий",
+      buyFor: "Оценка докупки",
+      sellSetFor: "Оценка продажи сета",
+      completionProfit: "Выгода после сборки",
+      profitHint: "с учётом цены всех использованных деталей",
+      priceUnavailable: "Не хватает текущих цен",
       setPrice: "Цена сета",
+      livePriceHint: "минимальная среди активных ордеров",
+      checkLivePrice: "Проверить актуальную цену",
+      checkingLivePrice: "Проверяем цену…",
+      liveOrdersTitle: "Актуальные ордера на продажу",
+      liveOrdersOrder: "от дешёвых к дорогим",
+      liveOrderPrice: "Цена комплекта",
+      liveOrderQuantity: "Доступно",
+      liveOrderStatus: "Статус",
+      liveOrderQuantityValue: (quantity: number) => `${quantity} шт.`,
+      livePriceChecked: (price: string, count: number) => `Минимальная цена ${price}. Показано ордеров: ${count}.`,
+      livePriceUnavailable: "Warframe Market не вернул цену для этого комплекта. Повторите проверку позже.",
+      liveSellOrdersUnavailable: "Сейчас нет активных ордеров на продажу этого комплекта.",
+      livePriceError: "Не удалось проверить цену. Проверьте подключение и повторите.",
       readySets: "Готово сетов",
       partsPrice: "Детали отдельно",
       setPremium: "Премия сета",
       setPremiumHint: "к цене деталей",
       allPartsCovered: "Все недостающие виды деталей могут выпасть из ваших реликвий.",
       somePartsCovered: (covered: number, total: number) => `Из ваших реликвий выпадают ${covered} из ${total} недостающих видов деталей. Остальные можно докупить.`,
-      buySummary: (cost: string, setPrice: string) => `Недостающие детали стоят около ${cost}, собранный сет — ${setPrice}.`,
+      buySummary: (cost: string, setPrice: string, profit: string) => `Ориентир докупки — ${cost}, оценка продажи сета — ${setPrice}, ожидаемая выгода — ${profit}. Перед покупкой проверьте открытые ордера.`,
+      buyUnknown: "Не хватает текущих заявок, чтобы честно посчитать стоимость покупки и выгоду.",
       readySummary: (count: number) => `Можно выставить ${count} ${count === 1 ? "полный сет" : "полных сета"}.`,
       showRelics: (count: number) => `Показать реликвии (${count})`,
       hideRelics: "Скрыть реликвии",
@@ -72,14 +98,17 @@
       marketOpened: (count: number) => `Открыто страниц Warframe Market: ${count}.`,
       marketOpenError: "Не удалось открыть Warframe Market. Повторите действие.",
       relicPlan: "Подходящие реликвии",
-      aggregateChance: "Шанс получить хотя бы одну нужную деталь из всех указанных копий",
-      probabilityNote: "Это вероятность, а не гарантия. Расчёт предполагает одно открытие каждой копии и независимый результат.",
+      aggregateChance: "Шанс получить все недостающие детали из указанных реликвий",
+      probabilityNote: "Это вероятность, а не гарантия. Расчёт предполагает одиночное открытие каждой копии и независимые результаты.",
       openNowTitle: "Какую реликвию открыть сейчас",
-      openNowBody: "Сначала — самая выгодная из тех, что уже есть у вас. Учитываем цену наград и шанс сразу закончить комплект.",
-      expectedPlatinum: "Ожидаемая платина",
-      perOpening: "за одно открытие",
+      openNowBody: "Сначала — максимальная чистая выгода после стоимости реликвии и следов. Для публичной группы считаем лучший выбор из четырёх одинаковых реликвий.",
+      soloNet: "Чистая выгода · соло",
+      publicNet: "Чистая выгода · публичная группа 4",
+      noNetEstimate: "Не хватает цен",
+      netAfterCosts: "на одно открытие, после реликвии и условной стоимости следов",
+      bestOfFour: "лучший выбор из четырёх наград",
       pricedCoverage: (coverage: string) => `цены покрывают ${coverage} шанса`,
-      finishSet: "Закрыть комплект",
+      finishSet: "Закрыть комплект · соло",
       setProgress: "Нужная деталь",
       noSetProgress: "текущие комплекты не продвигает",
       preparation: "Подготовка",
@@ -91,7 +120,7 @@
       showAllRanked: (count: number) => `Показать все (${count})`,
       showTopRanked: "Показать лучшие",
       rankingDetails: "Как составлен рейтинг",
-      rankingExplanation: "70% приоритета даёт ожидаемая рыночная ценность наград, 30% — шанс одним открытием закончить следующий комплект. Улучшение предлагается только при заметном выигрыше относительно уже имеющейся реликвии.",
+      rankingExplanation: "Рейтинг сравнивает чистое матожидание: стоимость наград и выгода полного сета минус цена самой реликвии. Следы не продаются, поэтому для сравнения улучшений 100 следов условно считаются 2p; доступный баланс ограничивает варианты. Награды без подтверждённых цен не заменяются нулём.",
       noRankedRelics: "В инвентаре нет реликвий, которые можно оценить. Обновите инвентарь и данные предметов в настройках.",
       completableSetsTitle: "Какие комплекты помогут дособрать реликвии",
       owned: "Есть",
@@ -102,7 +131,7 @@
       composition: "Состав сета",
       part: "Деталь",
       oneSetNeeds: "На один сет",
-      ownedForSet: "Есть",
+      ownedForSet: "Для продажи",
       missingForSet: "Не хватает",
       price: "Цена",
       sellSet: "Выставить сет",
@@ -121,7 +150,7 @@
       createOrder: "Создать ордер",
       creatingOrder: "Создаём ордер…",
       orderCreated: "Сет выставлен на Warframe Market.",
-      invalidOrder: "Укажите цену и количество не меньше 1.",
+      invalidOrder: "Укажите целую цену и количество не больше доступных для продажи сетов.",
       setUnavailable: "Сет не найден в каталоге Warframe Market. Обновите данные рынка.",
       noResults: "Подходящих вариантов нет",
       noSearchResults: "Сеты с таким названием не найдены.",
@@ -160,17 +189,35 @@
       clearSearch: "Clear search",
       missing: "Missing",
       ownedRelics: "Matching copies",
-      usefulChance: "Useful drop chance",
-      chanceHint: "at least one across all copies",
-      buyFor: "Buy missing for about",
+      usefulChance: "Chance to finish the set",
+      chanceHint: "get every missing part from the owned relics",
+      buyFor: "Estimated purchase cost",
+      sellSetFor: "Estimated set sale",
+      completionProfit: "Profit after completion",
+      profitHint: "including the value of every part used",
+      priceUnavailable: "Current prices unavailable",
       setPrice: "Set price",
+      livePriceHint: "lowest active sell order",
+      checkLivePrice: "Check current price",
+      checkingLivePrice: "Checking price…",
+      liveOrdersTitle: "Current sell orders",
+      liveOrdersOrder: "lowest price first",
+      liveOrderPrice: "Set price",
+      liveOrderQuantity: "Available",
+      liveOrderStatus: "Status",
+      liveOrderQuantityValue: (quantity: number) => `${quantity} pcs.`,
+      livePriceChecked: (price: string, count: number) => `Lowest price ${price}. Orders shown: ${count}.`,
+      livePriceUnavailable: "Warframe Market did not return a price for this set. Try again later.",
+      liveSellOrdersUnavailable: "There are no active sell orders for this set.",
+      livePriceError: "Unable to check the price. Check your connection and try again.",
       readySets: "Ready sets",
       partsPrice: "Parts separately",
       setPremium: "Set premium",
       setPremiumHint: "over the parts price",
       allPartsCovered: "Every missing part type can drop from your relics.",
       somePartsCovered: (covered: number, total: number) => `${covered} of ${total} missing part types can drop from your relics. Buy the rest if needed.`,
-      buySummary: (cost: string, setPrice: string) => `Missing parts cost about ${cost}; the completed set is ${setPrice}.`,
+      buySummary: (cost: string, setPrice: string, profit: string) => `Estimated purchase: ${cost}; estimated set sale: ${setPrice}; expected profit: ${profit}. Check the opened orders before buying.`,
+      buyUnknown: "Current orders are insufficient to calculate the purchase cost and profit reliably.",
       readySummary: (count: number) => `${count} complete ${count === 1 ? "set is" : "sets are"} ready to list.`,
       showRelics: (count: number) => `Show relics (${count})`,
       hideRelics: "Hide relics",
@@ -178,14 +225,17 @@
       marketOpened: (count: number) => `Opened ${count} Warframe Market pages.`,
       marketOpenError: "Unable to open Warframe Market. Try again.",
       relicPlan: "Matching relics",
-      aggregateChance: "Chance of at least one useful drop across the listed copies",
-      probabilityNote: "This is a probability, not a guarantee. It assumes one opening per copy and independent outcomes.",
+      aggregateChance: "Chance to get every missing part from the listed relics",
+      probabilityNote: "This is a probability, not a guarantee. It assumes a solo opening for each copy and independent outcomes.",
       openNowTitle: "Which relic to open now",
-      openNowBody: "Your best owned relic comes first, based on reward value and the chance to finish a set immediately.",
-      expectedPlatinum: "Expected platinum",
-      perOpening: "per opening",
+      openNowBody: "The highest net value comes first after relic and Trace costs. Group value assumes four matching relics and the best of four rewards.",
+      soloNet: "Net value · solo",
+      publicNet: "Net value · public squad of 4",
+      noNetEstimate: "Not enough prices",
+      netAfterCosts: "per opening, after the relic and modeled Trace cost",
+      bestOfFour: "best of four rewards",
       pricedCoverage: (coverage: string) => `prices cover ${coverage} of outcomes`,
-      finishSet: "Finish a set",
+      finishSet: "Finish a set · solo",
       setProgress: "Useful part",
       noSetProgress: "does not advance current sets",
       preparation: "Preparation",
@@ -197,7 +247,7 @@
       showAllRanked: (count: number) => `Show all (${count})`,
       showTopRanked: "Show the best",
       rankingDetails: "How this ranking works",
-      rankingExplanation: "Expected market value contributes 70% of the priority; a one-opening chance to finish the next set contributes 30%. Refinement is recommended only when it is a meaningful improvement over a relic you already own.",
+      rankingExplanation: "The ranking compares net expected value after the relic price. Void Traces are not tradable, so the comparison models 100 Traces as 2p and still respects the available balance. Rewards without confirmed prices are not replaced with zero.",
       noRankedRelics: "No owned relics can be evaluated. Refresh inventory and item data in Settings.",
       completableSetsTitle: "Sets these relics can help finish",
       owned: "Owned",
@@ -208,7 +258,7 @@
       composition: "Set components",
       part: "Part",
       oneSetNeeds: "One set needs",
-      ownedForSet: "Owned",
+      ownedForSet: "Sellable",
       missingForSet: "Missing",
       price: "Price",
       sellSet: "List set",
@@ -227,7 +277,7 @@
       createOrder: "Create order",
       creatingOrder: "Creating order…",
       orderCreated: "Set listed on Warframe Market.",
-      invalidOrder: "Use a price and quantity of at least 1.",
+      invalidOrder: "Use a whole-number price and do not exceed the number of sets available for sale.",
       setUnavailable: "The set is missing from the Warframe Market catalog. Refresh market data.",
       noResults: "No matching opportunities",
       noSearchResults: "No sets match this name.",
@@ -266,22 +316,37 @@
   let listingConfirmed = false;
   let listingBusy = false;
   let listingError = "";
+  let liveSetQuotes = new Map<string, LivePricingResult>();
+  let liveSetErrors = new Map<string, string>();
+  let liveSetPriceBusySlug = "";
+  let expandedLiveSetSlug = "";
 
-  $: relicRows = filterAndSortOpportunitySets(view?.sets ?? [], view?.relics ?? [], "relics", setQuery, $locale);
-  $: buyRows = filterAndSortOpportunitySets(view?.sets ?? [], view?.relics ?? [], "buy", setQuery, $locale);
-  $: readyRows = filterAndSortOpportunitySets(view?.sets ?? [], view?.relics ?? [], "ready", setQuery, $locale);
-  $: relicOpportunityCount = filterAndSortOpportunitySets(view?.sets ?? [], view?.relics ?? [], "relics", "", $locale).length;
-  $: buyOpportunityCount = filterAndSortOpportunitySets(view?.sets ?? [], view?.relics ?? [], "buy", "", $locale).length;
-  $: readyOpportunityCount = filterAndSortOpportunitySets(view?.sets ?? [], view?.relics ?? [], "ready", "", $locale).length;
+  $: marketSets = (view?.sets ?? []).map((row) => reservePublishedSetListings(
+    row,
+    accountView?.orders ?? [],
+    view?.sets ?? [],
+  ));
+  $: relicRows = filterAndSortOpportunitySets(marketSets, view?.relics ?? [], "relics", setQuery, $locale);
+  $: buyRows = filterAndSortOpportunitySets(marketSets, view?.relics ?? [], "buy", setQuery, $locale);
+  $: readyRows = filterAndSortOpportunitySets(marketSets, view?.relics ?? [], "ready", setQuery, $locale)
+    .filter((row) => availableSetQuantity(row) > 0)
+    .sort((left, right) => availableSetQuantity(right) - availableSetQuantity(left));
+  $: relicOpportunityCount = filterAndSortOpportunitySets(marketSets, view?.relics ?? [], "relics", "", $locale).length;
+  $: buyOpportunityCount = filterAndSortOpportunitySets(marketSets, view?.relics ?? [], "buy", "", $locale).length;
+  $: readyOpportunityCount = filterAndSortOpportunitySets(marketSets, view?.relics ?? [], "ready", "", $locale)
+    .filter((row) => availableSetQuantity(row) > 0).length;
   $: setRows = activeMode === "relics" ? relicRows : activeMode === "buy" ? buyRows : activeMode === "ready" ? readyRows : [];
   $: ducatRows = (view?.ducats ?? []).filter((row) => row.sellableQuantity > 0 && row.efficiency.credible);
-  $: rankedRelics = rankRelicsToOpen(view?.relics ?? [], view?.sets ?? []);
+  $: rankedRelics = rankRelicsToOpen(view?.relics ?? [], marketSets, {
+    availableTraces: view?.voidTraces,
+    squadSize: 4,
+  });
   $: visibleRankedRelics = showAllRankedRelics ? rankedRelics : rankedRelics.slice(0, 5);
   $: ownedRelicCount = (view?.relics ?? []).reduce((sum, relic) => sum + relic.ownedQuantity, 0);
   $: listedSetItemIds = new Set(
     (accountView?.orders ?? []).filter((order) => order.type === "sell").map((order) => order.itemId),
   );
-  $: listingRow = (view?.sets ?? []).find((row) => row.definition.setSlug === listingSlug) ?? null;
+  $: listingRow = marketSets.find((row) => row.definition.setSlug === listingSlug) ?? null;
 
   function formatProbability(value: number): string {
     return `${value.toLocaleString(localeCode($locale), { maximumFractionDigits: 1 })}%`;
@@ -291,6 +356,10 @@
     activeMode = mode;
     expandedRelicSet = "";
     marketStatus = "";
+  }
+
+  function availableSetQuantity(row: SetInsightRow): number {
+    return setOpportunity(row).sellableCompleteSets;
   }
 
   async function loadInsights(): Promise<void> {
@@ -329,6 +398,50 @@
     }
   }
 
+  async function checkLiveSetPrice(row: SetInsightRow): Promise<void> {
+    const slug = row.definition.setSlug;
+    expandedLiveSetSlug = slug;
+    marketStatus = c.checkingLivePrice;
+    const nextQuotes = new Map(liveSetQuotes);
+    nextQuotes.delete(slug);
+    liveSetQuotes = nextQuotes;
+    const nextErrors = new Map(liveSetErrors);
+    nextErrors.delete(slug);
+    liveSetErrors = nextErrors;
+    const key = row.setRecommendation?.key;
+    if (!key) {
+      liveSetErrors = new Map(liveSetErrors).set(slug, c.setUnavailable);
+      marketStatus = c.setUnavailable;
+      return;
+    }
+
+    liveSetPriceBusySlug = slug;
+    try {
+      const result = await invoke<LivePricingResult | null>("live_price_current_variant", {
+        key,
+        itemKind: "standard",
+      });
+      if (!result) {
+        liveSetErrors = new Map(liveSetErrors).set(slug, c.livePriceUnavailable);
+        marketStatus = c.livePriceUnavailable;
+        return;
+      }
+      const sellOrders = setLiveSellOrders(result.orders);
+      if (sellOrders.length === 0) {
+        liveSetErrors = new Map(liveSetErrors).set(slug, c.liveSellOrdersUnavailable);
+        marketStatus = c.liveSellOrdersUnavailable;
+        return;
+      }
+      liveSetQuotes = new Map(liveSetQuotes).set(slug, result);
+      marketStatus = c.livePriceChecked(formatPlatinum(sellOrders[0].pricePerSet, $locale), sellOrders.length);
+    } catch {
+      liveSetErrors = new Map(liveSetErrors).set(slug, c.livePriceError);
+      marketStatus = c.livePriceError;
+    } finally {
+      liveSetPriceBusySlug = "";
+    }
+  }
+
   function startListing(row: SetInsightRow): void {
     listingError = "";
     if (!accountView?.connected || !accountView.profile?.verification || (row.itemId && listedSetItemIds.has(row.itemId))) {
@@ -341,8 +454,9 @@
       return;
     }
     listingSlug = row.definition.setSlug;
-    listingPrice = Math.max(1, Math.round(row.setRecommendation?.listPrice ?? row.comparison.setFairValue ?? 1));
-    listingQuantity = Math.max(1, row.comparison.completeSets);
+    const liveMinimum = setLiveMinimumPrice(liveSetQuotes.get(row.definition.setSlug)?.orders ?? []);
+    listingPrice = Math.max(1, Math.round(liveMinimum ?? row.setRecommendation?.listPrice ?? row.comparison.setFairValue ?? 1));
+    listingQuantity = Math.max(1, availableSetQuantity(row));
     listingVisible = true;
     listingStage = "edit";
     listingConfirmed = false;
@@ -358,7 +472,9 @@
   function reviewListing(event: SubmitEvent): void {
     event.preventDefault();
     listingError = "";
-    if (!Number.isInteger(listingPrice) || listingPrice < 1 || !Number.isInteger(listingQuantity) || listingQuantity < 1) {
+    const availableSets = listingRow ? availableSetQuantity(listingRow) : 0;
+    if (!Number.isInteger(listingPrice) || listingPrice < 1 || !Number.isInteger(listingQuantity)
+      || listingQuantity < 1 || listingQuantity > availableSets) {
       listingError = c.invalidOrder;
       return;
     }
@@ -522,8 +638,20 @@
                   </div>
                   <dl class="relic-ranking__metrics">
                     <div>
-                      <dt>{c.expectedPlatinum}</dt>
-                      <dd>{formatPlatinum(recommendation.expectedPlatinum, $locale)}<small>{c.perOpening} · {c.pricedCoverage(formatProbability(recommendation.pricedChancePercent))}</small></dd>
+                      <dt>{c.soloNet}</dt>
+                      {#if recommendation.expectedPlatinum !== null}
+                        <dd>{formatPlatinum(recommendation.expectedPlatinum, $locale)}<small>{c.netAfterCosts} · {c.pricedCoverage(formatProbability(recommendation.pricedChancePercent))}</small></dd>
+                      {:else}
+                        <dd class="metric-unavailable">{c.noNetEstimate}<small>{c.pricedCoverage(formatProbability(recommendation.pricedChancePercent))}</small></dd>
+                      {/if}
+                    </div>
+                    <div>
+                      <dt>{c.publicNet}</dt>
+                      {#if recommendation.squadExpectedPlatinum !== null}
+                        <dd>{formatPlatinum(recommendation.squadExpectedPlatinum, $locale)}<small>{c.bestOfFour}</small></dd>
+                      {:else}
+                        <dd class="metric-unavailable">{c.noNetEstimate}</dd>
+                      {/if}
                     </div>
                     <div>
                       <dt>{c.finishSet}</dt>
@@ -570,6 +698,19 @@
         {#each setRows as row (row.definition.setSlug)}
           {@const opportunity = setOpportunity(row)}
           {@const relicSupport = setRelicSupport(row, view.relics)}
+          {@const availableSets = availableSetQuantity(row)}
+          {@const liveQuote = liveSetQuotes.get(row.definition.setSlug)}
+          {@const liveOrders = setLiveSellOrders(liveQuote?.orders ?? [])}
+          {@const liveMinimum = setLiveMinimumPrice(liveQuote?.orders ?? [])}
+          {@const displayedSetPrice = liveMinimum ?? opportunity.setFairValue}
+          {@const displayedSetPremium = liveMinimum !== null && opportunity.partsFairValue !== null
+            ? liveMinimum - opportunity.partsFairValue
+            : opportunity.setPremiumValue}
+          {@const displayedSetPremiumPercent = liveMinimum !== null
+            ? opportunity.partsFairValue !== null && opportunity.partsFairValue > 0
+              ? (liveMinimum - opportunity.partsFairValue) / opportunity.partsFairValue * 100
+              : null
+            : opportunity.setPremiumPercent}
           <article class="set-card">
             <header class="set-card__header">
               <div class="set-identity">
@@ -589,35 +730,69 @@
                 <div><dt>{c.missing}</dt><dd>{opportunity.missingQuantity}</dd></div>
                 <div><dt>{c.ownedRelics}</dt><dd>{relicSupport.ownedRelicCount}</dd></div>
                 <div><dt>{c.usefulChance}</dt><dd>{formatProbability(relicSupport.aggregateChancePercent)}<small>{c.chanceHint}</small></dd></div>
+                <div class:positive={(opportunity.setPremiumValue ?? 0) > 0}>
+                  <dt>{c.setPremium}</dt>
+                  {#if opportunity.setPremiumValue !== null}
+                    <dd>{formatPlatinum(opportunity.setPremiumValue, $locale)}{#if opportunity.setPremiumPercent !== null}<small>{formatPercent(opportunity.setPremiumPercent, $locale)} · {c.setPremiumHint}</small>{/if}</dd>
+                  {:else}
+                    <dd class="metric-unavailable">{c.priceUnavailable}</dd>
+                  {/if}
+                </div>
               {:else if activeMode === "buy"}
                 <div><dt>{c.missing}</dt><dd>{opportunity.missingQuantity}</dd></div>
-                <div><dt>{c.buyFor}</dt><dd>{formatPlatinum(opportunity.completionCost, $locale)}</dd></div>
-                <div><dt>{c.setPrice}</dt><dd>{formatPlatinum(opportunity.setFairValue, $locale)}</dd></div>
+                <div>
+                  <dt>{c.buyFor}</dt>
+                  <dd class:metric-unavailable={opportunity.completionCost === null}>{opportunity.completionCost === null ? c.priceUnavailable : formatPlatinum(opportunity.completionCost, $locale)}</dd>
+                </div>
+                <div>
+                  <dt>{c.sellSetFor}</dt>
+                  <dd class:metric-unavailable={opportunity.completionRevenue === null}>{opportunity.completionRevenue === null ? c.priceUnavailable : formatPlatinum(opportunity.completionRevenue, $locale)}</dd>
+                </div>
+                <div class:positive={(opportunity.completionProfit ?? 0) > 0}>
+                  <dt>{c.completionProfit}</dt>
+                  {#if opportunity.completionProfit !== null}
+                    <dd>{formatPlatinum(opportunity.completionProfit, $locale)}<small>{c.profitHint}</small></dd>
+                  {:else}
+                    <dd class="metric-unavailable">{c.priceUnavailable}</dd>
+                  {/if}
+                </div>
               {:else}
-                <div><dt>{c.readySets}</dt><dd>{opportunity.completeSets}</dd></div>
-                <div><dt>{c.setPrice}</dt><dd>{formatPlatinum(opportunity.setFairValue, $locale)}</dd></div>
-                <div><dt>{c.partsPrice}</dt><dd>{formatPlatinum(opportunity.partsFairValue, $locale)}</dd></div>
+                <div><dt>{c.readySets}</dt><dd>{availableSets}</dd></div>
+                <div>
+                  <dt>{c.setPrice}</dt>
+                  <dd class:metric-unavailable={displayedSetPrice === null}>
+                    {displayedSetPrice === null ? c.priceUnavailable : formatPlatinum(displayedSetPrice, $locale)}
+                    {#if liveMinimum !== null && liveQuote}<small>{c.livePriceHint} · {liveQuoteLabel(liveQuote.quoteState, $locale)}</small>{/if}
+                  </dd>
+                </div>
+                <div><dt>{c.partsPrice}</dt><dd class:metric-unavailable={opportunity.partsFairValue === null}>{opportunity.partsFairValue === null ? c.priceUnavailable : formatPlatinum(opportunity.partsFairValue, $locale)}</dd></div>
+                <div class:positive={(displayedSetPremium ?? 0) > 0}>
+                  <dt>{c.setPremium}</dt>
+                  {#if displayedSetPremium !== null}
+                    <dd>{formatPlatinum(displayedSetPremium, $locale)}{#if displayedSetPremiumPercent !== null}<small>{formatPercent(displayedSetPremiumPercent, $locale)} · {c.setPremiumHint}</small>{/if}</dd>
+                  {:else}
+                    <dd class="metric-unavailable">{c.priceUnavailable}</dd>
+                  {/if}
+                </div>
               {/if}
-              <div class:positive={(opportunity.setPremiumValue ?? 0) > 0}>
-                <dt>{c.setPremium}</dt>
-                <dd>{formatPlatinum(opportunity.setPremiumValue, $locale)}<small>{formatPercent(opportunity.setPremiumPercent, $locale)} · {c.setPremiumHint}</small></dd>
-              </div>
             </dl>
 
             <p class="decision-copy">
               {#if activeMode === "relics"}
                 {relicSupport.allMissingPartsCovered ? c.allPartsCovered : c.somePartsCovered(relicSupport.coveredPartCount, relicSupport.missingPartCount)}
               {:else if activeMode === "buy"}
-                {c.buySummary(formatPlatinum(opportunity.completionCost, $locale), formatPlatinum(opportunity.setFairValue, $locale))}
+                {opportunity.completionCost !== null && opportunity.completionRevenue !== null && opportunity.completionProfit !== null
+                  ? c.buySummary(formatPlatinum(opportunity.completionCost, $locale), formatPlatinum(opportunity.completionRevenue, $locale), formatPlatinum(opportunity.completionProfit, $locale))
+                  : c.buyUnknown}
               {:else}
-                {c.readySummary(opportunity.completeSets)}
+                {c.readySummary(availableSets)}
               {/if}
             </p>
 
             {#if opportunity.missingParts.length > 0}
               <div class="missing-parts" aria-label={c.missing}>
                 {#each opportunity.missingParts as part (part.slug)}
-                  <span>{part.displayName} ×{part.quantity}<strong>{formatPlatinum(part.estimatedCost, $locale)}</strong></span>
+                  <span>{part.displayName} ×{part.quantity}<strong>{part.estimatedCost === null ? c.priceUnavailable : formatPlatinum(part.estimatedCost, $locale)}</strong></span>
                 {/each}
               </div>
             {/if}
@@ -635,11 +810,56 @@
                   {c.buyMissing(opportunity.missingParts.length)}
                 </button>
               {:else}
+                <button
+                  type="button"
+                  class="secondary"
+                  disabled={liveSetPriceBusySlug !== ""}
+                  aria-busy={liveSetPriceBusySlug === row.definition.setSlug}
+                  aria-controls={`live-set-orders-${row.definition.setSlug}`}
+                  aria-expanded={expandedLiveSetSlug === row.definition.setSlug && Boolean(liveQuote || liveSetErrors.get(row.definition.setSlug))}
+                  onclick={() => checkLiveSetPrice(row)}
+                >
+                  {liveSetPriceBusySlug === row.definition.setSlug ? c.checkingLivePrice : c.checkLivePrice}
+                </button>
                 <button type="button" onclick={() => row.itemId && listedSetItemIds.has(row.itemId) ? onOpenMarketSales() : startListing(row)}>
                   {#if row.itemId && listedSetItemIds.has(row.itemId)}{c.openOrders}{:else if !accountView?.connected}{c.connectAccount}{:else if !accountView.profile?.verification}{c.verifyAccount}{:else}{c.sellSet}{/if}
                 </button>
               {/if}
             </div>
+
+            {#if activeMode === "ready" && expandedLiveSetSlug === row.definition.setSlug}
+              {@const liveError = liveSetErrors.get(row.definition.setSlug)}
+              {#if liveError}
+                <p id={`live-set-orders-${row.definition.setSlug}`} class="live-set-error">{liveError}</p>
+              {:else if liveQuote && liveOrders.length > 0}
+                <section
+                  id={`live-set-orders-${row.definition.setSlug}`}
+                  class="live-set-orders"
+                  aria-labelledby={`live-set-orders-title-${row.definition.setSlug}`}
+                >
+                  <header>
+                    <h3 id={`live-set-orders-title-${row.definition.setSlug}`}>{c.liveOrdersTitle}</h3>
+                    <p>{c.liveOrdersOrder} · {liveQuoteLabel(liveQuote.quoteState, $locale)}</p>
+                  </header>
+                  <div class="table-scroll">
+                    <table aria-labelledby={`live-set-orders-title-${row.definition.setSlug}`}>
+                      <thead>
+                        <tr><th>{c.liveOrderPrice}</th><th>{c.liveOrderQuantity}</th><th>{c.liveOrderStatus}</th></tr>
+                      </thead>
+                      <tbody>
+                        {#each liveOrders as order, index (`${order.pricePerSet}:${order.quantity}:${order.userStatus}:${index}`)}
+                          <tr>
+                            <td><strong>{formatPlatinum(order.pricePerSet, $locale)}</strong></td>
+                            <td>{c.liveOrderQuantityValue(order.quantity)}</td>
+                            <td>{liveUserStatusLabel(order.userStatus, $locale)}</td>
+                          </tr>
+                        {/each}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+              {/if}
+            {/if}
 
             {#if expandedRelicSet === row.definition.setSlug && activeMode === "relics"}
               <section class="relic-plan" aria-label={c.relicPlan}>
@@ -679,7 +899,7 @@
                   <form onsubmit={reviewListing}>
                     <div class="order-fields">
                       <label><span>{c.orderPrice}</span><input bind:value={listingPrice} type="number" min="1" step="1" inputmode="numeric" /></label>
-                      <label><span>{c.orderQuantity}</span><input bind:value={listingQuantity} type="number" min="1" max={opportunity.completeSets} step="1" inputmode="numeric" /></label>
+                      <label><span>{c.orderQuantity}</span><input bind:value={listingQuantity} type="number" min="1" max={availableSets} step="1" inputmode="numeric" /></label>
                     </div>
                     <label class="order-visible"><input bind:checked={listingVisible} type="checkbox" /><span>{c.publishOrder}</span></label>
                     <div class="order-actions"><button type="submit">{c.reviewOrder}</button><button type="button" class="secondary" onclick={closeListing}>{c.cancel}</button></div>
@@ -702,8 +922,8 @@
                       <tr>
                         <th scope="row"><span class="item-name">{#if component.imageUrl}<img src={component.imageUrl} alt="" loading="lazy" decoding="async" />{/if}{component.displayName}</span></th>
                         <td>{component.definition.requiredQuantity}</td>
-                        <td>{component.ownedQuantity}</td>
-                        <td>{Math.max(0, component.definition.requiredQuantity * (opportunity.completeSets + 1) - component.ownedQuantity)}</td>
+                        <td>{component.sellableQuantity}</td>
+                        <td>{Math.max(0, component.definition.requiredQuantity * (opportunity.sellableCompleteSets + 1) - component.sellableQuantity)}</td>
                         <td>{formatPlatinum(component.recommendation?.fairPrice ?? null, $locale)}</td>
                       </tr>
                     {/each}
@@ -760,7 +980,7 @@
   .relic-ranking__identity h3, .relic-ranking__identity p { margin: 0; }
   .relic-ranking__identity h3 { font-size: .86rem; line-height: 1.25; }
   .relic-ranking__identity p { margin-block-start: .1rem; color: var(--text-muted); font-size: .65rem; }
-  .relic-ranking__metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .35rem; margin: 0; }
+  .relic-ranking__metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .35rem; margin: 0; }
   .relic-ranking__metrics > div { min-width: 0; border-inline-start: 1px solid var(--border); padding-inline: .55rem; }
   .relic-ranking__metrics dd { font-size: .9rem; }
   .relic-ranking__metrics small { overflow-wrap: anywhere; }
@@ -784,6 +1004,7 @@
   dt { color: var(--text-muted); font-size: .7rem; }
   dd { margin: .15rem 0 0; font-size: 1rem; font-weight: 780; font-variant-numeric: tabular-nums; }
   dd small { display: block; margin-block-start: .08rem; color: var(--text-muted); font-size: .62rem; font-weight: 650; line-height: 1.25; }
+  dd.metric-unavailable { color: var(--text-muted); font-size: .72rem; line-height: 1.25; }
   .positive dd { color: oklch(0.37 0.08 145); }
   .decision-copy { margin: .6rem 0 0; color: var(--text-muted); font-size: .78rem; }
   .missing-parts { display: flex; flex-wrap: wrap; gap: .35rem; margin-block-start: .55rem; }
@@ -792,6 +1013,15 @@
   .card-actions, .order-actions { display: flex; flex-wrap: wrap; gap: .45rem; margin-block-start: .65rem; }
   .card-actions button, .order-actions button { flex: 0 1 auto; transition-property: scale, background-color, border-color; transition-duration: 120ms; transition-timing-function: ease-out; }
   .card-actions button:active, .order-actions button:active { scale: .96; }
+  .live-set-orders { margin-block-start: .65rem; overflow: hidden; border-radius: .65rem; background: var(--surface-2); box-shadow: 0 0 0 1px var(--border); }
+  .live-set-orders > header { display: flex; align-items: baseline; justify-content: space-between; gap: .75rem; padding: .55rem .65rem .35rem; }
+  .live-set-orders h3, .live-set-orders p { margin: 0; }
+  .live-set-orders h3 { font-size: .8rem; }
+  .live-set-orders p { color: var(--text-muted); font-size: .65rem; text-align: end; }
+  .live-set-orders table { font-size: .74rem; }
+  .live-set-orders th, .live-set-orders td { padding: .35rem .65rem; }
+  .live-set-orders tbody strong { color: var(--accent-strong); font-size: .8rem; font-variant-numeric: tabular-nums; }
+  .live-set-error { margin: .65rem 0 0; border-radius: .55rem; padding: .5rem .65rem; background: var(--danger-soft); color: var(--danger); font-size: .72rem; font-weight: 680; }
   .relic-plan { margin-block-start: .75rem; border-radius: .65rem; padding: .65rem; background: var(--surface-2); }
   .relic-plan__summary { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: .2rem .75rem; }
   .relic-plan__summary span { font-size: .76rem; font-weight: 700; }
@@ -854,11 +1084,13 @@
     .relic-ranking__header { align-items: stretch; flex-direction: column; }
     .relic-ranking__header button { align-self: start; }
     .relic-ranking__item { grid-template-columns: 1.6rem minmax(0, 1fr); }
-    .relic-ranking__metrics { grid-column: 1 / -1; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .relic-ranking__metrics { grid-column: 1 / -1; grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .relic-ranking__decision { grid-column: 2; grid-row: auto; justify-self: start; max-width: none; }
     .route-badge { width: fit-content; }
     .set-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .card-actions button { flex: 1 1 12rem; }
+    .live-set-orders > header { align-items: start; flex-direction: column; gap: .15rem; }
+    .live-set-orders p { text-align: start; }
     .ducat-panel > header { flex-direction: column; }
     .ducat-panel .warning { text-align: start; }
   }

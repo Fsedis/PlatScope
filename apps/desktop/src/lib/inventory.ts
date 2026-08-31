@@ -74,8 +74,6 @@ export interface InventoryViewItem {
   sellableQuantity: number;
   resolution: InventoryResolution;
   vaultStatus: VaultStatus;
-  closedMedian48h: number | null;
-  hasReliablePrice: boolean;
 }
 
 export interface InventoryView {
@@ -86,9 +84,6 @@ export interface InventoryView {
   items: InventoryViewItem[];
 }
 
-export type InventoryDuplicateFilter = "all" | "duplicates";
-export type InventoryVaultFilter = "all" | VaultStatus;
-export type InventoryPriceFilter = "all" | "priced" | "unpriced";
 export const INVENTORY_CATEGORIES = [
   "mod",
   "arcane_enhancement",
@@ -100,44 +95,6 @@ export const INVENTORY_CATEGORIES = [
 ] as const;
 export type InventoryCategory = (typeof INVENTORY_CATEGORIES)[number];
 export type InventoryCategoryFilter = "all" | InventoryCategory;
-
-export interface InventoryFilters {
-  category: InventoryCategoryFilter;
-  duplicates: InventoryDuplicateFilter;
-  vault: InventoryVaultFilter;
-  price: InventoryPriceFilter;
-}
-
-export function filterInventory(
-  items: InventoryViewItem[],
-  query: string,
-  filters: InventoryFilters,
-): InventoryViewItem[] {
-  const normalizedQuery = query.trim().toLocaleLowerCase("ru");
-  return items.filter((item) => {
-    const matchesQuery =
-      !normalizedQuery ||
-      item.displayName.toLocaleLowerCase("ru").includes(normalizedQuery) ||
-      item.canonicalGameId.toLocaleLowerCase("ru").includes(normalizedQuery) ||
-      item.key?.slug.includes(normalizedQuery);
-    const matchesCategory =
-      filters.category === "all" || inventoryCategory(item) === filters.category;
-    const matchesDuplicates =
-      filters.duplicates === "all" || item.ownedQuantity > 1;
-    const matchesVault = filters.vault === "all" || item.vaultStatus === filters.vault;
-    const matchesPrice =
-      filters.price === "all" ||
-      (filters.price === "priced" && item.closedMedian48h !== null) ||
-      (filters.price === "unpriced" && item.closedMedian48h === null);
-    return Boolean(
-      matchesQuery &&
-        matchesCategory &&
-        matchesDuplicates &&
-        matchesVault &&
-        matchesPrice,
-    );
-  });
-}
 
 export function inventoryCategory(item: InventoryViewItem): InventoryCategory {
   const tags = new Set(item.tags);

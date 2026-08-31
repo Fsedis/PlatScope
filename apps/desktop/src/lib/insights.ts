@@ -1,4 +1,4 @@
-import type { PriceRecommendation } from "./market";
+import type { LiveOrderView, LiveUserStatus, PriceRecommendation } from "./market";
 import { localeCode, type UiLocale } from "./i18n";
 
 export type VaultStatus = "available" | "vaulted" | "unknown";
@@ -56,6 +56,7 @@ export interface SetComponentInsight {
   displayName: string;
   imageUrl?: string | null;
   ownedQuantity: number;
+  sellableQuantity: number;
   recommendation: PriceRecommendation | null;
 }
 
@@ -69,6 +70,54 @@ export interface SetInsightRow {
   components: SetComponentInsight[];
 }
 
+export interface SetLiveSellOrder {
+  pricePerSet: number;
+  quantity: number;
+  perTrade: number;
+  userStatus: LiveUserStatus;
+}
+
+/**
+ * Оставляет только исполнимые ордера продажи и переводит цену лота в цену одного сета.
+ * Результат ограничен пятью самыми дешёвыми актуальными предложениями.
+ */
+export function setLiveSellOrders(orders: readonly LiveOrderView[]): SetLiveSellOrder[] {
+  const statusPriority: Record<LiveUserStatus, number> = { in_game: 0, online: 1, offline: 2 };
+  return orders
+    .flatMap((order): SetLiveSellOrder[] => {
+      if (order.side !== "sell" || order.userStatus === "offline" || order.platinum <= 0
+        || order.quantity <= 0 || order.perTrade <= 0) return [];
+      const quantity = order.quantity - order.quantity % order.perTrade;
+      if (quantity <= 0) return [];
+      return [{
+        pricePerSet: order.platinum / order.perTrade,
+        quantity,
+        perTrade: order.perTrade,
+        userStatus: order.userStatus,
+      }];
+    })
+    .sort((left, right) => left.pricePerSet - right.pricePerSet
+      || statusPriority[left.userStatus] - statusPriority[right.userStatus]
+      || right.quantity - left.quantity)
+    .slice(0, 5);
+}
+
+export function setLiveMinimumPrice(orders: readonly LiveOrderView[]): number | null {
+  return setLiveSellOrders(orders)[0]?.pricePerSet ?? null;
+}
+
+export interface SetSellReservation {
+  itemId: string | null;
+  type: "sell" | "buy";
+  quantity: number;
+  visible: boolean;
+  rank: number | null;
+  charges: number | null;
+  subtype: string | null;
+  amberStars: number | null;
+  cyanStars: number | null;
+}
+
 export type SetViewMode = "finish" | "ready" | "all";
 
 export interface MissingSetPart {
@@ -76,11 +125,14 @@ export interface MissingSetPart {
   displayName: string;
   quantity: number;
   fairPrice: number | null;
+  buyPrice: number | null;
+  costBasis: "lowest_ask" | "depth_3" | "depth_5" | "market_estimate" | null;
   estimatedCost: number | null;
 }
 
 export interface SetOpportunity {
   completeSets: number;
+  sellableCompleteSets: number;
   missingParts: MissingSetPart[];
   missingQuantity: number;
   completionCost: number | null;
@@ -88,6 +140,9 @@ export interface SetOpportunity {
   partsFairValue: number | null;
   setPremiumValue: number | null;
   setPremiumPercent: number | null;
+  completionRevenue: number | null;
+  ownedPartsOpportunityValue: number | null;
+  completionProfit: number | null;
   quickToComplete: boolean;
   profitableToComplete: boolean;
 }
@@ -166,6 +221,8 @@ export interface InsightsView {
   sets: SetInsightRow[];
   relics: RelicInsightRow[];
   ducats: DucatInsightRow[];
+  /** Баланс следов Пустоты пока отсутствует в снимках старых версий. */
+  voidTraces?: number | null;
 }
 
 export interface GameMetadataRefreshOutcome {
@@ -199,6 +256,9 @@ export interface SetRelicSupport {
   coveredPartCount: number;
   missingPartCount: number;
   allMissingPartsCovered: boolean;
+  /** Вероятность получить хотя бы одну полезную деталь. */
+  atLeastOneUsefulChancePercent: number;
+  /** Вероятность закрыть всю текущую нехватку имеющимися реликвиями. */
   aggregateChancePercent: number;
   expectedUsefulDrops: number;
 }
@@ -218,12 +278,28 @@ export interface RelicOpeningRecommendation {
   sourceRefinement: RelicRefinement;
   recommendedRefinement: RelicRefinement;
   traceCost: number;
+  grossExpectedPlatinum: number | null;
+  squadGrossExpectedPlatinum: number | null;
+  relicOpportunityCost: number | null;
+  traceOpportunityCost: number;
+  /** Чистое матожидание для одиночного открытия. */
   expectedPlatinum: number | null;
+  /** Чистое матожидание лучшей награды, если отряд открывает ту же реликвию и улучшение. */
+  squadExpectedPlatinum: number | null;
   pricedChancePercent: number;
   completionChancePercent: number;
   progressChancePercent: number;
   completionTargets: RelicSetCompletionTarget[];
   priorityScore: number;
+}
+
+export interface RelicRankingContext {
+  /** Фактический баланс; null означает, что источник его не предоставляет. */
+  availableTraces?: number | null;
+  /** Оценка альтернативной стоимости одного следа в платине. */
+  tracePlatinumValue?: number;
+  /** 1 — соло, 4 — полный публичный отряд. */
+  squadSize?: number;
 }
 
 const relicRefinements: RelicRefinement[] = ["intact", "exceptional", "flawless", "radiant"];
@@ -243,9 +319,14 @@ const rewardChanceByRefinement = {
 type RelicRewardRarity = keyof typeof rewardChanceByRefinement.intact;
 
 interface RelicOpeningOption extends Omit<RelicOpeningRecommendation, "priorityScore"> {
-  economicValue: number;
-  optionScore: number;
+  economicValue: number | null;
 }
+
+const COMPLETE_RELIC_PRICE_COVERAGE = 99;
+const MAX_COMPLETE_RELIC_CHANCE = 101;
+const RELIC_CHANCE_TOLERANCE = 0.05;
+/** Условная альтернативная стоимость следа: 100 следов = 2p. */
+export const DEFAULT_TRACE_PLATINUM_VALUE = 0.02;
 
 /**
  * Ранжирует только реально имеющиеся реликвии и для каждой выбирает осмысленное
@@ -255,6 +336,7 @@ interface RelicOpeningOption extends Omit<RelicOpeningRecommendation, "priorityS
 export function rankRelicsToOpen(
   relics: RelicInsightRow[],
   sets: SetInsightRow[],
+  context: RelicRankingContext = {},
 ): RelicOpeningRecommendation[] {
   const groups = new Map<string, RelicInsightRow[]>();
   for (const relic of relics) {
@@ -280,36 +362,40 @@ export function rankRelicsToOpen(
     completionByReward.set(rewardSlug, targets);
   }
 
+  const tracePlatinumValue = Number.isFinite(context.tracePlatinumValue)
+    ? Math.max(0, context.tracePlatinumValue ?? 0)
+    : DEFAULT_TRACE_PLATINUM_VALUE;
+  const squadSize = Number.isFinite(context.squadSize)
+    ? Math.min(4, Math.max(1, Math.trunc(context.squadSize ?? 4)))
+    : 4;
   const selected = [...groups.values()].flatMap((group): RelicOpeningOption[] => {
-    const options = relicOpeningOptions(group, completionByReward, progressRewards);
+    const options = relicOpeningOptions(
+      group,
+      completionByReward,
+      progressRewards,
+      context.availableTraces,
+      tracePlatinumValue,
+      squadSize,
+    );
     if (options.length === 0) return [];
-    const freeOption = options
-      .filter((option) => option.traceCost === 0)
-      .sort(compareOpeningOptions)[0] ?? options.sort(compareOpeningOptions)[0];
-    const eligible = options.filter((option) => {
-      if (option.traceCost === 0 || option.optionScore <= freeOption.optionScore) return option.traceCost === 0;
-      const traceSteps = option.traceCost / 25;
-      const economicGain = option.economicValue - freeOption.economicValue;
-      const completionGain = option.completionChancePercent - freeOption.completionChancePercent;
-      return economicGain >= traceSteps * 0.5 || completionGain >= traceSteps;
-    });
-    return [eligible.sort(compareOpeningOptions)[0] ?? freeOption];
+    return [[...options].sort(compareOpeningOptions)[0]];
   });
 
-  const maxEconomicValue = Math.max(0, ...selected.map((option) => option.economicValue));
+  const maxEconomicValue = Math.max(
+    0,
+    ...selected.map((option) => option.economicValue ?? Number.NEGATIVE_INFINITY),
+  );
   return selected
-    .map(({ economicValue, optionScore: _optionScore, ...option }) => ({
+    .map(({ economicValue, ...option }) => ({
       ...option,
-      priorityScore: Math.round(
-        (maxEconomicValue > 0 ? economicValue / maxEconomicValue * 70 : 0)
-        + option.completionChancePercent * 0.3,
-      ),
+      priorityScore: economicValue !== null && economicValue > 0 && maxEconomicValue > 0
+        ? Math.round(economicValue / maxEconomicValue * 100)
+        : 0,
     }))
     .sort((left, right) =>
       right.priorityScore - left.priorityScore
+      || nullableOpportunity(right.squadExpectedPlatinum) - nullableOpportunity(left.squadExpectedPlatinum)
       || nullableOpportunity(right.expectedPlatinum) - nullableOpportunity(left.expectedPlatinum)
-      || right.completionChancePercent - left.completionChancePercent
-      || right.progressChancePercent - left.progressChancePercent
       || left.displayName.localeCompare(right.displayName, "ru-RU")
     );
 }
@@ -318,6 +404,9 @@ function relicOpeningOptions(
   group: RelicInsightRow[],
   completionByReward: Map<string, Array<{ setSlug: string; displayName: string; premium: number }>>,
   progressRewards: Set<string>,
+  availableTraces: number | null | undefined,
+  tracePlatinumValue: number,
+  squadSize: number,
 ): RelicOpeningOption[] {
   const representative = group[0];
   const totalOwnedQuantity = group.reduce((sum, relic) => sum + relic.ownedQuantity, 0);
@@ -330,6 +419,9 @@ function relicOpeningOptions(
       )[0];
     if (!source) return [];
 
+    const traceCost = refinementTraceCost[targetRefinement] - refinementTraceCost[source.definition.refinement];
+    if (availableTraces !== null && availableTraces !== undefined && traceCost > availableTraces) return [];
+
     const exactTarget = group.find((relic) => relic.definition.refinement === targetRefinement);
     const rewards = (exactTarget ?? representative).rewards.map((reward) => ({
       ...reward,
@@ -341,39 +433,65 @@ function relicOpeningOptions(
             targetRefinement,
           ),
     }));
-    let expectedPlatinum = 0;
+    let grossExpectedPlatinum = 0;
     let pricedChancePercent = 0;
+    let totalChancePercent = 0;
     let completionChancePercent = 0;
     let progressChancePercent = 0;
     let expectedSetPremium = 0;
+    const pricedOutcomes: Array<{ value: number; probability: number }> = [];
+    const economicOutcomes: Array<{ value: number; probability: number }> = [];
     const completionTargets: RelicSetCompletionTarget[] = [];
 
     for (const reward of rewards) {
       const chancePercent = clampPercent(reward.chancePercent);
-      const price = reward.recommendation?.fairPrice;
-      if (price !== null && price !== undefined && Number.isFinite(price) && price > 0
-        && reward.recommendation?.confidence !== "unknown") {
-        expectedPlatinum += chancePercent / 100 * price;
+      totalChancePercent += chancePercent;
+      const price = credibleFairPrice(reward.recommendation);
+      let completionPremium = 0;
+      if (price !== null) {
+        grossExpectedPlatinum += chancePercent / 100 * price;
         pricedChancePercent += chancePercent;
       }
       const rewardSlug = reward.definition.rewardSlug;
       if (!rewardSlug) continue;
       if (progressRewards.has(rewardSlug)) progressChancePercent += chancePercent;
       const targets = completionByReward.get(rewardSlug) ?? [];
-      if (targets.length === 0) continue;
-      completionChancePercent += chancePercent;
-      expectedSetPremium += chancePercent / 100 * Math.max(...targets.map((target) => target.premium));
-      for (const target of targets) {
-        completionTargets.push({
-          setSlug: target.setSlug,
-          displayName: target.displayName,
-          chancePercent,
-        });
+      if (targets.length > 0) {
+        completionChancePercent += chancePercent;
+        completionPremium = Math.max(...targets.map((target) => target.premium));
+        expectedSetPremium += chancePercent / 100 * completionPremium;
+        for (const target of targets) {
+          completionTargets.push({
+            setSlug: target.setSlug,
+            displayName: target.displayName,
+            chancePercent,
+          });
+        }
+      }
+      if (price !== null) {
+        pricedOutcomes.push({ value: price, probability: chancePercent / 100 });
+        economicOutcomes.push({ value: price + completionPremium, probability: chancePercent / 100 });
       }
     }
 
-    const coveredExpectedPlatinum = pricedChancePercent >= 50 ? expectedPlatinum : null;
-    const economicValue = (coveredExpectedPlatinum ?? 0) + expectedSetPremium;
+    const hasCompletePricing = totalChancePercent >= COMPLETE_RELIC_PRICE_COVERAGE
+      && totalChancePercent <= MAX_COMPLETE_RELIC_CHANCE
+      && totalChancePercent - pricedChancePercent <= RELIC_CHANCE_TOLERANCE;
+    const coveredGrossExpectedPlatinum = hasCompletePricing ? grossExpectedPlatinum : null;
+    const squadGrossExpectedPlatinum = hasCompletePricing
+      ? expectedBestOf(pricedOutcomes, squadSize)
+      : null;
+    const soloEconomicGross = hasCompletePricing ? grossExpectedPlatinum + expectedSetPremium : null;
+    const squadEconomicGross = hasCompletePricing ? expectedBestOf(economicOutcomes, squadSize) : null;
+    const relicOpportunityCost = credibleFairPrice(source.relicRecommendation);
+    const traceOpportunityCost = traceCost * tracePlatinumValue;
+    const expectedPlatinum = soloEconomicGross !== null && relicOpportunityCost !== null
+      ? soloEconomicGross - relicOpportunityCost - traceOpportunityCost
+      : null;
+    const squadExpectedPlatinum = squadEconomicGross !== null && relicOpportunityCost !== null
+      ? squadEconomicGross - relicOpportunityCost - traceOpportunityCost
+      : null;
+    const economicValue = squadSize > 1 ? squadExpectedPlatinum : expectedPlatinum;
     return [{
       relicSlug: representative.definition.relicSlug,
       displayName: representative.displayName,
@@ -382,31 +500,59 @@ function relicOpeningOptions(
       sourceQuantity: source.ownedQuantity,
       sourceRefinement: source.definition.refinement,
       recommendedRefinement: targetRefinement,
-      traceCost: refinementTraceCost[targetRefinement] - refinementTraceCost[source.definition.refinement],
-      expectedPlatinum: coveredExpectedPlatinum,
+      traceCost,
+      grossExpectedPlatinum: coveredGrossExpectedPlatinum,
+      squadGrossExpectedPlatinum,
+      relicOpportunityCost,
+      traceOpportunityCost,
+      expectedPlatinum,
+      squadExpectedPlatinum,
       pricedChancePercent: clampPercent(pricedChancePercent),
       completionChancePercent: clampPercent(completionChancePercent),
       progressChancePercent: clampPercent(progressChancePercent),
       completionTargets,
       economicValue,
-      optionScore: 0,
     }];
   });
-
-  const maxEconomicValue = Math.max(0, ...candidates.map((candidate) => candidate.economicValue));
-  return candidates.map((candidate) => ({
-    ...candidate,
-    optionScore: (maxEconomicValue > 0 ? candidate.economicValue / maxEconomicValue * 70 : 0)
-      + candidate.completionChancePercent * 0.3,
-  }));
+  return candidates;
 }
 
 function compareOpeningOptions(left: RelicOpeningOption, right: RelicOpeningOption): number {
-  return right.optionScore - left.optionScore
-    || right.economicValue - left.economicValue
-    || right.completionChancePercent - left.completionChancePercent
+  return nullableOpportunity(right.economicValue) - nullableOpportunity(left.economicValue)
     || left.traceCost - right.traceCost
+    || right.completionChancePercent - left.completionChancePercent
     || refinementIndex(left.recommendedRefinement) - refinementIndex(right.recommendedRefinement);
+}
+
+function expectedBestOf(
+  outcomes: Array<{ value: number; probability: number }>,
+  squadSize: number,
+): number {
+  const totalProbability = outcomes.reduce((sum, outcome) => sum + outcome.probability, 0);
+  if (!(totalProbability > 0)) return 0;
+  const scale = totalProbability > 1 ? 1 / totalProbability : 1;
+  const grouped = new Map<number, number>();
+  for (const outcome of outcomes) {
+    grouped.set(outcome.value, (grouped.get(outcome.value) ?? 0) + outcome.probability * scale);
+  }
+  const coveredProbability = Math.min(1, totalProbability * scale);
+  if (coveredProbability < 1) grouped.set(0, 1 - coveredProbability);
+  let cumulative = 0;
+  let expected = 0;
+  for (const [value, probability] of [...grouped.entries()].sort((left, right) => left[0] - right[0])) {
+    const next = Math.min(1, cumulative + probability);
+    expected += value * (next ** squadSize - cumulative ** squadSize);
+    cumulative = next;
+  }
+  return expected;
+}
+
+function credibleFairPrice(recommendation: PriceRecommendation | null | undefined): number | null {
+  if (!recommendation || (recommendation.confidence !== "high" && recommendation.confidence !== "medium")) {
+    return null;
+  }
+  const price = recommendation.fairPrice;
+  return price !== null && Number.isFinite(price) && price > 0 ? price : null;
 }
 
 function chanceAtRefinement(
@@ -427,18 +573,27 @@ function refinementIndex(refinement: RelicRefinement): number {
 }
 
 export function setOpportunity(row: SetInsightRow): SetOpportunity {
-  const targetSetCount = row.comparison.completeSets + 1;
+  const sellableCompleteSets = row.components
+    .filter((component) => component.definition.requiredQuantity > 0)
+    .reduce<number | null>((count, component) => {
+      const componentSets = Math.floor(component.sellableQuantity / component.definition.requiredQuantity);
+      return count === null ? componentSets : Math.min(count, componentSets);
+    }, null) ?? 0;
+  const targetSetCount = sellableCompleteSets + 1;
   const missingParts = row.components.flatMap((component): MissingSetPart[] => {
     const targetQuantity = component.definition.requiredQuantity * targetSetCount;
-    const quantity = Math.max(0, targetQuantity - component.ownedQuantity);
+    const quantity = Math.max(0, targetQuantity - component.sellableQuantity);
     if (quantity === 0) return [];
     const fairPrice = component.recommendation?.fairPrice ?? null;
+    const executable = estimatedBuyPrice(component.recommendation, quantity);
     return [{
       slug: component.definition.slug,
       displayName: component.displayName,
       quantity,
       fairPrice,
-      estimatedCost: fairPrice === null ? null : fairPrice * quantity,
+      buyPrice: executable?.unitPrice ?? null,
+      costBasis: executable?.basis ?? null,
+      estimatedCost: executable === null ? null : executable.unitPrice * quantity,
     }];
   });
   const completionCost = missingParts.length > 0 && missingParts.every((part) => part.estimatedCost !== null)
@@ -450,16 +605,25 @@ export function setOpportunity(row: SetInsightRow): SetOpportunity {
     ? setFairValue - partsFairValue
     : null;
   const missingQuantity = missingParts.reduce((sum, part) => sum + part.quantity, 0);
-  const credibleSetPrice = row.setRecommendation !== null
-    && (row.setRecommendation.confidence === "high" || row.setRecommendation.confidence === "medium");
-  const credibleMissingPrices = missingParts.every((part) => {
-    const component = row.components.find((candidate) => candidate.definition.slug === part.slug);
-    const confidence = component?.recommendation?.confidence;
-    return confidence === "high" || confidence === "medium";
-  });
+  const completionRevenue = credibleListingPrice(row.setRecommendation);
+  const ownedPartsOpportunityValue = row.components.reduce<number | null>((total, component) => {
+    if (total === null) return null;
+    const allocatedToCompleteSets = sellableCompleteSets * component.definition.requiredQuantity;
+    const availableForNextSet = Math.max(0, component.sellableQuantity - allocatedToCompleteSets);
+    const usedForNextSet = Math.min(component.definition.requiredQuantity, availableForNextSet);
+    if (usedForNextSet === 0) return total;
+    const price = credibleFairPrice(component.recommendation);
+    return price === null ? null : total + price * usedForNextSet;
+  }, 0);
+  const completionProfit = completionRevenue !== null
+    && completionCost !== null
+    && ownedPartsOpportunityValue !== null
+    ? completionRevenue - completionCost - ownedPartsOpportunityValue
+    : null;
   const quickToComplete = missingParts.length > 0 && missingParts.length <= 2 && missingQuantity <= 3;
   return {
     completeSets: row.comparison.completeSets,
+    sellableCompleteSets,
     missingParts,
     missingQuantity,
     completionCost,
@@ -467,14 +631,103 @@ export function setOpportunity(row: SetInsightRow): SetOpportunity {
     partsFairValue,
     setPremiumValue,
     setPremiumPercent: row.comparison.setPremiumPercent,
+    completionRevenue,
+    ownedPartsOpportunityValue,
+    completionProfit,
     quickToComplete,
-    profitableToComplete: quickToComplete
-      && credibleSetPrice
-      && credibleMissingPrices
-      && completionCost !== null
-      && setPremiumValue !== null
-      && setPremiumValue > 0,
+    profitableToComplete: sellableCompleteSets === 0
+      && quickToComplete
+      && completionProfit !== null
+      && completionProfit > 0,
   };
+}
+
+export function reservePublishedSetListings(
+  row: SetInsightRow,
+  orders: readonly SetSellReservation[],
+  knownSets: readonly SetInsightRow[] = [row],
+): SetInsightRow {
+  const published = orders.filter((order) => order.visible && order.type === "sell");
+  const exactBaseVariant = (order: SetSellReservation): boolean =>
+    order.rank === null
+      && order.charges === null
+      && order.subtype === null
+      && order.amberStars === null
+      && order.cyanStars === null;
+  const reservedSetComponents = new Map<string, number>();
+  for (const set of knownSets) {
+    const reservedSets = published
+      .filter((order) => set.itemId != null
+        && order.itemId === set.itemId
+        && exactBaseVariant(order))
+      .reduce((sum, order) => sum + order.quantity, 0);
+    if (reservedSets === 0) continue;
+    for (const component of set.components) {
+      reservedSetComponents.set(
+        component.definition.slug,
+        (reservedSetComponents.get(component.definition.slug) ?? 0)
+          + reservedSets * component.definition.requiredQuantity,
+      );
+    }
+  }
+  const components = row.components.map((component) => {
+    const directlyReserved = published
+      .filter((order) => component.itemId != null
+        && order.itemId === component.itemId
+        && exactBaseVariant(order))
+      .reduce((sum, order) => sum + order.quantity, 0);
+    const reservedForSets = reservedSetComponents.get(component.definition.slug) ?? 0;
+    return {
+      ...component,
+      sellableQuantity: Math.max(
+        0,
+        component.sellableQuantity - directlyReserved - reservedForSets,
+      ),
+    };
+  });
+  const completeSets = components
+    .filter((component) => component.definition.requiredQuantity > 0)
+    .reduce<number | null>((count, component) => {
+      const available = Math.floor(component.sellableQuantity / component.definition.requiredQuantity);
+      return count === null ? available : Math.min(count, available);
+    }, null) ?? 0;
+  return {
+    ...row,
+    comparison: { ...row.comparison, completeSets },
+    components,
+  };
+}
+
+function estimatedBuyPrice(
+  recommendation: PriceRecommendation | null | undefined,
+  quantity: number,
+): { unitPrice: number; basis: MissingSetPart["costBasis"] } | null {
+  if (!recommendation || quantity <= 0 || recommendation.freshness === "stale"
+    || recommendation.freshness === "unknown") {
+    return null;
+  }
+  const candidate = quantity === 1
+    ? { price: recommendation.lowestAsk, basis: "lowest_ask" as const }
+    : quantity <= 3
+      ? { price: recommendation.depthThree, basis: "depth_3" as const }
+      : quantity <= 5
+        ? { price: recommendation.depthPrice, basis: "depth_5" as const }
+        : null;
+  if (candidate && candidate.price !== null && Number.isFinite(candidate.price) && candidate.price > 0) {
+    return { unitPrice: candidate.price, basis: candidate.basis };
+  }
+  const marketEstimate = credibleListingPrice(recommendation);
+  return marketEstimate === null
+    ? null
+    : { unitPrice: marketEstimate, basis: "market_estimate" };
+}
+
+function credibleListingPrice(recommendation: PriceRecommendation | null | undefined): number | null {
+  if (!recommendation || (recommendation.confidence !== "high" && recommendation.confidence !== "medium")) {
+    return null;
+  }
+  const price = recommendation.listPrice ?? recommendation.fairPrice;
+  return price !== null && Number.isFinite(price) && price > 0 ? price : null;
 }
 
 export function setRelicSupport(
@@ -484,8 +737,7 @@ export function setRelicSupport(
   const opportunity = setOpportunity(row);
   const missingBySlug = new Map(opportunity.missingParts.map((part) => [part.slug, part]));
   const coveredSlugs = new Set<string>();
-  let noUsefulDropProbability = 1;
-  let expectedUsefulDrops = 0;
+  const openings: RelicOpeningDistribution[] = [];
 
   const matches = relics.flatMap((relic): SetRelicMatch[] => {
     if (relic.ownedQuantity <= 0) return [];
@@ -512,9 +764,16 @@ export function setRelicSupport(
     );
     const missChance = 1 - chancePerRelicPercent / 100;
     const chanceFromOwnedPercent = (1 - missChance ** relic.ownedQuantity) * 100;
-    const expectedFromRelic = relic.ownedQuantity * chancePerRelicPercent / 100;
-    noUsefulDropProbability *= missChance ** relic.ownedQuantity;
-    expectedUsefulDrops += expectedFromRelic;
+    const localNeeds = new Map(usefulRewards.map((reward) => [reward.slug, reward.quantityNeeded]));
+    const localDistribution = simulateRelicDrops(localNeeds, [{
+      copies: relic.ownedQuantity,
+      rewards: usefulRewards.map((reward) => ({ slug: reward.slug, chancePercent: reward.chancePercent })),
+    }]);
+    const expectedFromRelic = expectedDropsFromDistribution(localDistribution, localNeeds);
+    openings.push({
+      copies: relic.ownedQuantity,
+      rewards: usefulRewards.map((reward) => ({ slug: reward.slug, chancePercent: reward.chancePercent })),
+    });
     return [{
       relic,
       usefulRewards,
@@ -529,15 +788,84 @@ export function setRelicSupport(
     || left.relic.displayName.localeCompare(right.relic.displayName, "ru-RU")
   );
 
+  const distribution = simulateRelicDrops(
+    new Map([...missingBySlug].map(([slug, part]) => [slug, part.quantity])),
+    openings,
+  );
+  const zeroKey = [...missingBySlug].map(() => 0).join(",");
+  const completeKey = [...missingBySlug.values()].map((part) => part.quantity).join(",");
+  const noUsefulDropProbability = distribution.get(zeroKey) ?? 1;
+  const allMissingDropProbability = missingBySlug.size > 0 ? distribution.get(completeKey) ?? 0 : 0;
+  const expectedUsefulDrops = expectedDropsFromDistribution(
+    distribution,
+    new Map([...missingBySlug].map(([slug, part]) => [slug, part.quantity])),
+  );
+
   return {
     matches,
     ownedRelicCount: matches.reduce((sum, match) => sum + match.relic.ownedQuantity, 0),
     coveredPartCount: coveredSlugs.size,
     missingPartCount: missingBySlug.size,
     allMissingPartsCovered: missingBySlug.size > 0 && coveredSlugs.size === missingBySlug.size,
-    aggregateChancePercent: clampPercent((1 - noUsefulDropProbability) * 100),
+    atLeastOneUsefulChancePercent: clampPercent((1 - noUsefulDropProbability) * 100),
+    aggregateChancePercent: clampPercent(allMissingDropProbability * 100),
     expectedUsefulDrops,
   };
+}
+
+interface RelicOpeningDistribution {
+  copies: number;
+  rewards: Array<{ slug: string; chancePercent: number }>;
+}
+
+function simulateRelicDrops(
+  needsBySlug: Map<string, number>,
+  openings: RelicOpeningDistribution[],
+): Map<string, number> {
+  const slugs = [...needsBySlug.keys()];
+  const needs = slugs.map((slug) => Math.max(0, Math.trunc(needsBySlug.get(slug) ?? 0)));
+  let states = new Map<string, number>([[slugs.map(() => 0).join(","), 1]]);
+  for (const opening of openings) {
+    const outcomes = opening.rewards.flatMap((reward) => {
+      const index = slugs.indexOf(reward.slug);
+      const probability = clampPercent(reward.chancePercent) / 100;
+      return index >= 0 && probability > 0 ? [{ index, probability }] : [];
+    });
+    const usefulTotal = outcomes.reduce((sum, outcome) => sum + outcome.probability, 0);
+    const scale = usefulTotal > 1 ? 1 / usefulTotal : 1;
+    const missProbability = Math.max(0, 1 - usefulTotal * scale);
+    for (let copy = 0; copy < opening.copies; copy += 1) {
+      const next = new Map<string, number>();
+      for (const [key, stateProbability] of states) {
+        addProbability(next, key, stateProbability * missProbability);
+        const counts = key === "" ? [] : key.split(",").map(Number);
+        for (const outcome of outcomes) {
+          const updated = [...counts];
+          updated[outcome.index] = Math.min(needs[outcome.index], (updated[outcome.index] ?? 0) + 1);
+          addProbability(next, updated.join(","), stateProbability * outcome.probability * scale);
+        }
+      }
+      states = next;
+    }
+  }
+  return states;
+}
+
+function addProbability(states: Map<string, number>, key: string, probability: number): void {
+  if (probability <= 0) return;
+  states.set(key, (states.get(key) ?? 0) + probability);
+}
+
+function expectedDropsFromDistribution(
+  distribution: Map<string, number>,
+  needsBySlug: Map<string, number>,
+): number {
+  const maximum = [...needsBySlug.values()].reduce((sum, quantity) => sum + quantity, 0);
+  const expected = [...distribution].reduce((sum, [key, probability]) => {
+    const drops = key === "" ? 0 : key.split(",").reduce((count, value) => count + Number(value), 0);
+    return sum + probability * drops;
+  }, 0);
+  return Math.min(maximum, expected);
 }
 
 export function filterAndSortOpportunitySets(
@@ -552,7 +880,7 @@ export function filterAndSortOpportunitySets(
     .filter((row) => row.displayName.toLocaleLowerCase(localeCode(locale)).includes(normalizedQuery))
     .filter((row) => {
       const opportunity = setOpportunity(row);
-      if (mode === "ready") return opportunity.completeSets > 0;
+      if (mode === "ready") return opportunity.sellableCompleteSets > 0;
       if (mode === "buy") return opportunity.profitableToComplete;
       return opportunity.missingParts.length > 0 && setRelicSupport(row, relics).matches.length > 0;
     })
@@ -569,11 +897,11 @@ export function filterAndSortOpportunitySets(
           || left.displayName.localeCompare(right.displayName, localeCode(locale));
       }
       if (mode === "ready") {
-        return rightOpportunity.completeSets - leftOpportunity.completeSets
+        return rightOpportunity.sellableCompleteSets - leftOpportunity.sellableCompleteSets
           || nullableOpportunity(rightOpportunity.setPremiumValue) - nullableOpportunity(leftOpportunity.setPremiumValue)
           || left.displayName.localeCompare(right.displayName, localeCode(locale));
       }
-      return nullableOpportunity(rightOpportunity.setPremiumValue) - nullableOpportunity(leftOpportunity.setPremiumValue)
+      return nullableOpportunity(rightOpportunity.completionProfit) - nullableOpportunity(leftOpportunity.completionProfit)
         || leftOpportunity.missingQuantity - rightOpportunity.missingQuantity
         || nullableCost(leftOpportunity.completionCost) - nullableCost(rightOpportunity.completionCost)
         || left.displayName.localeCompare(right.displayName, localeCode(locale));
@@ -597,21 +925,21 @@ export function filterAndSortSets(
     .filter((row) => {
       const opportunity = setOpportunity(row);
       if (mode === "finish") return opportunity.profitableToComplete;
-      if (mode === "ready") return opportunity.completeSets > 0;
+      if (mode === "ready") return opportunity.sellableCompleteSets > 0;
       return true;
     })
     .sort((left, right) => {
       const leftOpportunity = setOpportunity(left);
       const rightOpportunity = setOpportunity(right);
       if (mode === "ready") {
-        return rightOpportunity.completeSets - leftOpportunity.completeSets
+        return rightOpportunity.sellableCompleteSets - leftOpportunity.sellableCompleteSets
           || nullableOpportunity(rightOpportunity.setPremiumValue) - nullableOpportunity(leftOpportunity.setPremiumValue)
           || left.displayName.localeCompare(right.displayName, localeCode(locale));
       }
       return Number(rightOpportunity.profitableToComplete) - Number(leftOpportunity.profitableToComplete)
+        || nullableOpportunity(rightOpportunity.completionProfit) - nullableOpportunity(leftOpportunity.completionProfit)
         || leftOpportunity.missingParts.length - rightOpportunity.missingParts.length
         || leftOpportunity.missingQuantity - rightOpportunity.missingQuantity
-        || nullableOpportunity(rightOpportunity.setPremiumValue) - nullableOpportunity(leftOpportunity.setPremiumValue)
         || left.displayName.localeCompare(right.displayName, localeCode(locale));
     });
 }

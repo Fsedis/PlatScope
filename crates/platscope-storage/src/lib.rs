@@ -31,6 +31,8 @@ const TRADE_SHIFT_MIGRATION: &str = include_str!("../../../migrations/0010_trade
 const EQUIPPED_MODS_MIGRATION: &str = include_str!("../../../migrations/0011_equipped_mods.sql");
 const INVENTORY_ACCOUNT_STATE_MIGRATION: &str =
     include_str!("../../../migrations/0012_inventory_account_state.sql");
+const EXACT_MARKET_VARIANTS_MIGRATION: &str =
+    include_str!("../../../migrations/0013_exact_market_variants.sql");
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -114,6 +116,13 @@ pub struct TradeEvent {
     pub status: TradeEventStatus,
     pub matched_order_id: Option<String>,
     pub reconciliation_json: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TradeSalesSummary {
+    pub sale_count: u64,
+    pub platinum_received: u64,
 }
 
 pub struct Database {
@@ -306,6 +315,33 @@ impl Database {
         Ok(events)
     }
 
+    /// Возвращает итог по всем подтверждённым игрой продажам, а не только по строкам,
+    /// которые помещаются в короткий журнал интерфейса.
+    ///
+    /// # Errors
+    ///
+    /// Возвращает [`StorageError`] при ошибке SQLite или выходе результата за допустимый диапазон.
+    pub fn trade_sales_summary(&self) -> Result<TradeSalesSummary, StorageError> {
+        let (sale_count, platinum_received): (i64, i64) = self.connection.query_row(
+            "SELECT COUNT(*), COALESCE(SUM(platinum_received), 0)
+             FROM trade_events
+             WHERE platinum_received > 0
+               AND platinum_given = 0
+               AND given_items_json <> '[]'
+               AND received_items_json = '[]'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        Ok(TradeSalesSummary {
+            sale_count: u64::try_from(sale_count).map_err(|_| {
+                StorageError::Invariant("trade sale_count is outside u64 range".into())
+            })?,
+            platinum_received: u64::try_from(platinum_received).map_err(|_| {
+                StorageError::Invariant("trade platinum total is outside u64 range".into())
+            })?,
+        })
+    }
+
     /// Помечает сделку как обработанную или намеренно пропущенную.
     ///
     /// # Errors
@@ -365,18 +401,23 @@ impl Database {
                 catalog_json,
             ],
         )?;
+        let catalog_snapshot_id = transaction.last_insert_rowid();
         {
             let mut statement = transaction.prepare_cached(
                 "INSERT INTO item_catalog(
                     item_id, slug, display_name_en, display_name_ru, game_ref, max_rank,
-                    subtypes_json, tags_json, catalog_source, catalog_fetched_at, search_text
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                    max_charges, max_amber_stars, max_cyan_stars, subtypes_json, tags_json,
+                    catalog_source, catalog_fetched_at, search_text
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
                  ON CONFLICT(item_id) DO UPDATE SET
                     slug = excluded.slug,
                     display_name_en = excluded.display_name_en,
                     display_name_ru = excluded.display_name_ru,
                     game_ref = excluded.game_ref,
                     max_rank = excluded.max_rank,
+                    max_charges = excluded.max_charges,
+                    max_amber_stars = excluded.max_amber_stars,
+                    max_cyan_stars = excluded.max_cyan_stars,
                     subtypes_json = excluded.subtypes_json,
                     tags_json = excluded.tags_json,
                     catalog_source = excluded.catalog_source,
@@ -391,6 +432,9 @@ impl Database {
                     item.display_name_ru,
                     item.game_ref,
                     item.max_rank.map(i64::from),
+                    item.max_charges.map(i64::from),
+                    item.max_amber_stars.map(i64::from),
+                    item.max_cyan_stars.map(i64::from),
                     serde_json::to_string(&item.subtypes)?,
                     serde_json::to_string(&item.tags)?,
                     provider_name(catalog.metadata.provider),
@@ -399,6 +443,10 @@ impl Database {
                 ])?;
             }
         }
+        transaction.execute(
+            "DELETE FROM catalog_snapshots WHERE id <> ?1",
+            [catalog_snapshot_id],
+        )?;
         transaction.commit()?;
         Ok(())
     }
@@ -491,6 +539,10 @@ impl Database {
                 ])?;
             }
         }
+        transaction.execute(
+            "DELETE FROM game_metadata_snapshots WHERE id <> ?1",
+            [snapshot_id],
+        )?;
         transaction.commit()?;
         Ok(())
     }
@@ -553,6 +605,29 @@ impl Database {
                 "snapshot record_count differs from normalized records".into(),
             ));
         }
+        if let Some(current) = self.current_market_snapshot()? {
+            if snapshot.metadata.source_date < current.source_date {
+                return Err(StorageError::Invariant(format!(
+                    "market snapshot date {} is older than current {}",
+                    snapshot.metadata.source_date, current.source_date
+                )));
+            }
+            let current_schema_version = self.connection.query_row(
+                "SELECT schema_version FROM market_snapshots WHERE is_current = 1",
+                [],
+                |row| row.get::<_, i64>(0),
+            )?;
+            if snapshot.metadata.source_date == current.source_date
+                && snapshot.metadata.checksum_sha256 == current.checksum_sha256
+                && snapshot.metadata.record_count == current.record_count
+                && current_schema_version == i64::from(snapshot.metadata.schema_version)
+                && self.has_history_date(snapshot.metadata.source_date)?
+            {
+                self.connection
+                    .execute("DELETE FROM market_snapshots WHERE is_current = 0", [])?;
+                return Ok(current);
+            }
+        }
         let history = aggregate_history(snapshot)?;
         let promoted_at = Utc::now();
         let transaction = self.connection.transaction()?;
@@ -576,10 +651,10 @@ impl Database {
         {
             let mut statement = transaction.prepare_cached(
                 "INSERT INTO market_prices(
-                    snapshot_id, item_slug, platform, rank, subtype, order_type,
+                    snapshot_id, item_slug, platform, rank, charges, subtype, order_type,
                     median, average, min_price, max_price, volume, raw_json,
                     amber_stars, cyan_stars
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             )?;
             for record in &snapshot.records {
                 statement.execute(params![
@@ -587,6 +662,7 @@ impl Database {
                     record.key.slug,
                     platform_name(record.key.platform),
                     record.key.rank.map(i64::from),
+                    record.key.charges.map(i64::from),
                     record.key.subtype,
                     order_type_name(record.order_type),
                     record.median,
@@ -609,6 +685,7 @@ impl Database {
             [snapshot_id],
         )?;
         store_history_snapshot(&transaction, snapshot, &history)?;
+        transaction.execute("DELETE FROM market_snapshots WHERE id <> ?1", [snapshot_id])?;
         transaction.commit()?;
 
         Ok(MarketSnapshotSummary {
@@ -650,12 +727,28 @@ impl Database {
     ///
     /// Возвращает [`StorageError`] при ошибке SQLite.
     pub fn has_history_date(&self, date: NaiveDate) -> Result<bool, StorageError> {
+        self.has_history_date_at_least(date, 1)
+    }
+
+    /// Проверяет, что день импортирован парсером не старше указанной версии схемы.
+    /// Старый compact-день нельзя считать полным после появления нового измерения
+    /// варианта: исходный JSON для безопасного восстановления в SQLite не хранится.
+    ///
+    /// # Errors
+    ///
+    /// Возвращает [`StorageError`] при ошибке SQLite.
+    pub fn has_history_date_at_least(
+        &self,
+        date: NaiveDate,
+        minimum_schema_version: u32,
+    ) -> Result<bool, StorageError> {
         self.connection
             .query_row(
                 "SELECT EXISTS(
-                    SELECT 1 FROM market_history_snapshots WHERE source_date = ?1
+                    SELECT 1 FROM market_history_snapshots
+                    WHERE source_date = ?1 AND schema_version >= ?2
                  )",
-                [date.to_string()],
+                params![date.to_string(), i64::from(minimum_schema_version)],
                 |row| row.get::<_, bool>(0),
             )
             .map_err(StorageError::from)
@@ -681,6 +774,59 @@ impl Database {
         })
     }
 
+    /// Возвращает покрытие только внутри актуального календарного окна.
+    /// Старые импортированные дни не могут создавать ложное `90 из 90`.
+    ///
+    /// # Errors
+    ///
+    /// Возвращает [`StorageError`] при ошибке SQLite или некорректной сохранённой дате.
+    pub fn history_coverage_window(
+        &self,
+        as_of: NaiveDate,
+        days: u16,
+    ) -> Result<HistoryCoverage, StorageError> {
+        self.history_coverage_window_at_least(as_of, days, 1)
+    }
+
+    /// Возвращает покрытие календарного окна только снимками нужной версии схемы.
+    ///
+    /// # Errors
+    ///
+    /// Возвращает [`StorageError`] при ошибке SQLite или некорректной сохранённой дате.
+    pub fn history_coverage_window_at_least(
+        &self,
+        as_of: NaiveDate,
+        days: u16,
+        minimum_schema_version: u32,
+    ) -> Result<HistoryCoverage, StorageError> {
+        if days == 0 {
+            return Ok(HistoryCoverage {
+                oldest_date: None,
+                newest_date: None,
+                day_count: 0,
+            });
+        }
+        let first_date = as_of - chrono::Duration::days(i64::from(days.saturating_sub(1)));
+        let (oldest, newest, count): (Option<String>, Option<String>, i64) =
+            self.connection.query_row(
+                "SELECT MIN(source_date), MAX(source_date), COUNT(*)
+                 FROM market_history_snapshots
+                 WHERE source_date BETWEEN ?1 AND ?2
+                   AND schema_version >= ?3",
+                params![
+                    first_date.to_string(),
+                    as_of.to_string(),
+                    i64::from(minimum_schema_version),
+                ],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )?;
+        Ok(HistoryCoverage {
+            oldest_date: oldest.map(|value| value.parse()).transpose()?,
+            newest_date: newest.map(|value| value.parse()).transpose()?,
+            day_count: to_u64(count, "history window day_count")?,
+        })
+    }
+
     /// Загружает не более `days` compact points только для точного варианта.
     ///
     /// # Errors
@@ -702,16 +848,18 @@ impl Database {
              WHERE item_slug = ?1
                AND platform = ?2
                AND rank IS ?3
-               AND subtype IS ?4
-               AND amber_stars IS ?5
-               AND cyan_stars IS ?6
-               AND source_date BETWEEN ?7 AND ?8
+               AND charges IS ?4
+               AND subtype IS ?5
+               AND amber_stars IS ?6
+               AND cyan_stars IS ?7
+               AND source_date BETWEEN ?8 AND ?9
              ORDER BY source_date ASC",
         )?;
         let mut rows = statement.query(params![
             key.slug,
             platform_name(key.platform),
             key.rank.map(i64::from),
+            key.charges.map(i64::from),
             key.subtype,
             key.amber_stars.map(i64::from),
             key.cyan_stars.map(i64::from),
@@ -780,7 +928,7 @@ impl Database {
         key: &MarketVariantKey,
     ) -> Result<Vec<MarketRecord>, StorageError> {
         let mut statement = self.connection.prepare_cached(
-            "SELECT mp.item_slug, mp.platform, mp.rank, mp.subtype,
+            "SELECT mp.item_slug, mp.platform, mp.rank, mp.charges, mp.subtype,
                     mp.amber_stars, mp.cyan_stars, mp.order_type,
                     mp.median, mp.average, mp.min_price, mp.max_price, mp.volume,
                     mp.raw_json, ms.source_date, ic.item_id, ic.display_name_en
@@ -790,14 +938,16 @@ impl Database {
              WHERE mp.item_slug = ?1
                AND mp.platform = ?2
                AND mp.rank IS ?3
-               AND mp.subtype IS ?4
-               AND mp.amber_stars IS ?5
-               AND mp.cyan_stars IS ?6",
+               AND mp.charges IS ?4
+               AND mp.subtype IS ?5
+               AND mp.amber_stars IS ?6
+               AND mp.cyan_stars IS ?7",
         )?;
         let mut rows = statement.query(params![
             key.slug,
             platform_name(key.platform),
             key.rank.map(i64::from),
+            key.charges.map(i64::from),
             key.subtype,
             key.amber_stars.map(i64::from),
             key.cyan_stars.map(i64::from),
@@ -806,33 +956,35 @@ impl Database {
         while let Some(row) = rows.next()? {
             let platform = parse_platform(&row.get::<_, String>(1)?)?;
             let rank = optional_u16_from_sql(row.get::<_, Option<i64>>(2)?, "rank")?;
-            let amber_stars = optional_u16_from_sql(row.get::<_, Option<i64>>(4)?, "amber_stars")?;
-            let cyan_stars = optional_u16_from_sql(row.get::<_, Option<i64>>(5)?, "cyan_stars")?;
+            let charges = optional_u16_from_sql(row.get::<_, Option<i64>>(3)?, "charges")?;
+            let amber_stars = optional_u16_from_sql(row.get::<_, Option<i64>>(5)?, "amber_stars")?;
+            let cyan_stars = optional_u16_from_sql(row.get::<_, Option<i64>>(6)?, "cyan_stars")?;
             let variant = MarketVariantKey::new(
                 row.get::<_, String>(0)?,
                 platform,
                 rank,
-                row.get::<_, Option<String>>(3)?,
+                row.get::<_, Option<String>>(4)?,
             )
             .map_err(|error| StorageError::Invariant(error.to_string()))?
+            .with_charges(charges)
             .with_stars(amber_stars, cyan_stars);
-            let source_date: NaiveDate = row.get::<_, String>(13)?.parse()?;
+            let source_date: NaiveDate = row.get::<_, String>(14)?.parse()?;
             let observed_at = source_date
                 .and_hms_opt(0, 0, 0)
                 .ok_or_else(|| StorageError::Invariant("invalid source date time".into()))?
                 .and_utc();
             records.push(MarketRecord {
                 key: variant,
-                external_item_id: row.get(14)?,
-                display_name_en: row.get(15)?,
+                external_item_id: row.get(15)?,
+                display_name_en: row.get(16)?,
                 observed_at,
-                order_type: parse_order_type(&row.get::<_, String>(6)?)?,
-                median: row.get(7)?,
-                average: row.get(8)?,
-                min_price: row.get(9)?,
-                max_price: row.get(10)?,
-                volume: row.get(11)?,
-                raw_json: row.get(12)?,
+                order_type: parse_order_type(&row.get::<_, String>(7)?)?,
+                median: row.get(8)?,
+                average: row.get(9)?,
+                min_price: row.get(10)?,
+                max_price: row.get(11)?,
+                volume: row.get(12)?,
+                raw_json: row.get(13)?,
             });
         }
         Ok(records)
@@ -853,14 +1005,14 @@ impl Database {
         }
         let normalized_query = query.trim().to_lowercase();
         let mut statement = self.connection.prepare_cached(
-            "SELECT mp.item_slug, mp.platform, mp.rank, mp.subtype,
+            "SELECT mp.item_slug, mp.platform, mp.rank, mp.charges, mp.subtype,
                     mp.amber_stars, mp.cyan_stars, ic.item_id,
                     ic.display_name_en, ic.display_name_ru, ic.tags_json
              FROM market_prices mp
              JOIN market_snapshots ms ON ms.id = mp.snapshot_id AND ms.is_current = 1
              JOIN item_catalog ic ON ic.slug = mp.item_slug
              WHERE ?1 = '' OR instr(ic.search_text, ?1) > 0
-             GROUP BY mp.item_slug, mp.platform, mp.rank, mp.subtype,
+             GROUP BY mp.item_slug, mp.platform, mp.rank, mp.charges, mp.subtype,
                       mp.amber_stars, mp.cyan_stars
              ORDER BY
                 CASE
@@ -879,23 +1031,25 @@ impl Database {
         let mut bundles = Vec::new();
         while let Some(row) = rows.next()? {
             let rank = optional_u16_from_sql(row.get::<_, Option<i64>>(2)?, "rank")?;
-            let amber_stars = optional_u16_from_sql(row.get::<_, Option<i64>>(4)?, "amber_stars")?;
-            let cyan_stars = optional_u16_from_sql(row.get::<_, Option<i64>>(5)?, "cyan_stars")?;
+            let charges = optional_u16_from_sql(row.get::<_, Option<i64>>(3)?, "charges")?;
+            let amber_stars = optional_u16_from_sql(row.get::<_, Option<i64>>(5)?, "amber_stars")?;
+            let cyan_stars = optional_u16_from_sql(row.get::<_, Option<i64>>(6)?, "cyan_stars")?;
             let key = MarketVariantKey::new(
                 row.get::<_, String>(0)?,
                 parse_platform(&row.get::<_, String>(1)?)?,
                 rank,
-                row.get::<_, Option<String>>(3)?,
+                row.get::<_, Option<String>>(4)?,
             )
             .map_err(|error| StorageError::Invariant(error.to_string()))?
+            .with_charges(charges)
             .with_stars(amber_stars, cyan_stars);
-            let tags: Vec<String> = serde_json::from_str(&row.get::<_, String>(9)?)?;
+            let tags: Vec<String> = serde_json::from_str(&row.get::<_, String>(10)?)?;
             let records = self.current_market_records(&key)?;
             bundles.push(MarketVariantBundle {
                 key,
-                item_id: row.get(6)?,
-                display_name_en: row.get(7)?,
-                display_name_ru: row.get(8)?,
+                item_id: row.get(7)?,
+                display_name_en: row.get(8)?,
+                display_name_ru: row.get(9)?,
                 tags,
                 records,
             });
@@ -910,7 +1064,7 @@ impl Database {
     /// Возвращает [`StorageError`] при ошибке SQLite или некорректном persisted key.
     pub fn current_market_variant_keys(&self) -> Result<HashSet<MarketVariantKey>, StorageError> {
         let mut statement = self.connection.prepare_cached(
-            "SELECT DISTINCT mp.item_slug, mp.platform, mp.rank, mp.subtype,
+            "SELECT DISTINCT mp.item_slug, mp.platform, mp.rank, mp.charges, mp.subtype,
                     mp.amber_stars, mp.cyan_stars
              FROM market_prices mp
              JOIN market_snapshots ms ON ms.id = mp.snapshot_id AND ms.is_current = 1",
@@ -922,12 +1076,16 @@ impl Database {
                 row.get::<_, String>(0)?,
                 parse_platform(&row.get::<_, String>(1)?)?,
                 optional_u16_from_sql(row.get::<_, Option<i64>>(2)?, "rank")?,
-                row.get::<_, Option<String>>(3)?,
+                row.get::<_, Option<String>>(4)?,
             )
             .map_err(|error| StorageError::Invariant(error.to_string()))?
+            .with_charges(optional_u16_from_sql(
+                row.get::<_, Option<i64>>(3)?,
+                "charges",
+            )?)
             .with_stars(
-                optional_u16_from_sql(row.get::<_, Option<i64>>(4)?, "amber_stars")?,
-                optional_u16_from_sql(row.get::<_, Option<i64>>(5)?, "cyan_stars")?,
+                optional_u16_from_sql(row.get::<_, Option<i64>>(5)?, "amber_stars")?,
+                optional_u16_from_sql(row.get::<_, Option<i64>>(6)?, "cyan_stars")?,
             );
             keys.insert(key);
         }
@@ -978,10 +1136,12 @@ impl Database {
         let mut statement = transaction.prepare_cached(
             "INSERT INTO inventory_items(
                 snapshot_id, canonical_game_id, display_name_en, display_name_ru, tags_json,
-                item_slug, platform, rank, subtype, owned_quantity, tradeable_quantity,
+                item_slug, platform, rank, market_rank, charges, subtype, amber_stars, cyan_stars,
+                owned_quantity, tradeable_quantity,
                 untradeable_quantity, unknown_quantity, leveled_quantity,
                 equipped_quantity, equipped_tradeable_quantity, sellable_quantity, resolution
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
+                       ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
         )?;
         let mut placement_statement = transaction.prepare_cached(
             "INSERT INTO inventory_mod_placements(
@@ -1000,7 +1160,17 @@ impl Database {
                 item.key.as_ref().map(|key| key.slug.as_str()),
                 item.key.as_ref().map(|key| platform_name(key.platform)),
                 item.rank.map(i64::from),
+                item.key.as_ref().and_then(|key| key.rank).map(i64::from),
+                item.key.as_ref().and_then(|key| key.charges).map(i64::from),
                 item.subtype,
+                item.key
+                    .as_ref()
+                    .and_then(|key| key.amber_stars)
+                    .map(i64::from),
+                item.key
+                    .as_ref()
+                    .and_then(|key| key.cyan_stars)
+                    .map(i64::from),
                 i64::from(item.owned_quantity),
                 i64::from(item.tradeable_quantity),
                 i64::from(item.untradeable_quantity),
@@ -1027,6 +1197,10 @@ impl Database {
         }
         drop(placement_statement);
         drop(statement);
+        transaction.execute(
+            "DELETE FROM inventory_snapshots WHERE id <> ?1",
+            [snapshot_id],
+        )?;
         transaction.commit()?;
         Ok(())
     }
@@ -1052,7 +1226,8 @@ impl Database {
         let keep_copies = u32_from_sql(summary.keep_copies, "keep_copies")?;
         let mut statement = self.connection.prepare_cached(
             "SELECT id, canonical_game_id, display_name_en, display_name_ru, tags_json, item_slug,
-                    platform, rank, subtype, owned_quantity, tradeable_quantity,
+                    platform, rank, market_rank, charges, subtype, amber_stars, cyan_stars,
+                    owned_quantity, tradeable_quantity,
                     untradeable_quantity, unknown_quantity, leveled_quantity,
                     equipped_quantity, equipped_tradeable_quantity, sellable_quantity, resolution
              FROM inventory_items WHERE snapshot_id = ?1
@@ -1066,11 +1241,26 @@ impl Database {
             let slug = row.get::<_, Option<String>>(5)?;
             let platform = row.get::<_, Option<String>>(6)?;
             let rank = optional_u16_from_sql(row.get::<_, Option<i64>>(7)?, "inventory rank")?;
-            let subtype = row.get::<_, Option<String>>(8)?;
+            let market_rank =
+                optional_u16_from_sql(row.get::<_, Option<i64>>(8)?, "inventory market rank")?;
+            let charges =
+                optional_u16_from_sql(row.get::<_, Option<i64>>(9)?, "inventory charges")?;
+            let subtype = row.get::<_, Option<String>>(10)?;
+            let amber_stars =
+                optional_u16_from_sql(row.get::<_, Option<i64>>(11)?, "inventory amber stars")?;
+            let cyan_stars =
+                optional_u16_from_sql(row.get::<_, Option<i64>>(12)?, "inventory cyan stars")?;
             let key = match (slug, platform) {
                 (Some(slug), Some(platform)) => Some(
-                    MarketVariantKey::new(slug, parse_platform(&platform)?, rank, subtype.clone())
-                        .map_err(|error| StorageError::Invariant(error.to_string()))?,
+                    MarketVariantKey::new(
+                        slug,
+                        parse_platform(&platform)?,
+                        market_rank,
+                        subtype.clone(),
+                    )
+                    .map_err(|error| StorageError::Invariant(error.to_string()))?
+                    .with_charges(charges)
+                    .with_stars(amber_stars, cyan_stars),
                 ),
                 (None, None) => None,
                 _ => {
@@ -1088,19 +1278,19 @@ impl Database {
                 key,
                 rank,
                 subtype,
-                owned_quantity: u32_from_sql(row.get(9)?, "owned_quantity")?,
-                tradeable_quantity: u32_from_sql(row.get(10)?, "tradeable_quantity")?,
-                untradeable_quantity: u32_from_sql(row.get(11)?, "untradeable_quantity")?,
-                unknown_quantity: u32_from_sql(row.get(12)?, "unknown_quantity")?,
-                leveled_quantity: u32_from_sql(row.get(13)?, "leveled_quantity")?,
-                equipped_quantity: u32_from_sql(row.get(14)?, "equipped_quantity")?,
+                owned_quantity: u32_from_sql(row.get(13)?, "owned_quantity")?,
+                tradeable_quantity: u32_from_sql(row.get(14)?, "tradeable_quantity")?,
+                untradeable_quantity: u32_from_sql(row.get(15)?, "untradeable_quantity")?,
+                unknown_quantity: u32_from_sql(row.get(16)?, "unknown_quantity")?,
+                leveled_quantity: u32_from_sql(row.get(17)?, "leveled_quantity")?,
+                equipped_quantity: u32_from_sql(row.get(18)?, "equipped_quantity")?,
                 equipped_tradeable_quantity: u32_from_sql(
-                    row.get(15)?,
+                    row.get(19)?,
                     "equipped_tradeable_quantity",
                 )?,
                 equipped_placements: placements,
-                sellable_quantity: u32_from_sql(row.get(16)?, "sellable_quantity")?,
-                resolution: parse_inventory_resolution(&row.get::<_, String>(17)?)?,
+                sellable_quantity: u32_from_sql(row.get(20)?, "sellable_quantity")?,
+                resolution: parse_inventory_resolution(&row.get::<_, String>(21)?)?,
             });
         }
         Ok(Some(ResolvedInventorySnapshot {
@@ -1285,6 +1475,10 @@ impl Database {
                 if version < 12 {
                     self.connection
                         .execute_batch(INVENTORY_ACCOUNT_STATE_MIGRATION)?;
+                }
+                if version < 13 {
+                    self.connection
+                        .execute_batch(EXACT_MARKET_VARIANTS_MIGRATION)?;
                 }
                 Ok(())
             });
@@ -1494,10 +1688,10 @@ fn store_history_snapshot(
     )?;
     let mut statement = transaction.prepare_cached(
         "INSERT INTO market_history(
-            snapshot_id, source_date, item_slug, platform, rank, subtype,
+            snapshot_id, source_date, item_slug, platform, rank, charges, subtype,
             amber_stars, cyan_stars, closed_median, closed_volume,
             sell_median, buy_median
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
     )?;
     for (key, aggregate) in aggregates {
         statement.execute(params![
@@ -1506,6 +1700,7 @@ fn store_history_snapshot(
             key.slug,
             platform_name(key.platform),
             key.rank.map(i64::from),
+            key.charges.map(i64::from),
             key.subtype,
             key.amber_stars.map(i64::from),
             key.cyan_stars.map(i64::from),
@@ -1515,6 +1710,17 @@ fn store_history_snapshot(
             aggregate.buy_median,
         ])?;
     }
+    drop(statement);
+    // Все потребители используют максимум 90 календарных дней. Более старые
+    // компактные снимки не улучшают расчёты, но бесконечно раздувают SQLite.
+    transaction.execute(
+        "DELETE FROM market_history_snapshots
+         WHERE source_date < date(
+            (SELECT MAX(source_date) FROM market_history_snapshots),
+            '-89 days'
+         )",
+        [],
+    )?;
     Ok(())
 }
 
@@ -1766,7 +1972,7 @@ mod tests {
     fn foundation_migration_is_idempotent() {
         let database = Database::open_in_memory().expect("database opens");
         database.migrate().expect("migration can run twice");
-        assert_eq!(database.schema_version().expect("version"), 12);
+        assert_eq!(database.schema_version().expect("version"), 13);
     }
 
     #[test]
@@ -1810,7 +2016,7 @@ mod tests {
             .expect("migrated row loads");
         assert_eq!(display_name_ru, None);
         assert_eq!(search_text, "nyx_prime_set nyx prime set");
-        assert_eq!(database.schema_version().expect("version"), 12);
+        assert_eq!(database.schema_version().expect("version"), 13);
     }
 
     #[test]
@@ -1871,6 +2077,9 @@ mod tests {
         let reconciled = database.recent_trade_events(1).expect("event reloads");
         assert_eq!(reconciled[0].status, TradeEventStatus::Reconciled);
         assert_eq!(reconciled[0].matched_order_id.as_deref(), Some("order-1"));
+        let summary = database.trade_sales_summary().expect("summary loads");
+        assert_eq!(summary.sale_count, 1);
+        assert_eq!(summary.platinum_received, 130);
     }
 
     #[test]
@@ -1940,6 +2149,9 @@ mod tests {
                 game_ref: None,
                 bulk_tradable: false,
                 max_rank: None,
+                max_charges: None,
+                max_amber_stars: None,
+                max_cyan_stars: None,
                 subtypes: Vec::new(),
                 tags: vec!["test".into()],
             }],
@@ -2039,6 +2251,65 @@ mod tests {
     }
 
     #[test]
+    fn charges_and_stars_round_trip_as_exact_market_identity() {
+        let mut database = Database::open_in_memory().expect("database opens");
+        database
+            .promote_catalog(&fixture_catalog())
+            .expect("catalog promoted");
+        let mut snapshot = fixture_snapshot("test_item", "charged");
+        snapshot.records[0].key =
+            MarketVariantKey::new("test_item", Platform::Pc, Some(5), Some("arcane"))
+                .expect("charged key")
+                .with_charges(Some(2))
+                .with_stars(Some(1), Some(2));
+        let mut second = snapshot.records[0].clone();
+        second.key = second.key.with_charges(Some(3));
+        snapshot.records.push(second);
+        snapshot.metadata.record_count = 2;
+        database
+            .promote_market_snapshot(&snapshot)
+            .expect("snapshot promoted");
+
+        let exact = snapshot.records[0].key.clone();
+        let plain = MarketVariantKey::new("test_item", Platform::Pc, None, None::<String>)
+            .expect("plain key");
+        assert_eq!(
+            database
+                .current_market_records(&exact)
+                .expect("exact")
+                .len(),
+            1
+        );
+        let other_charge = exact.clone().with_charges(Some(3));
+        assert_eq!(
+            database
+                .current_market_records(&other_charge)
+                .expect("other exact charge")
+                .len(),
+            1
+        );
+        assert!(
+            database
+                .current_market_records(&plain)
+                .expect("plain")
+                .is_empty()
+        );
+        assert_eq!(
+            database
+                .market_history(&exact, 1, snapshot.metadata.source_date)
+                .expect("exact history")
+                .len(),
+            1
+        );
+        assert!(
+            database
+                .market_history(&plain, 1, snapshot.metadata.source_date)
+                .expect("plain history")
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn local_search_stays_bounded_with_thousands_of_items() {
         const ITEM_COUNT: u64 = 4_000;
         const RESULT_LIMIT: usize = 61;
@@ -2062,6 +2333,9 @@ mod tests {
                     game_ref: None,
                     bulk_tradable: false,
                     max_rank: None,
+                    max_charges: None,
+                    max_amber_stars: None,
+                    max_cyan_stars: None,
                     subtypes: Vec::new(),
                     tags: vec!["performance".into()],
                 }
@@ -2176,13 +2450,167 @@ mod tests {
                 .has_history_date(older.metadata.source_date)
                 .expect("date query")
         );
+
+        let one_day = database
+            .history_coverage_window(NaiveDate::from_ymd_opt(2026, 8, 26).expect("date"), 1)
+            .expect("window coverage loads");
+        assert_eq!(one_day.day_count, 1);
+        assert_eq!(one_day.oldest_date, NaiveDate::from_ymd_opt(2026, 8, 26));
+
+        assert!(
+            !database
+                .has_history_date_at_least(older.metadata.source_date, 2)
+                .expect("schema-aware date query")
+        );
+        assert_eq!(
+            database
+                .history_coverage_window_at_least(
+                    NaiveDate::from_ymd_opt(2026, 8, 26).expect("date"),
+                    7,
+                    2,
+                )
+                .expect("schema-aware coverage")
+                .day_count,
+            0
+        );
+        older.metadata.schema_version = 2;
+        older.metadata.checksum_sha256 = "older-v2".into();
+        database
+            .promote_history_snapshot(&older)
+            .expect("new parser replaces old compact day");
+        assert!(
+            database
+                .has_history_date_at_least(older.metadata.source_date, 2)
+                .expect("replaced date query")
+        );
+    }
+
+    #[test]
+    fn older_market_snapshot_cannot_replace_current() {
+        let mut database = Database::open_in_memory().expect("database opens");
+        database
+            .promote_catalog(&fixture_catalog())
+            .expect("catalog promoted");
+        let current = fixture_snapshot("test_item", "current");
+        database
+            .promote_market_snapshot(&current)
+            .expect("current promoted");
+
+        let mut older = fixture_snapshot("test_item", "older");
+        older.metadata.source_date = current.metadata.source_date - chrono::Duration::days(1);
+        older.records[0].observed_at = current.records[0].observed_at - chrono::Duration::days(1);
+        let error = database
+            .promote_market_snapshot(&older)
+            .expect_err("older snapshot must be rejected");
+        assert!(matches!(error, StorageError::Invariant(_)));
+        assert_eq!(
+            database
+                .current_market_snapshot()
+                .expect("query succeeds")
+                .expect("current exists")
+                .checksum_sha256,
+            "current"
+        );
+    }
+
+    #[test]
+    fn full_market_snapshots_are_deduplicated_and_pruned() {
+        let mut database = Database::open_in_memory().expect("database opens");
+        database
+            .promote_catalog(&fixture_catalog())
+            .expect("catalog promoted");
+        let current = fixture_snapshot("test_item", "same");
+        database
+            .promote_market_snapshot(&current)
+            .expect("first snapshot promoted");
+        database
+            .promote_market_snapshot(&current)
+            .expect("identical refresh is a no-op");
+
+        let mut replacement = current.clone();
+        replacement.metadata.checksum_sha256 = "replacement".into();
+        replacement.records[0].median = Some(12.0);
+        database
+            .promote_market_snapshot(&replacement)
+            .expect("same-day correction replaces current snapshot");
+
+        let snapshots: i64 = database
+            .connection
+            .query_row("SELECT COUNT(*) FROM market_snapshots", [], |row| {
+                row.get(0)
+            })
+            .expect("snapshot count");
+        let prices: i64 = database
+            .connection
+            .query_row("SELECT COUNT(*) FROM market_prices", [], |row| row.get(0))
+            .expect("price count");
+        assert_eq!(snapshots, 1);
+        assert_eq!(prices, 1);
+        assert_eq!(
+            database
+                .current_market_snapshot()
+                .expect("query succeeds")
+                .expect("current exists")
+                .checksum_sha256,
+            "replacement"
+        );
+    }
+
+    #[test]
+    fn compact_market_history_keeps_only_the_latest_ninety_calendar_days() {
+        let mut database = Database::open_in_memory().expect("database opens");
+        database
+            .promote_catalog(&fixture_catalog())
+            .expect("catalog promoted");
+        let newest = NaiveDate::from_ymd_opt(2026, 8, 30).expect("date");
+
+        for offset in (0_i64..=100).rev() {
+            let mut snapshot = fixture_snapshot("test_item", &format!("history-{offset}"));
+            let source_date = newest - chrono::Duration::days(offset);
+            snapshot.metadata.source_date = source_date;
+            snapshot.metadata.fetched_at =
+                source_date.and_hms_opt(0, 0, 0).expect("time").and_utc();
+            snapshot.records[0].observed_at = snapshot.metadata.fetched_at;
+            database
+                .promote_history_snapshot(&snapshot)
+                .expect("historical day promoted");
+        }
+
+        let (count, oldest, newest_stored): (i64, String, String) = database
+            .connection
+            .query_row(
+                "SELECT COUNT(*), MIN(source_date), MAX(source_date)
+                 FROM market_history_snapshots",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("history bounds");
+        assert_eq!(count, 90);
+        assert_eq!(oldest, (newest - chrono::Duration::days(89)).to_string());
+        assert_eq!(newest_stored, newest.to_string());
+
+        let orphaned_rows: i64 = database
+            .connection
+            .query_row(
+                "SELECT COUNT(*)
+                 FROM market_history history
+                 LEFT JOIN market_history_snapshots snapshot
+                   ON snapshot.id = history.snapshot_id
+                 WHERE snapshot.id IS NULL",
+                [],
+                |row| row.get(0),
+            )
+            .expect("orphan count");
+        assert_eq!(orphaned_rows, 0);
     }
 
     #[test]
     fn invalid_inventory_snapshot_keeps_previous_lkg() {
         let mut database = Database::open_in_memory().expect("database opens");
-        let key =
-            MarketVariantKey::new("test_item", Platform::Pc, None, None::<String>).expect("key");
+        let key = MarketVariantKey::new("test_item", Platform::Pc, None, None::<String>)
+            .expect("key")
+            .with_charges(Some(2))
+            .with_stars(Some(1), Some(2));
         let snapshot = ResolvedInventorySnapshot {
             metadata: InventorySnapshotMetadata {
                 source: InventorySource::TestFixture,
@@ -2205,7 +2633,7 @@ mod tests {
                 display_name_ru: Some("Тестовый предмет".into()),
                 tags: vec!["component".into()],
                 key: Some(key),
-                rank: None,
+                rank: Some(5),
                 subtype: None,
                 owned_quantity: 2,
                 tradeable_quantity: 2,
@@ -2244,6 +2672,19 @@ mod tests {
             .expect("inventory exists");
         assert_eq!(current.metadata.checksum_sha256, "first");
         assert_eq!(current.items[0].sellable_quantity, 1);
+        assert_eq!(current.items[0].rank, Some(5));
+        assert_eq!(current.items[0].key.as_ref().and_then(|key| key.rank), None);
+        assert_eq!(
+            current.items[0].key.as_ref().and_then(|key| key.charges),
+            Some(2)
+        );
+        assert_eq!(
+            current.items[0]
+                .key
+                .as_ref()
+                .and_then(|key| key.amber_stars),
+            Some(1)
+        );
         assert!(current.mod_usage_scanned);
         assert_eq!(current.credits, Some(1_000_000));
         assert_eq!(current.syndicates[0].standing, 42_000);

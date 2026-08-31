@@ -397,7 +397,7 @@ fn normalize_wfcd_metadata(
         metadata: GameMetadataSnapshotMetadata {
             source: GameMetadataSource::WfcdWarframeItems,
             fetched_at: dump.fetched_at,
-            schema_version: 6,
+            schema_version: 7,
             set_count: u64::try_from(prime_sets.len()).unwrap_or(u64::MAX),
             relic_count: u64::try_from(relics.len()).unwrap_or(u64::MAX),
             prime_part_count: u64::try_from(prime_parts.len()).unwrap_or(u64::MAX),
@@ -772,7 +772,7 @@ fn parse_sets(
     let items: Vec<WfcdSetItem> = serde_json::from_slice(body).map_err(|error| {
         ProviderError::schema_changed(format!("invalid WFCD set JSON: {error}"))
     })?;
-    for item in items.into_iter().filter(|item| {
+    'set_items: for item in items.into_iter().filter(|item| {
         (item.is_prime || item.name.ends_with(" Prime")) && !item.components.is_empty()
     }) {
         let Some((set_slug, tags)) = by_game_ref.get(item.unique_name.as_str()).copied() else {
@@ -783,13 +783,18 @@ fn parse_sets(
         }
         let vault_status = vault_status(item.vaulted);
         let mut components = Vec::new();
-        for component in item
+        let mut resolved_parts = Vec::new();
+        let tradable_components = item
             .components
             .into_iter()
             .filter(|component| component.tradable && component.item_count > 0)
-        {
+            .collect::<Vec<_>>();
+        for component in tradable_components {
             let Some((slug, _)) = resolve_component(&component.unique_name, by_game_ref) else {
-                continue;
+                // Публикация оставшихся строк превратила бы обрезанный рецепт
+                // в якобы полный сет. Пропускаем весь сет, пока каталог и WFCD
+                // снова не будут согласованы.
+                continue 'set_items;
             };
             let ducats = component.ducats.or(component.prime_selling_price);
             let image_url = wfcd_component_image_url(component.image_name.as_deref());
@@ -801,7 +806,7 @@ fn parse_sets(
                 image_url,
             });
             if let Some(ducats) = ducats.filter(|ducats| *ducats > 0) {
-                parts.insert(
+                resolved_parts.push((
                     slug.into(),
                     PrimePartMetadata {
                         slug: slug.into(),
@@ -809,12 +814,18 @@ fn parse_sets(
                         ducats,
                         vault_status,
                     },
-                );
+                ));
             }
         }
         components.sort_by(|left, right| left.slug.cmp(&right.slug));
-        components.dedup_by(|left, right| left.slug == right.slug);
+        if components
+            .windows(2)
+            .any(|pair| pair[0].slug == pair[1].slug)
+        {
+            continue;
+        }
         if components.len() >= 2 {
+            parts.extend(resolved_parts);
             sets.insert(
                 set_slug.into(),
                 PrimeSetDefinition {
@@ -952,7 +963,7 @@ mod tests {
         validate_metadata_dump(&dump).expect("production metadata stays within aggregate limit");
         let snapshot = normalize_wfcd_metadata(&dump, &catalog)
             .expect("production metadata normalizes against the current catalog");
-        assert_eq!(snapshot.metadata.schema_version, 6);
+        assert_eq!(snapshot.metadata.schema_version, 7);
         assert!(!snapshot.syndicate_offers.is_empty());
         assert!(!snapshot.arcane_dissolutions.is_empty());
     }
@@ -1091,6 +1102,9 @@ mod tests {
                 game_ref: Some("/Lotus/Upgrades/Mods/Syndicate/HekMod".into()),
                 bulk_tradable: true,
                 max_rank: Some(3),
+                max_charges: None,
+                max_amber_stars: None,
+                max_cyan_stars: None,
                 subtypes: vec![],
                 tags: vec!["mod".into()],
             },
@@ -1106,6 +1120,9 @@ mod tests {
                 ),
                 bulk_tradable: true,
                 max_rank: Some(5),
+                max_charges: None,
+                max_amber_stars: None,
+                max_cyan_stars: None,
                 subtypes: vec![],
                 tags: vec!["arcane_enhancement".into()],
             },
@@ -1158,6 +1175,9 @@ mod tests {
             game_ref: Some("/Lotus/Upgrades/Mods/Aura/EnemyArmorReductionAuraMod".into()),
             bulk_tradable: true,
             max_rank: Some(5),
+            max_charges: None,
+            max_amber_stars: None,
+            max_cyan_stars: None,
             subtypes: vec![],
             tags: vec!["mod".into()],
         };
@@ -1170,6 +1190,41 @@ mod tests {
         )
         .expect("Nightwave manifest parses");
         assert_eq!(offers["corrosive_projection"].cred_cost, 20);
+    }
+
+    #[test]
+    fn prime_set_with_unresolved_tradable_component_is_not_published() {
+        let item_catalog = catalog();
+        let by_game_ref: HashMap<&str, (&str, &[String])> = item_catalog
+            .items
+            .iter()
+            .filter_map(|item| {
+                item.game_ref
+                    .as_deref()
+                    .map(|game_ref| (game_ref, (item.slug.as_str(), item.tags.as_slice())))
+            })
+            .collect();
+        let mut sets = BTreeMap::new();
+        let mut parts = BTreeMap::new();
+        parse_sets(
+            br#"[{
+                "uniqueName":"/Lotus/Powersuits/Jade/NyxPrime",
+                "name":"Nyx Prime",
+                "isPrime":true,
+                "components":[
+                    {"uniqueName":"/Lotus/Types/Recipes/WarframeRecipes/NyxPrimeBlueprint","itemCount":1,"tradable":true,"ducats":15},
+                    {"uniqueName":"/Lotus/Types/Recipes/WarframeRecipes/NyxPrimeChassisBlueprint","itemCount":1,"tradable":true,"ducats":45},
+                    {"uniqueName":"/Lotus/Types/Recipes/WarframeRecipes/MissingPrimeSystemsBlueprint","itemCount":1,"tradable":true,"ducats":100}
+                ]
+            }]"#,
+            &by_game_ref,
+            &mut sets,
+            &mut parts,
+        )
+        .expect("schema-valid WFCD set document parses");
+
+        assert!(sets.is_empty());
+        assert!(parts.is_empty());
     }
 
     fn catalog() -> ItemCatalog {
@@ -1221,6 +1276,9 @@ mod tests {
                     game_ref: Some(game_ref.into()),
                     bulk_tradable: false,
                     max_rank: None,
+                    max_charges: None,
+                    max_amber_stars: None,
+                    max_cyan_stars: None,
                     subtypes: vec![],
                     tags: tags.into_iter().map(str::to_owned).collect(),
                 })

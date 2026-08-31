@@ -89,6 +89,8 @@ pub struct MarketVariantKey {
     pub slug: String,
     pub platform: Platform,
     pub rank: Option<u16>,
+    #[serde(default)]
+    pub charges: Option<u16>,
     pub subtype: Option<String>,
     pub amber_stars: Option<u16>,
     pub cyan_stars: Option<u16>,
@@ -124,10 +126,17 @@ impl MarketVariantKey {
             slug,
             platform,
             rank,
+            charges: None,
             subtype,
             amber_stars: None,
             cyan_stars: None,
         })
+    }
+
+    #[must_use]
+    pub const fn with_charges(mut self, charges: Option<u16>) -> Self {
+        self.charges = charges;
+        self
     }
 
     #[must_use]
@@ -177,6 +186,12 @@ pub struct CatalogItem {
     #[serde(default)]
     pub bulk_tradable: bool,
     pub max_rank: Option<u16>,
+    #[serde(default)]
+    pub max_charges: Option<u16>,
+    #[serde(default)]
+    pub max_amber_stars: Option<u16>,
+    #[serde(default)]
+    pub max_cyan_stars: Option<u16>,
     pub subtypes: Vec<String>,
     pub tags: Vec<String>,
 }
@@ -520,9 +535,21 @@ pub struct InventoryItem {
     pub canonical_game_id: String,
     pub quantity: u32,
     pub rank: Option<u16>,
+    #[serde(default)]
+    pub charges: Option<u16>,
     pub subtype: Option<String>,
+    #[serde(default)]
+    pub amber_stars: Option<u16>,
+    #[serde(default)]
+    pub cyan_stars: Option<u16>,
+    #[serde(default = "default_market_match_allowed")]
+    pub market_match_allowed: bool,
     pub tradeability: Tradeability,
     pub leveled: bool,
+}
+
+const fn default_market_match_allowed() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -672,6 +699,14 @@ mod tests {
                 .expect("valid key")
                 .with_stars(Some(2), Some(2));
         assert_ne!(empty, filled);
+
+        let fresh = MarketVariantKey::new("requiem_test", Platform::Pc, None, None::<String>)
+            .expect("valid key")
+            .with_charges(Some(3));
+        let used = MarketVariantKey::new("requiem_test", Platform::Pc, None, None::<String>)
+            .expect("valid key")
+            .with_charges(Some(1));
+        assert_ne!(fresh, used);
     }
 
     #[test]
@@ -705,5 +740,15 @@ mod tests {
         .expect("old metadata remains readable");
 
         assert!(component.image_url.is_none());
+    }
+
+    #[test]
+    fn old_market_keys_default_to_no_charges() {
+        let key: MarketVariantKey = serde_json::from_str(
+            r#"{"slug":"test_item","platform":"pc","rank":null,"subtype":null,"amberStars":null,"cyanStars":null}"#,
+        )
+        .expect("old market key remains readable");
+
+        assert_eq!(key.charges, None);
     }
 }

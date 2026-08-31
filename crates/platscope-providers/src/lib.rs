@@ -19,7 +19,9 @@ use thiserror::Error;
 
 pub use frameforge::FrameForgeMirrorProvider;
 pub use http::BoundedHttpClient;
-pub use parser::{ValidationProfile, normalize_catalog, normalize_market_dump};
+pub use parser::{
+    MARKET_PRICE_SCHEMA_VERSION, ValidationProfile, normalize_catalog, normalize_market_dump,
+};
 pub use relics_run::{RelicsRunCatalogProvider, RelicsRunProvider};
 pub use warframe_market::WarframeMarketProvider;
 pub use wfcd_metadata::WfcdMetadataProvider;

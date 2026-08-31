@@ -22,6 +22,7 @@ const row: MarketSearchRow = {
       slug: "primed_flow",
       platform: "pc",
       rank: 10,
+      charges: null,
       subtype: null,
       amberStars: null,
       cyanStars: null,
@@ -74,6 +75,7 @@ describe("account listing drafts", () => {
     expect(validateListingNumbers(0, 1, null)).not.toBeNull();
     expect(validateListingNumbers(10, 5, 2)).not.toBeNull();
     expect(validateListingNumbers(10, 6, 2)).toBeNull();
+    expect(validateListingNumbers(10, 3, null, "ru", 2)).toContain("2");
   });
 
   it("creates a sell draft directly from an exact inventory variant", () => {
@@ -137,6 +139,10 @@ describe("account listing drafts", () => {
       .toContain("от 1 до 6");
     expect(accountActionErrorMessage("WFM returned HTTP 400 Bad Request", "ru"))
       .not.toContain("HTTP");
+    expect(accountActionErrorMessage("Недостаточно доступных копий: часть уже зарезервирована", "ru"))
+      .toContain("свободное количество");
+    expect(accountActionErrorMessage("Этот точный вариант с такими зарядами нельзя продать", "ru"))
+      .toContain("рангом или зарядами");
   });
 
   it("matches only the exact current sell order", () => {
@@ -181,6 +187,37 @@ describe("account listing drafts", () => {
     };
     expect(matchingSellOrder(item, account)?.id).toBe("exact");
   });
+
+  it("preserves charges and does not match another charge variant", () => {
+    const item = {
+      ...inventoryItem(),
+      key: { ...row.recommendation.key, charges: 3 },
+    };
+    const input = createListingInputFromInventory(item, 20, 1, true, null);
+    expect(input?.charges).toBe(3);
+
+    const account: AccountView = {
+      connected: true,
+      profile: null,
+      orders: [{
+        id: "wrong-charges",
+        itemId: "wfm-item-id",
+        type: "sell",
+        platinum: 20,
+        quantity: 1,
+        perTrade: null,
+        rank: 10,
+        charges: 2,
+        subtype: null,
+        amberStars: null,
+        cyanStars: null,
+        visible: true,
+        createdAt: "2026-08-27T00:00:00Z",
+        updatedAt: "2026-08-27T00:00:00Z",
+      }],
+    };
+    expect(matchingSellOrder(item, account)).toBeNull();
+  });
 });
 
 function inventoryItem(): InventoryViewItem {
@@ -203,7 +240,5 @@ function inventoryItem(): InventoryViewItem {
     sellableQuantity: 2,
     resolution: "resolved",
     vaultStatus: "unknown",
-    closedMedian48h: 73,
-    hasReliablePrice: true,
   };
 }

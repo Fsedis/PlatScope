@@ -82,14 +82,20 @@ export function summarizeEquippedMods(
   entries: EquippedModEntry[],
 ): EquippedModsSummary {
   const equipmentKeys = new Set<string>();
+  const configurationKeys = new Set<string>();
   for (const entry of entries) {
-    for (const location of entry.locations) equipmentKeys.add(location.instanceKey);
+    for (const location of entry.locations) {
+      equipmentKeys.add(location.instanceKey);
+      for (const configIndex of location.configIndexes) {
+        configurationKeys.add(`${location.instanceKey}\u0000${configIndex}`);
+      }
+    }
   }
   return {
     modVariants: entries.length,
     modCopies: entries.reduce((sum, entry) => sum + entry.equippedQuantity, 0),
     equipmentCount: equipmentKeys.size,
-    configCount: entries.reduce((sum, entry) => sum + entry.configCount, 0),
+    configCount: configurationKeys.size,
   };
 }
 

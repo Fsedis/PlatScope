@@ -1,6 +1,5 @@
 #![forbid(unsafe_code)]
 
-use platscope_domain::PriceConfidence;
 use platscope_trends::TimingSignal;
 use serde::{Deserialize, Serialize};
 
@@ -12,8 +11,9 @@ const VOLUME_HALF_SATURATION: f64 = 10.0;
 pub struct SellPriorityInput {
     pub sellable_quantity: u32,
     pub fair_price: Option<f64>,
-    pub closed_volume: Option<f64>,
-    pub confidence: PriceConfidence,
+    /// Среднее число закрытых сделок за календарный день устойчивого периода.
+    /// Разовый объём последнего снимка сюда передавать нельзя.
+    pub average_daily_volume: Option<f64>,
     pub timing: Option<TimingSignal>,
 }
 
@@ -32,7 +32,6 @@ pub struct SellPriorityFactors {
     pub quantity: f64,
     pub price: f64,
     pub liquidity: f64,
-    pub confidence_multiplier: f64,
     pub timing_multiplier: f64,
 }
 
@@ -50,27 +49,23 @@ pub struct SellPriorityScore {
 #[must_use]
 pub fn calculate_priority(input: SellPriorityInput) -> SellPriorityScore {
     let fair_price = trusted_positive(input.fair_price);
-    let closed_volume = trusted_non_negative(input.closed_volume).unwrap_or(0.0);
+    let average_daily_volume = trusted_non_negative(input.average_daily_volume).unwrap_or(0.0);
     let quantity = (f64::from(input.sellable_quantity) / QUANTITY_SATURATION).min(1.0);
     let price = fair_price.map_or(0.0, |value| value / (value + PRICE_HALF_SATURATION));
-    let liquidity = closed_volume / (closed_volume + VOLUME_HALF_SATURATION);
-    let confidence_multiplier = confidence_multiplier(input.confidence);
-    let timing_multiplier = timing_multiplier(input.timing);
+    let liquidity = average_daily_volume / (average_daily_volume + VOLUME_HALF_SATURATION);
+    let timing_multiplier = timing_ceiling(input.timing) / 100.0;
     let factors = SellPriorityFactors {
         quantity,
         price,
         liquidity,
-        confidence_multiplier,
         timing_multiplier,
     };
 
+    let market_score = 0.25 * quantity + 0.35 * price + 0.40 * liquidity;
     let raw_score = if input.sellable_quantity == 0 || fair_price.is_none() {
         0.0
     } else {
-        (0.25 * quantity + 0.35 * price + 0.40 * liquidity)
-            * confidence_multiplier
-            * timing_multiplier
-            * 100.0
+        score_in_timing_band(input.timing, market_score)
     };
     let score = bounded_score(raw_score);
     let band = match score {
@@ -102,28 +97,27 @@ pub fn nominal_value(sellable_quantity: u32, fair_price: Option<f64>) -> Option<
 
 fn explain(input: SellPriorityInput, factors: &SellPriorityFactors, score: u8) -> Vec<String> {
     if input.sellable_quantity == 0 {
-        return vec!["Нет подтверждённого количества для продажи; priority равен 0.".into()];
+        return vec!["Нет подтверждённого количества для продажи; приоритет равен 0.".into()];
     }
     if trusted_positive(input.fair_price).is_none() {
         return vec!["Цена не рассчитана; предмет не поднимается в очереди продажи.".into()];
     }
     vec![
         format!(
-            "Количество для продажи: {}; quantity-фактор {:.0}% с насыщением после 5 копий.",
+            "Для продажи доступно: {}; вклад количества {:.0}% с насыщением после 5 копий.",
             input.sellable_quantity,
             factors.quantity * 100.0
         ),
         format!(
-            "Fair price и закрытые сделки дают price-фактор {:.0}% и liquidity-фактор {:.0}%.",
+            "Цена и средний дневной объём дают вклад цены {:.0}% и ликвидности {:.0}%.",
             factors.price * 100.0,
             factors.liquidity * 100.0
         ),
         format!(
-            "Полнота рыночных данных и момент продажи учтены с весом {:.0}% и {:.0}%; итоговая очерёдность {score}/100.",
-            factors.confidence_multiplier * 100.0,
+            "Момент продажи задаёт диапазон приоритета до {:.0}, итог {score}/100.",
             factors.timing_multiplier * 100.0
         ),
-        "Priority — относительный порядок проверки, а не прогноз платины в день.".into(),
+        "Приоритет — относительный порядок проверки, а не прогноз платины в день.".into(),
     ]
 }
 
@@ -135,23 +129,26 @@ fn trusted_non_negative(value: Option<f64>) -> Option<f64> {
     value.filter(|number| number.is_finite() && *number >= 0.0)
 }
 
-const fn confidence_multiplier(confidence: PriceConfidence) -> f64 {
-    match confidence {
-        PriceConfidence::High => 1.0,
-        PriceConfidence::Medium => 0.75,
-        PriceConfidence::Low => 0.4,
-        PriceConfidence::Unknown => 0.0,
+const fn timing_ceiling(timing: Option<TimingSignal>) -> f64 {
+    match timing {
+        Some(TimingSignal::Hold) => 19.0,
+        None => 29.0,
+        Some(TimingSignal::Neutral) => 49.0,
+        Some(TimingSignal::Sell) => 89.0,
+        Some(TimingSignal::Peak) => 100.0,
     }
 }
 
-const fn timing_multiplier(timing: Option<TimingSignal>) -> f64 {
-    match timing {
-        Some(TimingSignal::Hold) => 0.45,
-        Some(TimingSignal::Neutral) => 0.75,
-        Some(TimingSignal::Sell) => 1.0,
-        Some(TimingSignal::Peak) => 1.05,
-        None => 0.65,
-    }
+fn score_in_timing_band(timing: Option<TimingSignal>, market_score: f64) -> f64 {
+    let market_score = market_score.clamp(0.0, 1.0);
+    let (floor, width) = match timing {
+        Some(TimingSignal::Hold) => (1.0, 18.0),
+        None => (10.0, 19.0),
+        Some(TimingSignal::Neutral) => (30.0, 19.0),
+        Some(TimingSignal::Sell) => (50.0, 39.0),
+        Some(TimingSignal::Peak) => (60.0, 40.0),
+    };
+    floor + width * market_score
 }
 
 #[cfg(test)]
@@ -162,27 +159,19 @@ mod tests {
         quantity: u32,
         fair: Option<f64>,
         volume: f64,
-        confidence: PriceConfidence,
         timing: TimingSignal,
     ) -> SellPriorityInput {
         SellPriorityInput {
             sellable_quantity: quantity,
             fair_price: fair,
-            closed_volume: Some(volume),
-            confidence,
+            average_daily_volume: Some(volume),
             timing: Some(timing),
         }
     }
 
     #[test]
     fn missing_price_never_creates_priority_or_nominal_value() {
-        let result = calculate_priority(input(
-            100,
-            None,
-            500.0,
-            PriceConfidence::High,
-            TimingSignal::Peak,
-        ));
+        let result = calculate_priority(input(100, None, 500.0, TimingSignal::Peak));
         assert_eq!(result.score, 0);
         assert_eq!(result.band, SellPriorityBand::None);
         assert_eq!(nominal_value(100, None), None);
@@ -190,52 +179,36 @@ mod tests {
 
     #[test]
     fn large_illiquid_stack_stays_below_liquid_prime_item() {
-        let cheap_stack = calculate_priority(input(
-            200,
-            Some(5.0),
-            0.2,
-            PriceConfidence::Medium,
-            TimingSignal::Neutral,
-        ));
-        let liquid_prime = calculate_priority(input(
-            1,
-            Some(40.0),
-            20.0,
-            PriceConfidence::High,
-            TimingSignal::Sell,
-        ));
+        let cheap_stack = calculate_priority(input(200, Some(5.0), 0.2, TimingSignal::Neutral));
+        let liquid_prime = calculate_priority(input(1, Some(40.0), 20.0, TimingSignal::Sell));
         assert!(liquid_prime.score > cheap_stack.score);
     }
 
     #[test]
     fn hold_reduces_otherwise_equal_priority() {
-        let hold = calculate_priority(input(
-            2,
-            Some(80.0),
-            30.0,
-            PriceConfidence::High,
-            TimingSignal::Hold,
-        ));
-        let sell = calculate_priority(input(
-            2,
-            Some(80.0),
-            30.0,
-            PriceConfidence::High,
-            TimingSignal::Sell,
-        ));
+        let hold = calculate_priority(input(2, Some(80.0), 30.0, TimingSignal::Hold));
+        let sell = calculate_priority(input(2, Some(80.0), 30.0, TimingSignal::Sell));
         assert!(sell.score > hold.score);
     }
 
     #[test]
-    fn unknown_confidence_prevents_false_priority() {
-        let result = calculate_priority(input(
-            5,
-            Some(100.0),
-            100.0,
-            PriceConfidence::Unknown,
-            TimingSignal::Peak,
-        ));
-        assert_eq!(result.score, 0);
+    fn sell_always_ranks_above_hold_even_with_weaker_market_factors() {
+        let strongest_hold =
+            calculate_priority(input(100, Some(1_000.0), 1_000.0, TimingSignal::Hold));
+        let weakest_sell = calculate_priority(input(1, Some(1.0), 0.0, TimingSignal::Sell));
+
+        assert!(weakest_sell.score > strongest_hold.score);
+        assert!(weakest_sell.score >= 50);
+        assert!(strongest_hold.score <= 19);
+    }
+
+    #[test]
+    fn liquidity_uses_period_average_daily_volume() {
+        let sparse = calculate_priority(input(1, Some(50.0), 1.0, TimingSignal::Sell));
+        let liquid = calculate_priority(input(1, Some(50.0), 20.0, TimingSignal::Sell));
+
+        assert!(liquid.factors.liquidity > sparse.factors.liquidity);
+        assert!(liquid.score > sparse.score);
     }
 
     #[test]

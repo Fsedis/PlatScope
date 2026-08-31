@@ -7,7 +7,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use chrono::{Duration as ChronoDuration, NaiveDate, Utc};
-pub use platscope_account::{AccountOrder, AccountProfile, CreateListingInput, UpdateListingInput};
+pub use platscope_account::{
+    AccountOrder, AccountOrderType, AccountProfile, CreateListingInput, UpdateListingInput,
+};
 use platscope_account::{CredentialStore, OsCredentialStore, WfmAccountClient};
 use platscope_domain::{
     ArcanePackDefinition, CatalogItem, EquipmentKind, GameMetadataSnapshot,
@@ -23,15 +25,16 @@ use platscope_insights::{
     SetPartInput, calculate_ducat_efficiency, calculate_relic_ev, compare_set,
 };
 use platscope_inventory::{
-    InventoryError, apply_keep_copies, parse_read_only_scan_json, resolve_inventory,
+    InventoryError, READ_ONLY_SCHEMA_VERSION, apply_keep_copies, parse_read_only_scan_json,
+    reresolve_inventory_snapshot, resolve_inventory,
 };
 pub use platscope_pricing::PriceRecommendation;
 use platscope_pricing::{PricingContext, recommend};
 use platscope_providers::{
     BulkMarketProvider, DailyMarketState, FrameForgeMirrorProvider, GameMetadataProvider,
-    HistoricalMarketProvider, LiveMarketProvider, MetadataProvider, ProviderError,
-    ProviderErrorCode, RelicsRunProvider, WarframeMarketProvider, WarframeWorldstateProvider,
-    WfcdMetadataProvider,
+    HistoricalMarketProvider, LiveMarketProvider, MARKET_PRICE_SCHEMA_VERSION, MetadataProvider,
+    ProviderError, ProviderErrorCode, RelicsRunProvider, WarframeMarketProvider,
+    WarframeWorldstateProvider, WfcdMetadataProvider,
 };
 use platscope_selling::{SellPriorityInput, SellPriorityScore, calculate_priority, nominal_value};
 use platscope_storage::{Database, HistoryCoverage, MarketSnapshotSummary};
@@ -47,6 +50,7 @@ use platscope_domain::InventorySource;
 pub const SETTINGS_KEY: &str = "app.settings";
 pub const NIGHTWAVE_VENDOR_CACHE_KEY: &str = "nightwave.vendor_snapshot";
 pub const DEFAULT_LIVE_QUOTE_TTL_SECONDS: u64 = 90;
+const MAX_STALE_LIVE_QUOTE_AGE: Duration = Duration::from_secs(15 * 60);
 const MINIMUM_RELATIVE_SNAPSHOT_PERCENT: u128 = 20;
 pub const HISTORY_TARGET_DAYS: u16 = 90;
 pub const HISTORY_IMPORTS_PER_RUN: usize = 7;
@@ -54,8 +58,8 @@ const HISTORY_FETCH_ATTEMPTS: u8 = 3;
 pub const DEFAULT_KEEP_COPIES: u32 = 1;
 pub const DEFAULT_REWARD_OVERLAY_SCALE_PERCENT: u16 = 100;
 pub const DEFAULT_REWARD_OVERLAY_OFFSET_PERCENT: i16 = 0;
-const CURRENT_GAME_METADATA_SCHEMA_VERSION: u32 = 6;
-const CURRENT_CATALOG_SCHEMA_VERSION: u32 = 3;
+const CURRENT_GAME_METADATA_SCHEMA_VERSION: u32 = 7;
+const CURRENT_CATALOG_SCHEMA_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -183,6 +187,17 @@ pub struct AccountOrderItemView {
     pub display_name_en: String,
     pub image_url: Option<String>,
     pub item_kind: MarketItemKind,
+    #[serde(default)]
+    pub set_components: Vec<AccountSetComponentView>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountSetComponentView {
+    pub slug: String,
+    pub required_quantity: u32,
+    pub display_name: String,
+    pub display_name_en: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -202,6 +217,7 @@ pub struct SetComponentInsight {
     pub display_name: String,
     pub image_url: Option<String>,
     pub owned_quantity: u32,
+    pub sellable_quantity: u32,
     pub recommendation: Option<PriceRecommendation>,
 }
 
@@ -256,6 +272,7 @@ pub struct DucatInsightRow {
 pub struct InsightsView {
     pub metadata: GameMetadataSnapshotMetadata,
     pub inventory_available: bool,
+    pub void_traces: Option<u32>,
     pub sets: Vec<SetInsightRow>,
     pub relics: Vec<RelicInsightRow>,
     pub ducats: Vec<DucatInsightRow>,
@@ -400,8 +417,6 @@ pub struct InventoryViewItem {
     pub sellable_quantity: u32,
     pub resolution: InventoryResolution,
     pub vault_status: VaultStatus,
-    pub closed_median_48h: Option<f64>,
-    pub has_reliable_price: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -444,8 +459,6 @@ pub struct SellNowSummary {
     pub candidate_rows: usize,
     pub priced_rows: usize,
     pub high_priority_rows: usize,
-    /// Номинальная стоимость всех разрешённых owned-копий с надёжной bulk-ценой.
-    pub inventory_nominal_value: f64,
     /// Номинальная стоимость только sellable-копий после резерва и tradeability.
     pub nominal_value: f64,
 }
@@ -514,7 +527,7 @@ impl PricingService {
         key: &MarketVariantKey,
         item_kind: MarketItemKind,
     ) -> Result<Option<PriceRecommendation>, CoreError> {
-        Self::price_current_variant_with_live(database, key, item_kind, None)
+        Self::price_current_variant_with_live(database, key, item_kind, None, None)
     }
 
     fn price_current_variant_with_live(
@@ -522,6 +535,7 @@ impl PricingService {
         key: &MarketVariantKey,
         item_kind: MarketItemKind,
         live_order_book: Option<&LiveOrderBook>,
+        available_quantity: Option<u32>,
     ) -> Result<Option<PriceRecommendation>, CoreError> {
         let database = lock_database(database)?;
         let Some(snapshot) = database.current_market_snapshot()? else {
@@ -537,6 +551,7 @@ impl PricingService {
             source_is_fallback: snapshot.provider == ProviderId::FrameForgeMirror,
             bulk_records: &records,
             live_order_book,
+            available_quantity,
         })))
     }
 }
@@ -638,6 +653,7 @@ impl LivePricingService {
         key: &MarketVariantKey,
         item_kind: MarketItemKind,
         settings: &AppSettings,
+        available_quantity: Option<u32>,
     ) -> Result<Option<LivePricingResult>, CoreError> {
         let cache_key = (key.clone(), settings.crossplay);
         let ttl = Duration::from_secs(settings.live_quote_ttl_seconds.clamp(15, 600));
@@ -652,6 +668,7 @@ impl LivePricingService {
                 &cached.book,
                 LiveQuoteState::Cache,
                 None,
+                available_quantity,
             );
         }
 
@@ -675,6 +692,7 @@ impl LivePricingService {
                     &book,
                     LiveQuoteState::Network,
                     None,
+                    available_quantity,
                 )?;
                 cache.insert(
                     cache_key,
@@ -687,7 +705,10 @@ impl LivePricingService {
             }
             Err(error) => {
                 record_failure(database, self.provider.id(), &error, started)?;
-                if let Some(cached) = cache.get(&cache_key) {
+                if let Some(cached) = cache
+                    .get(&cache_key)
+                    .filter(|cached| cached.stored_at.elapsed() <= MAX_STALE_LIVE_QUOTE_AGE)
+                {
                     build_live_result(
                         database,
                         key,
@@ -695,8 +716,10 @@ impl LivePricingService {
                         &cached.book,
                         LiveQuoteState::StaleCache,
                         Some(format!("Live WFM не обновлён: {error}")),
+                        available_quantity,
                     )
                 } else {
+                    cache.remove(&cache_key);
                     Err(CoreError::MarketData(format!(
                         "live WFM request failed: {error}"
                     )))
@@ -713,9 +736,15 @@ fn build_live_result(
     book: &LiveOrderBook,
     quote_state: LiveQuoteState,
     warning: Option<String>,
+    available_quantity: Option<u32>,
 ) -> Result<Option<LivePricingResult>, CoreError> {
-    let Some(recommendation) =
-        PricingService::price_current_variant_with_live(database, key, item_kind, Some(book))?
+    let Some(recommendation) = PricingService::price_current_variant_with_live(
+        database,
+        key,
+        item_kind,
+        Some(book),
+        available_quantity,
+    )?
     else {
         return Ok(None);
     };
@@ -760,12 +789,15 @@ fn bounded_live_orders(active_orders: &[&LiveOrder]) -> Vec<LiveOrderView> {
         .copied()
         .filter(|order| order.side == LiveOrderSide::Buy)
         .collect();
-    sells.sort_by_key(|order| (order.platinum, user_status_order(order.user_status)));
-    buys.sort_by_key(|order| {
-        (
-            std::cmp::Reverse(order.platinum),
-            user_status_order(order.user_status),
-        )
+    sells.sort_by(|left, right| {
+        compare_order_unit_price(left, right).then_with(|| {
+            user_status_order(left.user_status).cmp(&user_status_order(right.user_status))
+        })
+    });
+    buys.sort_by(|left, right| {
+        compare_order_unit_price(right, left).then_with(|| {
+            user_status_order(left.user_status).cmp(&user_status_order(right.user_status))
+        })
     });
     sells
         .into_iter()
@@ -779,6 +811,12 @@ fn bounded_live_orders(active_orders: &[&LiveOrder]) -> Vec<LiveOrderView> {
             user_status: order.user_status,
         })
         .collect()
+}
+
+fn compare_order_unit_price(left: &LiveOrder, right: &LiveOrder) -> std::cmp::Ordering {
+    // Compare price / per_trade without floating-point rounding.
+    (u64::from(left.platinum) * u64::from(right.per_trade))
+        .cmp(&(u64::from(right.platinum) * u64::from(left.per_trade)))
 }
 
 const fn user_status_order(status: UserStatus) -> u8 {
@@ -890,6 +928,7 @@ impl MarketBrowserService {
                     source_is_fallback: snapshot_metadata.provider == ProviderId::FrameForgeMirror,
                     bulk_records: &bundle.records,
                     live_order_book: None,
+                    available_quantity: None,
                 });
                 MarketSearchRow {
                     image_url: component_images.get(&bundle.key.slug).cloned().or_else(|| {
@@ -1025,6 +1064,9 @@ impl InventoryService {
         };
         snapshot
             .map(|snapshot| {
+                let snapshot = catalog.as_ref().map_or(snapshot.clone(), |catalog| {
+                    reresolve_inventory_snapshot(&snapshot, catalog, settings.platform).snapshot
+                });
                 let snapshot = relink_implicit_regular_inventory(
                     &snapshot,
                     catalog.as_ref(),
@@ -1198,6 +1240,7 @@ impl InsightsService {
         };
         let inventory = InventoryService::view(database, settings)?;
         let inventory_available = inventory.is_some();
+        let void_traces = inventory.as_ref().and_then(void_trace_balance);
         let inventory_items = inventory
             .as_ref()
             .map_or(&[][..], |view| view.items.as_slice());
@@ -1243,6 +1286,7 @@ impl InsightsService {
         Ok(Some(InsightsView {
             metadata: snapshot.metadata,
             inventory_available,
+            void_traces,
             sets,
             relics,
             ducats,
@@ -1250,10 +1294,39 @@ impl InsightsService {
     }
 }
 
+fn void_trace_balance(inventory: &InventoryView) -> Option<u32> {
+    let mut found = false;
+    let total = inventory
+        .items
+        .iter()
+        .filter(|item| {
+            let is_trace = item
+                .canonical_game_id
+                .rsplit('/')
+                .next()
+                .is_some_and(|name| name.eq_ignore_ascii_case("VoidTearDrop"))
+                || item
+                    .key
+                    .as_ref()
+                    .is_some_and(|key| key.slug == "void_traces");
+            found |= is_trace;
+            is_trace
+        })
+        .fold(0_u32, |sum, item| sum.saturating_add(item.owned_quantity));
+    if found || inventory.metadata.schema_version >= READ_ONLY_SCHEMA_VERSION {
+        Some(total)
+    } else {
+        None
+    }
+}
+
 const RESOURCE_WORLDSTATE_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
-const SYNDICATE_MOD_COST: u64 = 25_000;
 const VOSFOR_PACK_COST: f64 = 200.0;
 const CONVERTER_PRICE_MARGIN: f64 = 0.10;
+const MIN_ARCANE_PACK_PRICE_COVERAGE: f64 = 100.0;
+// Ордера продавцов пригодны для консервативной оценки матожидания, но нельзя
+// считать, что выставленная цена целиком подтверждена завершёнными сделками.
+const LOW_CONFIDENCE_ARCANE_PRICE_FACTOR: f64 = 0.70;
 
 impl ResourceConverterService {
     /// Создаёт сервис конвертации валют с коротким кэшем публичного worldstate.
@@ -1278,7 +1351,7 @@ impl ResourceConverterService {
         database: &Mutex<Database>,
         settings: &AppSettings,
     ) -> Result<Option<ResourceConverterView>, CoreError> {
-        let (metadata, inventory, catalog, market_source_date, nightwave_vendor) = {
+        let (metadata, inventory, catalog, variants, market_source_date, nightwave_vendor) = {
             let database = lock_database(database)?;
             let Some(metadata) = database.load_current_game_metadata()? else {
                 return Ok(None);
@@ -1292,16 +1365,33 @@ impl ResourceConverterService {
             let market_source_date = database
                 .current_market_snapshot()?
                 .map(|row| row.source_date);
+            let variants = database.current_market_variant_keys()?;
             let nightwave_vendor =
                 database.get_setting::<NightwaveVendorSnapshot>(NIGHTWAVE_VENDOR_CACHE_KEY)?;
             (
                 metadata,
                 inventory,
                 catalog,
+                variants,
                 market_source_date,
                 nightwave_vendor,
             )
         };
+        let inventory =
+            reresolve_inventory_snapshot(&inventory, &catalog, settings.platform).snapshot;
+        let inventory = relink_implicit_regular_inventory(
+            &inventory,
+            Some(&catalog),
+            &variants,
+            settings.platform,
+        );
+        let inventory = relink_exact_relic_inventory(
+            &inventory,
+            Some(&catalog),
+            Some(&metadata),
+            &variants,
+            settings.platform,
+        );
         let daily = self.daily_state().await?;
         let context = ResourceConverterBuildContext {
             metadata: &metadata,
@@ -1432,14 +1522,11 @@ fn build_syndicate_route(
         let Some(syndicate) = syndicate_from_affiliation(standing) else {
             continue;
         };
-        let Ok(balance) = u64::try_from(standing.standing.max(0)) else {
-            continue;
-        };
-        if balance < SYNDICATE_MOD_COST {
+        let balance = syndicate_spendable_standing(standing);
+        if balance == 0 {
             continue;
         }
-        let quantity = u32::try_from(balance / SYNDICATE_MOD_COST).unwrap_or(u32::MAX);
-        let mut best: Option<ResourceConversionAction> = None;
+        let mut candidates = Vec::new();
         for offer in metadata.syndicate_offers.iter().filter(|offer| {
             offer.syndicate == syndicate
                 && syndicate_offer_accessible(standing, offer.required_title.as_str())
@@ -1454,11 +1541,15 @@ fn build_syndicate_route(
             else {
                 continue;
             };
-            let action = ResourceConversionAction {
+            let cost = u64::from(offer.standing_cost);
+            if cost == 0 || cost > balance {
+                continue;
+            }
+            candidates.push(ResourceConversionAction {
                 vendor_name: syndicate_name_ru(syndicate).to_owned(),
                 currency: ResourceCurrency::Standing,
                 balance,
-                cost: u64::from(offer.standing_cost),
+                cost,
                 item_slug: offer.slug.clone(),
                 item_name: localized_name(
                     offer.display_name_ru.as_deref(),
@@ -1466,21 +1557,13 @@ fn build_syndicate_route(
                     settings.language,
                 ),
                 image_url: offer.image_url.clone(),
-                quantity,
+                quantity: 1,
                 unit_price,
-                estimated_platinum: unit_price * f64::from(quantity),
+                estimated_platinum: unit_price,
                 included_in_total: true,
-            };
-            if best
-                .as_ref()
-                .is_none_or(|current| action.estimated_platinum > current.estimated_platinum)
-            {
-                best = Some(action);
-            }
+            });
         }
-        if let Some(best) = best {
-            actions.push(best);
-        }
+        actions.extend(optimize_single_currency(balance, candidates));
     }
     actions.sort_by(|left, right| right.estimated_platinum.total_cmp(&left.estimated_platinum));
     Ok(ResourceConversionRoute {
@@ -1576,7 +1659,7 @@ fn build_confirmed_nightwave_route(
         .iter()
         .filter_map(|item| item.game_ref.as_deref().map(|game_ref| (game_ref, item)))
         .collect();
-    let mut best: Option<ResourceConversionAction> = None;
+    let mut candidates = Vec::new();
     for offer in &vendor.offers {
         let cost = u64::from(offer.cred_cost);
         let Some(item) = catalog_by_ref.get(offer.game_ref.as_str()).copied() else {
@@ -1595,8 +1678,7 @@ fn build_confirmed_nightwave_route(
         else {
             continue;
         };
-        let quantity = u32::try_from(balance / cost).unwrap_or(u32::MAX);
-        let action = ResourceConversionAction {
+        candidates.push(ResourceConversionAction {
             vendor_name: "Нора Найт".to_owned(),
             currency: ResourceCurrency::NightwaveCred,
             balance,
@@ -1608,31 +1690,26 @@ fn build_confirmed_nightwave_route(
                 settings.language,
             ),
             image_url: catalog_item_image(item, settings.language),
-            quantity,
+            quantity: 1,
             unit_price,
-            estimated_platinum: unit_price * f64::from(quantity),
+            estimated_platinum: unit_price,
             included_in_total: true,
-        };
-        if best
-            .as_ref()
-            .is_none_or(|current| action.estimated_platinum > current.estimated_platinum)
-        {
-            best = Some(action);
-        }
+        });
     }
+    let actions = optimize_single_currency(balance, candidates);
     Ok(ResourceConversionRoute {
         source: ResourceSource::Nightwave,
-        status: if best.is_some() {
-            ResourceRouteStatus::Ready
-        } else {
+        status: if actions.is_empty() {
             ResourceRouteStatus::Unavailable
-        },
-        reason: if best.is_some() {
-            "nightwave_stock_confirmed".to_owned()
         } else {
-            "no_priced_offer".to_owned()
+            ResourceRouteStatus::Ready
         },
-        actions: best.into_iter().collect(),
+        reason: if actions.is_empty() {
+            "no_priced_offer".to_owned()
+        } else {
+            "nightwave_stock_confirmed".to_owned()
+        },
+        actions,
         available_at: None,
         available_until: Some(vendor.expires_at),
         location: None,
@@ -1647,7 +1724,7 @@ fn build_unconfirmed_nightwave_route(
     activation: chrono::DateTime<Utc>,
     expiry: chrono::DateTime<Utc>,
 ) -> Result<ResourceConversionRoute, CoreError> {
-    let mut best: Option<ResourceConversionAction> = None;
+    let mut candidates = Vec::new();
     for offer in &metadata.nightwave_offers {
         let cost = u64::from(offer.cred_cost);
         if cost == 0 || balance < cost {
@@ -1663,8 +1740,7 @@ fn build_unconfirmed_nightwave_route(
         else {
             continue;
         };
-        let quantity = u32::try_from(balance / cost).unwrap_or(u32::MAX);
-        let action = ResourceConversionAction {
+        candidates.push(ResourceConversionAction {
             vendor_name: "Нора Найт".to_owned(),
             currency: ResourceCurrency::NightwaveCred,
             balance,
@@ -1676,31 +1752,26 @@ fn build_unconfirmed_nightwave_route(
                 settings.language,
             ),
             image_url: offer.image_url.clone(),
-            quantity,
+            quantity: 1,
             unit_price,
-            estimated_platinum: unit_price * f64::from(quantity),
+            estimated_platinum: unit_price,
             included_in_total: false,
-        };
-        if best
-            .as_ref()
-            .is_none_or(|current| action.estimated_platinum > current.estimated_platinum)
-        {
-            best = Some(action);
-        }
+        });
     }
+    let actions = optimize_single_currency(balance, candidates);
     Ok(ResourceConversionRoute {
         source: ResourceSource::Nightwave,
-        status: if best.is_some() {
-            ResourceRouteStatus::Conditional
-        } else {
+        status: if actions.is_empty() {
             ResourceRouteStatus::Unavailable
-        },
-        reason: if best.is_some() {
-            "refresh_nightwave_stock".to_owned()
         } else {
-            "no_priced_offer".to_owned()
+            ResourceRouteStatus::Conditional
         },
-        actions: best.into_iter().collect(),
+        reason: if actions.is_empty() {
+            "no_priced_offer".to_owned()
+        } else {
+            "refresh_nightwave_stock".to_owned()
+        },
+        actions,
         available_at: Some(activation),
         available_until: Some(expiry),
         location: None,
@@ -1712,6 +1783,335 @@ fn compact_nightwave_tag(tag: &str) -> String {
         .filter(|character| !character.is_whitespace())
         .flat_map(char::to_lowercase)
         .collect()
+}
+
+fn optimize_single_currency(
+    balance: u64,
+    candidates: Vec<ResourceConversionAction>,
+) -> Vec<ResourceConversionAction> {
+    const MAX_DP_STATES: usize = 1_000_000;
+    let candidates: Vec<_> = candidates
+        .into_iter()
+        .filter(|candidate| {
+            candidate.cost > 0
+                && candidate.cost <= balance
+                && candidate.unit_price.is_finite()
+                && candidate.unit_price > 0.0
+        })
+        .collect();
+    if candidates.is_empty() {
+        return Vec::new();
+    }
+    let divisor = candidates
+        .iter()
+        .map(|candidate| candidate.cost)
+        .reduce(greatest_common_divisor)
+        .unwrap_or(1);
+    let units = balance / divisor;
+    let Ok(state_count) = usize::try_from(units.saturating_add(1)) else {
+        return greedy_single_currency(balance, candidates);
+    };
+    if state_count > MAX_DP_STATES {
+        return greedy_single_currency(balance, candidates);
+    }
+
+    let costs: Vec<usize> = candidates
+        .iter()
+        .map(|candidate| usize::try_from(candidate.cost / divisor).unwrap_or(usize::MAX))
+        .collect();
+    let mut best = vec![f64::NEG_INFINITY; state_count];
+    let mut previous: Vec<Option<(usize, usize)>> = vec![None; state_count];
+    best[0] = 0.0;
+    for amount in 1..state_count {
+        for (candidate_index, candidate) in candidates.iter().enumerate() {
+            let cost = costs[candidate_index];
+            if cost > amount || !best[amount - cost].is_finite() {
+                continue;
+            }
+            let value = best[amount - cost] + candidate.unit_price;
+            if value > best[amount] + f64::EPSILON {
+                best[amount] = value;
+                previous[amount] = Some((amount - cost, candidate_index));
+            }
+        }
+    }
+    let Some((mut amount, value)) = best
+        .iter()
+        .copied()
+        .enumerate()
+        .filter(|(_, value)| value.is_finite())
+        .max_by(|left, right| left.1.total_cmp(&right.1).then(left.0.cmp(&right.0)))
+    else {
+        return Vec::new();
+    };
+    if value <= 0.0 {
+        return Vec::new();
+    }
+    let mut counts = vec![0_u32; candidates.len()];
+    while amount > 0 {
+        let Some((prior, candidate_index)) = previous[amount] else {
+            break;
+        };
+        counts[candidate_index] = counts[candidate_index].saturating_add(1);
+        amount = prior;
+    }
+    materialize_conversion_actions(candidates, &counts)
+}
+
+struct DualCurrencyCandidate {
+    action: ResourceConversionAction,
+    secondary_cost: u64,
+}
+
+fn usable_dual_currency_candidates(
+    primary_balance: u64,
+    secondary_balance: u64,
+    candidates: Vec<DualCurrencyCandidate>,
+) -> Vec<DualCurrencyCandidate> {
+    candidates
+        .into_iter()
+        .filter(|candidate| {
+            candidate.action.cost > 0
+                && candidate.secondary_cost > 0
+                && candidate.action.cost <= primary_balance
+                && candidate.secondary_cost <= secondary_balance
+                && candidate.action.unit_price.is_finite()
+                && candidate.action.unit_price > 0.0
+        })
+        .collect()
+}
+
+fn optimize_dual_currency(
+    primary_balance: u64,
+    secondary_balance: u64,
+    candidates: Vec<DualCurrencyCandidate>,
+) -> Vec<ResourceConversionAction> {
+    const MAX_DP_STATES: usize = 750_000;
+    let candidates =
+        usable_dual_currency_candidates(primary_balance, secondary_balance, candidates);
+    if candidates.is_empty() {
+        return Vec::new();
+    }
+    let primary_divisor = candidates
+        .iter()
+        .map(|candidate| candidate.action.cost)
+        .reduce(greatest_common_divisor)
+        .unwrap_or(1);
+    let secondary_divisor = candidates
+        .iter()
+        .map(|candidate| candidate.secondary_cost)
+        .reduce(greatest_common_divisor)
+        .unwrap_or(1);
+    let Some(primary_states) = usize::try_from(primary_balance / primary_divisor)
+        .ok()
+        .and_then(|value| value.checked_add(1))
+    else {
+        return optimize_dual_currency_pairs(primary_balance, secondary_balance, candidates);
+    };
+    let Some(secondary_states) = usize::try_from(secondary_balance / secondary_divisor)
+        .ok()
+        .and_then(|value| value.checked_add(1))
+    else {
+        return optimize_dual_currency_pairs(primary_balance, secondary_balance, candidates);
+    };
+    let Some(state_count) = primary_states.checked_mul(secondary_states) else {
+        return optimize_dual_currency_pairs(primary_balance, secondary_balance, candidates);
+    };
+    if state_count > MAX_DP_STATES {
+        return optimize_dual_currency_pairs(primary_balance, secondary_balance, candidates);
+    }
+
+    let costs: Vec<_> = candidates
+        .iter()
+        .map(|candidate| {
+            (
+                usize::try_from(candidate.action.cost / primary_divisor).unwrap_or(usize::MAX),
+                usize::try_from(candidate.secondary_cost / secondary_divisor).unwrap_or(usize::MAX),
+            )
+        })
+        .collect();
+    let mut best = vec![f64::NEG_INFINITY; state_count];
+    let mut previous: Vec<Option<(usize, usize)>> = vec![None; state_count];
+    best[0] = 0.0;
+    for primary in 0..primary_states {
+        for secondary in 0..secondary_states {
+            let index = primary * secondary_states + secondary;
+            if !best[index].is_finite() {
+                continue;
+            }
+            for (candidate_index, candidate) in candidates.iter().enumerate() {
+                let (primary_cost, secondary_cost) = costs[candidate_index];
+                let next_primary = primary.saturating_add(primary_cost);
+                let next_secondary = secondary.saturating_add(secondary_cost);
+                if next_primary >= primary_states || next_secondary >= secondary_states {
+                    continue;
+                }
+                let next_index = next_primary * secondary_states + next_secondary;
+                let value = best[index] + candidate.action.unit_price;
+                if value > best[next_index] + f64::EPSILON {
+                    best[next_index] = value;
+                    previous[next_index] = Some((index, candidate_index));
+                }
+            }
+        }
+    }
+    let Some((mut index, value)) = best
+        .iter()
+        .copied()
+        .enumerate()
+        .filter(|(_, value)| value.is_finite())
+        .max_by(|left, right| left.1.total_cmp(&right.1))
+    else {
+        return Vec::new();
+    };
+    if value <= 0.0 {
+        return Vec::new();
+    }
+    let mut counts = vec![0_u32; candidates.len()];
+    while index != 0 {
+        let Some((prior, candidate_index)) = previous[index] else {
+            break;
+        };
+        counts[candidate_index] = counts[candidate_index].saturating_add(1);
+        index = prior;
+    }
+    materialize_conversion_actions(
+        candidates
+            .into_iter()
+            .map(|candidate| candidate.action)
+            .collect(),
+        &counts,
+    )
+}
+
+fn optimize_dual_currency_pairs(
+    primary_balance: u64,
+    secondary_balance: u64,
+    candidates: Vec<DualCurrencyCandidate>,
+) -> Vec<ResourceConversionAction> {
+    const MAX_PAIR_ITERATIONS: u64 = 250_000;
+    let mut best_value = 0.0;
+    let mut best_counts = vec![0_u32; candidates.len()];
+    let mut iterations = 0_u64;
+    for first in 0..candidates.len() {
+        let first_candidate = &candidates[first];
+        let first_max = (primary_balance / first_candidate.action.cost)
+            .min(secondary_balance / first_candidate.secondary_cost);
+        for second in first..candidates.len() {
+            let second_candidate = &candidates[second];
+            for first_quantity in 0..=first_max {
+                iterations = iterations.saturating_add(1);
+                if iterations > MAX_PAIR_ITERATIONS {
+                    return greedy_dual_currency(primary_balance, secondary_balance, candidates);
+                }
+                let primary_left =
+                    primary_balance.saturating_sub(first_quantity * first_candidate.action.cost);
+                let secondary_left = secondary_balance
+                    .saturating_sub(first_quantity * first_candidate.secondary_cost);
+                let second_quantity = if first == second {
+                    0
+                } else {
+                    (primary_left / second_candidate.action.cost)
+                        .min(secondary_left / second_candidate.secondary_cost)
+                };
+                let value = bounded_u64_as_f64(first_quantity) * first_candidate.action.unit_price
+                    + bounded_u64_as_f64(second_quantity) * second_candidate.action.unit_price;
+                if value > best_value {
+                    best_value = value;
+                    best_counts.fill(0);
+                    best_counts[first] = u32::try_from(first_quantity).unwrap_or(u32::MAX);
+                    if first != second {
+                        best_counts[second] = u32::try_from(second_quantity).unwrap_or(u32::MAX);
+                    }
+                }
+            }
+        }
+    }
+    materialize_conversion_actions(
+        candidates
+            .into_iter()
+            .map(|candidate| candidate.action)
+            .collect(),
+        &best_counts,
+    )
+}
+
+fn greedy_dual_currency(
+    primary_balance: u64,
+    secondary_balance: u64,
+    candidates: Vec<DualCurrencyCandidate>,
+) -> Vec<ResourceConversionAction> {
+    let Some((best_index, best)) = candidates.iter().enumerate().max_by(|left, right| {
+        let score = |candidate: &DualCurrencyCandidate| {
+            let primary_share =
+                bounded_u64_as_f64(candidate.action.cost) / bounded_u64_as_f64(primary_balance);
+            let secondary_share = bounded_u64_as_f64(candidate.secondary_cost)
+                / bounded_u64_as_f64(secondary_balance);
+            candidate.action.unit_price / primary_share.max(secondary_share)
+        };
+        score(left.1).total_cmp(&score(right.1))
+    }) else {
+        return Vec::new();
+    };
+    let quantity =
+        (primary_balance / best.action.cost).min(secondary_balance / best.secondary_cost);
+    let mut counts = vec![0_u32; candidates.len()];
+    counts[best_index] = u32::try_from(quantity).unwrap_or(u32::MAX);
+    materialize_conversion_actions(
+        candidates
+            .into_iter()
+            .map(|candidate| candidate.action)
+            .collect(),
+        &counts,
+    )
+}
+
+fn greedy_single_currency(
+    balance: u64,
+    candidates: Vec<ResourceConversionAction>,
+) -> Vec<ResourceConversionAction> {
+    let Some(best) = candidates.into_iter().max_by(|left, right| {
+        let left_ratio = left.unit_price / bounded_u64_as_f64(left.cost);
+        let right_ratio = right.unit_price / bounded_u64_as_f64(right.cost);
+        left_ratio.total_cmp(&right_ratio)
+    }) else {
+        return Vec::new();
+    };
+    let quantity = u32::try_from(balance / best.cost).unwrap_or(u32::MAX);
+    materialize_conversion_actions(vec![best], &[quantity])
+}
+
+fn bounded_u64_as_f64(value: u64) -> f64 {
+    f64::from(u32::try_from(value).unwrap_or(u32::MAX))
+}
+
+fn materialize_conversion_actions(
+    candidates: Vec<ResourceConversionAction>,
+    counts: &[u32],
+) -> Vec<ResourceConversionAction> {
+    let mut actions: Vec<_> = candidates
+        .into_iter()
+        .zip(counts.iter().copied())
+        .filter_map(|(mut action, quantity)| {
+            if quantity == 0 {
+                return None;
+            }
+            action.quantity = quantity;
+            action.estimated_platinum = action.unit_price * f64::from(quantity);
+            Some(action)
+        })
+        .collect();
+    actions.sort_by(|left, right| right.estimated_platinum.total_cmp(&left.estimated_platinum));
+    actions
+}
+
+const fn greatest_common_divisor(mut left: u64, mut right: u64) -> u64 {
+    while right != 0 {
+        let remainder = left % right;
+        left = right;
+        right = remainder;
+    }
+    if left > 0 { left } else { 1 }
 }
 
 fn build_void_trader_route(
@@ -1755,7 +2155,7 @@ fn build_void_trader_route(
             "refresh_inventory_for_credits",
         ));
     };
-    let mut best: Option<ResourceConversionAction> = None;
+    let mut candidates = Vec::new();
     for offered in &trader.inventory {
         if offered.ducats == 0 || offered.credits == 0 {
             continue;
@@ -1763,11 +2163,7 @@ fn build_void_trader_route(
         let Some(item) = catalog_item_by_name(catalog, &offered.name) else {
             continue;
         };
-        let quantity_by_ducats = ducats / u64::from(offered.ducats);
-        let quantity_by_credits = credits / offered.credits;
-        let quantity =
-            u32::try_from(quantity_by_ducats.min(quantity_by_credits)).unwrap_or(u32::MAX);
-        if quantity == 0 {
+        if ducats < u64::from(offered.ducats) || credits < offered.credits {
             continue;
         }
         let rank = item.max_rank.map(|_| 0);
@@ -1781,41 +2177,41 @@ fn build_void_trader_route(
         else {
             continue;
         };
-        let action = ResourceConversionAction {
-            vendor_name: "Баро Ки’Тиир".to_owned(),
-            currency: ResourceCurrency::Ducat,
-            balance: ducats,
-            cost: u64::from(offered.ducats),
-            item_slug: item.slug.clone(),
-            item_name: catalog_name(item, settings.language),
-            image_url: catalog_item_image(item, settings.language),
-            quantity,
-            unit_price,
-            estimated_platinum: unit_price * f64::from(quantity),
-            included_in_total: true,
-        };
-        if best
-            .as_ref()
-            .is_none_or(|current| action.estimated_platinum > current.estimated_platinum)
-        {
-            best = Some(action);
-        }
+        candidates.push(DualCurrencyCandidate {
+            action: ResourceConversionAction {
+                vendor_name: "Баро Ки’Тиир".to_owned(),
+                currency: ResourceCurrency::Ducat,
+                balance: ducats,
+                cost: u64::from(offered.ducats),
+                item_slug: item.slug.clone(),
+                item_name: catalog_name(item, settings.language),
+                image_url: catalog_item_image(item, settings.language),
+                quantity: 1,
+                unit_price,
+                estimated_platinum: unit_price,
+                included_in_total: true,
+            },
+            secondary_cost: offered.credits,
+        });
     }
+    let actions = optimize_dual_currency(ducats, credits, candidates);
     Ok(ResourceConversionRoute {
         source: ResourceSource::VoidTrader,
-        status: if best.is_some() {
-            ResourceRouteStatus::Ready
-        } else {
+        status: if actions.is_empty() {
             ResourceRouteStatus::Unavailable
-        },
-        reason: if best.is_some() {
-            "confirmed".to_owned()
-        } else if trader.inventory.is_empty() {
-            "inventory_not_published".to_owned()
         } else {
-            "no_affordable_priced_offer".to_owned()
+            ResourceRouteStatus::Ready
         },
-        actions: best.into_iter().collect(),
+        reason: if actions.is_empty() {
+            if trader.inventory.is_empty() {
+                "inventory_not_published".to_owned()
+            } else {
+                "no_affordable_priced_offer".to_owned()
+            }
+        } else {
+            "confirmed".to_owned()
+        },
+        actions,
         available_at: Some(trader.activation),
         available_until: Some(trader.expiry),
         location: Some(trader.location.clone()),
@@ -1872,11 +2268,7 @@ fn build_steel_path_route(
             location: None,
         });
     }
-    let item_kind = if item.tags.iter().any(|tag| tag == "riven") {
-        MarketItemKind::Riven
-    } else {
-        MarketItemKind::Standard
-    };
+    let item_kind = market_item_kind_from_slug(&item.tags, &item.slug);
     if item_kind == MarketItemKind::Riven {
         return Ok(ResourceConversionRoute {
             source: ResourceSource::SteelPath,
@@ -1902,11 +2294,13 @@ fn build_steel_path_route(
             location: None,
         });
     };
-    let quantity = u32::try_from(balance / u64::from(reward.cost)).unwrap_or(u32::MAX);
+    // `currentReward` — недельное ротационное предложение Тешина, доступное
+    // один раз за ротацию. Баланс не должен превращать его в бесконечный маршрут.
+    let quantity = 1;
     Ok(ResourceConversionRoute {
         source: ResourceSource::SteelPath,
         status: ResourceRouteStatus::Ready,
-        reason: "confirmed".to_owned(),
+        reason: "weekly_purchase_limit".to_owned(),
         actions: vec![ResourceConversionAction {
             vendor_name: "Тешин".to_owned(),
             currency: ResourceCurrency::SteelEssence,
@@ -1956,13 +2350,8 @@ fn build_arcane_conversion(
             .vosfor
             .saturating_mul(arcane_rank_copy_count(rank));
         let equivalent_each = pack_expected_platinum * f64::from(vosfor_each) / VOSFOR_PACK_COST;
-        let market_price = converter_price(
-            database,
-            &definition.slug,
-            settings.platform,
-            Some(rank),
-            MarketItemKind::Standard,
-        )?;
+        let market_price =
+            conservative_arcane_price(database, &definition.slug, settings.platform, Some(rank))?;
         let input = ArcaneDecisionInput {
             definition,
             display_name: localized_name(
@@ -2042,12 +2431,11 @@ fn best_arcane_pack(
                     } else {
                         let price =
                             if let Some(item) = catalog_by_ref.get(component.game_ref.as_str()) {
-                                converter_price(
+                                conservative_arcane_price(
                                     database,
                                     &item.slug,
                                     settings.platform,
                                     Some(0),
-                                    MarketItemKind::Standard,
                                 )?
                             } else {
                                 None
@@ -2072,7 +2460,7 @@ fn best_arcane_pack(
         } else {
             100.0 * pack_coverage / bounded_count(pack.rolls.len())
         };
-        if coverage < 80.0 {
+        if coverage + f64::EPSILON < MIN_ARCANE_PACK_PRICE_COVERAGE {
             continue;
         }
         if best
@@ -2107,9 +2495,10 @@ fn append_arcane_decisions(
     input: &ArcaneDecisionInput<'_>,
     decisions: &mut ArcaneDecisionBuckets,
 ) {
-    let spare = item
-        .owned_quantity
-        .saturating_sub(keep_copies.min(item.owned_quantity));
+    let protected = keep_copies
+        .max(item.equipped_quantity)
+        .min(item.owned_quantity);
+    let spare = item.owned_quantity.saturating_sub(protected);
     if spare == 0 {
         return;
     }
@@ -2132,7 +2521,7 @@ fn append_arcane_decisions(
                 dissolve_quantity,
             ));
         }
-    } else if input.market_price_each.is_none_or(|price| {
+    } else if input.market_price_each.is_some_and(|price| {
         input.equivalent_platinum_each >= price * (1.0 + CONVERTER_PRICE_MARGIN)
     }) {
         decisions
@@ -2223,10 +2612,7 @@ fn converter_price(
     rank: Option<u16>,
     item_kind: MarketItemKind,
 ) -> Result<Option<f64>, CoreError> {
-    let key = MarketVariantKey::new(slug, platform, rank, None::<String>).map_err(|error| {
-        CoreError::MetadataData(format!("invalid converter market identity: {error}"))
-    })?;
-    let recommendation = PricingService::price_current_variant(database, &key, item_kind)?;
+    let recommendation = converter_recommendation(database, slug, platform, rank, item_kind)?;
     Ok(recommendation.and_then(|recommendation| {
         let credible = matches!(
             recommendation.confidence,
@@ -2236,6 +2622,43 @@ fn converter_price(
             PriceFreshness::Fresh | PriceFreshness::Aging
         );
         credible.then_some(recommendation.fair_price).flatten()
+    }))
+}
+
+fn converter_recommendation(
+    database: &Mutex<Database>,
+    slug: &str,
+    platform: Platform,
+    rank: Option<u16>,
+    item_kind: MarketItemKind,
+) -> Result<Option<PriceRecommendation>, CoreError> {
+    let key = MarketVariantKey::new(slug, platform, rank, None::<String>).map_err(|error| {
+        CoreError::MetadataData(format!("invalid converter market identity: {error}"))
+    })?;
+    PricingService::price_current_variant(database, &key, item_kind)
+}
+
+fn conservative_arcane_price(
+    database: &Mutex<Database>,
+    slug: &str,
+    platform: Platform,
+    rank: Option<u16>,
+) -> Result<Option<f64>, CoreError> {
+    let recommendation =
+        converter_recommendation(database, slug, platform, rank, MarketItemKind::Standard)?;
+    Ok(recommendation.and_then(|recommendation| {
+        if !matches!(
+            recommendation.freshness,
+            PriceFreshness::Fresh | PriceFreshness::Aging
+        ) {
+            return None;
+        }
+        let price = recommendation.fair_price.filter(|price| *price > 0.0)?;
+        match recommendation.confidence {
+            PriceConfidence::High | PriceConfidence::Medium => Some(price),
+            PriceConfidence::Low => Some(price * LOW_CONFIDENCE_ARCANE_PRICE_FACTOR),
+            PriceConfidence::Unknown => None,
+        }
     }))
 }
 
@@ -2273,27 +2696,85 @@ fn syndicate_from_affiliation(standing: &SyndicateStanding) -> Option<&'static s
 }
 
 fn syndicate_offer_accessible(standing: &SyndicateStanding, required_title: &str) -> bool {
-    let Some(title) = standing.title.as_deref() else {
-        return false;
-    };
-    if title.eq_ignore_ascii_case(required_title) {
-        return true;
-    }
     let Some(syndicate) = syndicate_from_affiliation(standing) else {
         return false;
     };
-    title.eq_ignore_ascii_case(syndicate_max_title(syndicate))
+    let Some(required_rank) = syndicate_title_rank(syndicate, required_title) else {
+        return false;
+    };
+    let current_rank = standing
+        .title
+        .as_deref()
+        .and_then(|title| syndicate_title_rank(syndicate, title))
+        .unwrap_or_else(|| syndicate_rank_from_cumulative_standing(standing.standing));
+    current_rank >= required_rank
 }
 
-fn syndicate_max_title(syndicate: &str) -> &'static str {
-    match syndicate {
-        "Steel Meridian" => "General",
-        "Arbiters of Hexis" => "Maxim",
-        "Cephalon Suda" => "Genius",
-        "The Perrin Sequence" => "Partner",
-        "Red Veil" => "Exalted",
-        "New Loka" => "Flawless",
-        _ => "",
+fn syndicate_spendable_standing(standing: &SyndicateStanding) -> u64 {
+    let Some(syndicate) = syndicate_from_affiliation(standing) else {
+        return 0;
+    };
+    let rank = standing
+        .title
+        .as_deref()
+        .and_then(|title| syndicate_title_rank(syndicate, title))
+        .unwrap_or_else(|| syndicate_rank_from_cumulative_standing(standing.standing));
+    let threshold = syndicate_cumulative_threshold(rank);
+    let non_negative = standing.standing.max(0);
+    let spendable = if non_negative >= threshold {
+        non_negative - threshold
+    } else {
+        // Импорт с явным званием может уже содержать текущий, а не накопительный
+        // баланс. В таком формате повторно вычитать порог нельзя.
+        non_negative
+    };
+    u64::try_from(spendable).unwrap_or_default()
+}
+
+fn syndicate_title_rank(syndicate: &str, title: &str) -> Option<u8> {
+    let titles: [&str; 5] = match syndicate {
+        "Steel Meridian" => ["Brave", "Valiant", "Defender", "Protector", "General"],
+        "Arbiters of Hexis" => ["Principled", "Authentic", "Lawful", "Crusader", "Maxim"],
+        "Cephalon Suda" => ["Competent", "Intriguing", "Intelligent", "Wise", "Genius"],
+        "The Perrin Sequence" => [
+            "Associate",
+            "Senior Associate",
+            "Executive",
+            "Senior Executive",
+            "Partner",
+        ],
+        "Red Veil" => ["Respected", "Honored", "Esteemed", "Revered", "Exalted"],
+        "New Loka" => ["Humane", "Bountiful", "Benevolent", "Pure", "Flawless"],
+        _ => return None,
+    };
+    titles
+        .iter()
+        .position(|candidate| candidate.eq_ignore_ascii_case(title.trim()))
+        .and_then(|index| u8::try_from(index + 1).ok())
+}
+
+const fn syndicate_rank_from_cumulative_standing(standing: i64) -> u8 {
+    // The inventory affiliation value is cumulative: each promotion consumes
+    // the visible standing but keeps its threshold in this stored total.
+    // 5k, +22k, +44k, +70k and +99k lead to ranks 1..5.
+    match standing {
+        240_000.. => 5,
+        141_000..=239_999 => 4,
+        71_000..=140_999 => 3,
+        27_000..=70_999 => 2,
+        5_000..=26_999 => 1,
+        _ => 0,
+    }
+}
+
+const fn syndicate_cumulative_threshold(rank: u8) -> i64 {
+    match rank {
+        1 => 5_000,
+        2 => 27_000,
+        3 => 71_000,
+        4 => 141_000,
+        5.. => 240_000,
+        _ => 0,
     }
 }
 
@@ -2540,10 +3021,34 @@ pub fn enrich_account_view(
     let Some(catalog) = database.load_current_catalog()? else {
         return Ok(view);
     };
-    let component_images = database
-        .load_current_game_metadata()?
+    let game_metadata = database.load_current_game_metadata()?;
+    let component_images = game_metadata
         .as_ref()
         .map_or_else(HashMap::new, component_image_urls_by_slug);
+    let set_components = game_metadata
+        .as_ref()
+        .map_or_else(HashMap::new, |metadata| {
+            metadata
+                .prime_sets
+                .iter()
+                .map(|definition| (definition.set_slug.clone(), definition.components.clone()))
+                .collect::<HashMap<_, _>>()
+        });
+    let component_names = catalog
+        .items
+        .iter()
+        .map(|item| {
+            let display_name_en = item.display_name_en.clone();
+            let display_name = match language {
+                Language::Russian => item
+                    .display_name_ru
+                    .clone()
+                    .unwrap_or_else(|| display_name_en.clone()),
+                Language::English => display_name_en.clone(),
+            };
+            (item.slug.clone(), (display_name, display_name_en))
+        })
+        .collect::<HashMap<_, _>>();
     drop(database);
     let wanted: std::collections::HashSet<&str> = view
         .orders
@@ -2556,6 +3061,28 @@ pub fn enrich_account_view(
         .filter(|item| wanted.contains(item.item_id.as_str()))
         .map(|item| {
             let item_kind = market_item_kind_from_slug(&item.tags, &item.slug);
+            let order_set_components = set_components
+                .get(&item.slug)
+                .map(|components| {
+                    components
+                        .iter()
+                        .map(|component| {
+                            let (display_name, display_name_en) = component_names
+                                .get(&component.slug)
+                                .cloned()
+                                .unwrap_or_else(|| {
+                                    (component.slug.clone(), component.slug.clone())
+                                });
+                            AccountSetComponentView {
+                                slug: component.slug.clone(),
+                                required_quantity: component.required_quantity,
+                                display_name,
+                                display_name_en,
+                            }
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
             let display_name_en = item.display_name_en;
             let display_name = match language {
                 Language::Russian => item
@@ -2574,6 +3101,7 @@ pub fn enrich_account_view(
                         .get(&item.slug)
                         .cloned()
                         .or_else(|| thumb.map(|thumb| market_image_url(&thumb))),
+                    set_components: order_set_components,
                     slug: item.slug,
                     display_name,
                     display_name_en,
@@ -2670,7 +3198,8 @@ fn build_set_components(
                     .image_url
                     .clone()
                     .or_else(|| insight_image_url(&component.slug, inventory, catalog)),
-                owned_quantity: sellable_quantity(inventory, &component.slug),
+                owned_quantity: owned_quantity(inventory, &component.slug),
+                sellable_quantity: sellable_quantity(inventory, &component.slug),
                 recommendation: price_slug(
                     database,
                     &component.slug,
@@ -2712,7 +3241,7 @@ fn build_set_insights(
             .map(|component| SetPartInput {
                 slug: &component.definition.slug,
                 required_quantity: component.definition.required_quantity,
-                owned_quantity: component.owned_quantity,
+                sellable_quantity: component.sellable_quantity,
                 fair_price: component
                     .recommendation
                     .as_ref()
@@ -2780,14 +3309,14 @@ fn build_relic_insights(
     let mut rows = Vec::new();
     for definition in definitions {
         let subtype = definition.refinement.market_subtype();
-        let Some(owned) = inventory.iter().find(|item| {
+        let Some(owned) = aggregate_inventory_items(inventory.iter().filter(|item| {
             matches!(
                 item.resolution,
                 InventoryResolution::Resolved | InventoryResolution::ExactVariantUnavailable
             ) && item.key.as_ref().is_some_and(|key| {
                 key.slug == definition.relic_slug && key.subtype.as_deref() == Some(subtype)
             })
-        }) else {
+        })) else {
             continue;
         };
         let relic_recommendation = price_slug(
@@ -2924,16 +3453,53 @@ fn build_ducat_insights(
     Ok(rows)
 }
 
+fn owned_quantity(inventory: &[InventoryViewItem], slug: &str) -> u32 {
+    inventory
+        .iter()
+        .filter(|item| item.key.as_ref().is_some_and(|key| key.slug == slug))
+        .fold(0_u32, |total, item| {
+            total.saturating_add(item.owned_quantity)
+        })
+}
+
 fn sellable_quantity(inventory: &[InventoryViewItem], slug: &str) -> u32 {
     inventory
         .iter()
-        .filter(|item| {
-            item.resolution == InventoryResolution::Resolved
-                && item.key.as_ref().is_some_and(|key| key.slug == slug)
-        })
+        .filter(|item| item.key.as_ref().is_some_and(|key| key.slug == slug))
         .fold(0_u32, |total, item| {
             total.saturating_add(item.sellable_quantity)
         })
+}
+
+fn aggregate_inventory_items<'a>(
+    items: impl IntoIterator<Item = &'a InventoryViewItem>,
+) -> Option<InventoryViewItem> {
+    let mut items = items.into_iter();
+    let mut total = items.next()?.clone();
+    for item in items {
+        total.owned_quantity = total.owned_quantity.saturating_add(item.owned_quantity);
+        total.tradeable_quantity = total
+            .tradeable_quantity
+            .saturating_add(item.tradeable_quantity);
+        total.untradeable_quantity = total
+            .untradeable_quantity
+            .saturating_add(item.untradeable_quantity);
+        total.unknown_quantity = total.unknown_quantity.saturating_add(item.unknown_quantity);
+        total.leveled_quantity = total.leveled_quantity.saturating_add(item.leveled_quantity);
+        total.equipped_quantity = total
+            .equipped_quantity
+            .saturating_add(item.equipped_quantity);
+        total.sellable_quantity = total
+            .sellable_quantity
+            .saturating_add(item.sellable_quantity);
+        total
+            .equipped_placements
+            .extend(item.equipped_placements.iter().cloned());
+        if total.image_url.is_none() {
+            total.image_url.clone_from(&item.image_url);
+        }
+    }
+    Some(total)
 }
 
 fn price_slug(
@@ -2967,9 +3533,25 @@ impl SellNowService {
         let inventory_summary = inventory.summary;
         let keep_copies = inventory.keep_copies;
         let mod_usage_scanned = inventory.mod_usage_scanned;
-        let inventory_nominal_value = inventory_nominal_value(database, &inventory.items)?;
         let mut rows = Vec::new();
-        for item in inventory.items {
+        let mut emitted_variants = HashSet::new();
+        for source_item in &inventory.items {
+            let item = if source_item.resolution == InventoryResolution::Resolved {
+                if let Some(key) = source_item.key.as_ref() {
+                    if !emitted_variants.insert(key.clone()) {
+                        continue;
+                    }
+                    aggregate_inventory_items(inventory.items.iter().filter(|candidate| {
+                        candidate.resolution == InventoryResolution::Resolved
+                            && candidate.key.as_ref() == Some(key)
+                    }))
+                    .unwrap_or_else(|| source_item.clone())
+                } else {
+                    source_item.clone()
+                }
+            } else {
+                source_item.clone()
+            };
             let (item_kind, recommendation) = if item.resolution == InventoryResolution::Resolved {
                 if let Some(key) = item.key.as_ref() {
                     let item_kind = market_item_kind(&item.tags, key);
@@ -3001,7 +3583,7 @@ impl SellNowService {
                         .cmp(&right.inventory.display_name)
                 })
         });
-        let summary = sell_now_summary(&rows, inventory_nominal_value);
+        let summary = sell_now_summary(&rows);
         Ok(Some(SellNowView {
             inventory_metadata,
             inventory_summary,
@@ -3027,16 +3609,22 @@ impl SellNowService {
         let Some(inventory) = InventoryService::view(database, settings)? else {
             return Ok(None);
         };
-        let Some(item) = inventory.items.into_iter().find(|item| {
+        let Some(item) = aggregate_inventory_items(inventory.items.iter().filter(|item| {
             item.sellable_quantity > 0
                 && item.resolution == InventoryResolution::Resolved
                 && item.key.as_ref() == Some(key)
-        }) else {
+        })) else {
             return Ok(None);
         };
         let item_kind = market_item_kind(&item.tags, key);
         let Some(live) = live_pricing_service
-            .price_current_variant(database, key, item_kind, settings)
+            .price_current_variant(
+                database,
+                key,
+                item_kind,
+                settings,
+                Some(item.sellable_quantity),
+            )
             .await?
         else {
             return Ok(None);
@@ -3094,13 +3682,7 @@ fn build_sell_now_row(
         fair_price: recommendation
             .as_ref()
             .and_then(|recommendation| recommendation.fair_price),
-        closed_volume: recommendation
-            .as_ref()
-            .and_then(|recommendation| recommendation.closed_volume),
-        confidence: recommendation.as_ref().map_or(
-            platscope_domain::PriceConfidence::Unknown,
-            |recommendation| recommendation.confidence,
-        ),
+        average_daily_volume: trend.as_ref().and_then(|trend| trend.volume_avg_90d),
         timing: trend.as_ref().and_then(|trend| trend.timing),
     });
     let nominal_value = nominal_value(
@@ -3119,33 +3701,7 @@ fn build_sell_now_row(
     })
 }
 
-fn inventory_nominal_value(
-    database: &Mutex<Database>,
-    items: &[InventoryViewItem],
-) -> Result<f64, CoreError> {
-    let mut total = 0.0;
-    for item in items
-        .iter()
-        .filter(|item| item.resolution == InventoryResolution::Resolved)
-    {
-        let Some(key) = item.key.as_ref() else {
-            continue;
-        };
-        let recommendation = PricingService::price_current_variant(
-            database,
-            key,
-            market_item_kind(&item.tags, key),
-        )?;
-        total += nominal_value(
-            item.owned_quantity,
-            recommendation.and_then(|value| value.fair_price),
-        )
-        .unwrap_or(0.0);
-    }
-    Ok(total)
-}
-
-fn sell_now_summary(rows: &[SellNowRow], inventory_nominal_value: f64) -> SellNowSummary {
+fn sell_now_summary(rows: &[SellNowRow]) -> SellNowSummary {
     SellNowSummary {
         candidate_rows: rows
             .iter()
@@ -3169,7 +3725,6 @@ fn sell_now_summary(rows: &[SellNowRow], inventory_nominal_value: f64) -> SellNo
             .iter()
             .filter(|row| row.inventory.sellable_quantity > 0 && row.priority.score >= 50)
             .count(),
-        inventory_nominal_value,
         nominal_value: rows.iter().filter_map(|row| row.nominal_value).sum(),
     }
 }
@@ -3179,7 +3734,11 @@ fn market_item_kind(tags: &[String], key: &MarketVariantKey) -> MarketItemKind {
 }
 
 fn market_item_kind_from_slug(tags: &[String], slug: &str) -> MarketItemKind {
-    if tags.iter().any(|tag| tag == "riven") || slug.contains("_riven_") {
+    let is_veiled_riven_commodity = tags.iter().any(|tag| tag == "veiled_riven")
+        || (slug.contains("riven_mod") && slug.contains("(veiled)"));
+    if !is_veiled_riven_commodity
+        && (tags.iter().any(|tag| tag == "riven" || tag == "riven_mod") || slug.contains("_riven_"))
+    {
         MarketItemKind::Riven
     } else if tags.iter().any(|tag| tag == "relic") || slug.ends_with("_relic") {
         MarketItemKind::Relic
@@ -3194,7 +3753,7 @@ fn market_item_kind_from_slug(tags: &[String], slug: &str) -> MarketItemKind {
 fn relink_implicit_regular_inventory(
     snapshot: &ResolvedInventorySnapshot,
     catalog: Option<&ItemCatalog>,
-    available_variants: &HashSet<MarketVariantKey>,
+    _available_variants: &HashSet<MarketVariantKey>,
     platform: Platform,
 ) -> ResolvedInventorySnapshot {
     let Some(catalog) = catalog else {
@@ -3217,27 +3776,9 @@ fn relink_implicit_regular_inventory(
         key.platform = platform;
         key.subtype = Some("regular".to_owned());
         item.subtype = Some("regular".to_owned());
-        item.resolution = if market_variant_available(available_variants, key) {
-            InventoryResolution::Resolved
-        } else {
-            InventoryResolution::ExactVariantUnavailable
-        };
+        item.resolution = InventoryResolution::Resolved;
     }
     apply_keep_copies(&repaired, repaired.keep_copies)
-}
-
-fn market_variant_available(
-    available_variants: &HashSet<MarketVariantKey>,
-    key: &MarketVariantKey,
-) -> bool {
-    available_variants.iter().any(|candidate| {
-        candidate.slug == key.slug
-            && candidate.rank == key.rank
-            && (candidate.subtype == key.subtype
-                || (key.subtype.as_deref() == Some("regular") && candidate.subtype.is_none()))
-            && candidate.amber_stars == key.amber_stars
-            && candidate.cyan_stars == key.cyan_stars
-    })
 }
 
 /// Восстанавливает точный рыночный вариант реликвии по неизменяемому игровому пути WFCD.
@@ -3250,7 +3791,7 @@ fn relink_exact_relic_inventory(
     snapshot: &ResolvedInventorySnapshot,
     catalog: Option<&ItemCatalog>,
     metadata: Option<&GameMetadataSnapshot>,
-    available_variants: &HashSet<MarketVariantKey>,
+    _available_variants: &HashSet<MarketVariantKey>,
     platform: Platform,
 ) -> ResolvedInventorySnapshot {
     let Some(metadata) = metadata else {
@@ -3297,17 +3838,7 @@ fn relink_exact_relic_inventory(
             Some(subtype.clone()),
         )
         .expect("validated relic metadata creates a market key");
-        let resolution = if available_variants.iter().any(|candidate| {
-            candidate.slug == key.slug
-                && candidate.rank == key.rank
-                && candidate.subtype == key.subtype
-                && candidate.amber_stars == key.amber_stars
-                && candidate.cyan_stars == key.cyan_stars
-        }) {
-            InventoryResolution::Resolved
-        } else {
-            InventoryResolution::ExactVariantUnavailable
-        };
+        let resolution = InventoryResolution::Resolved;
 
         if let Some(catalog_item) = catalog_by_slug.get(definition.relic_slug.as_str()) {
             item.display_name_en = Some(catalog_item.display_name_en.clone());
@@ -3385,18 +3916,16 @@ fn inventory_view_from_snapshot(
                 key: item.key,
                 rank: item.rank,
                 subtype: item.subtype,
-                owned_quantity: item.tradeable_quantity,
+                owned_quantity: item.owned_quantity,
                 tradeable_quantity: item.tradeable_quantity,
-                untradeable_quantity: 0,
-                unknown_quantity: 0,
-                leveled_quantity: 0,
+                untradeable_quantity: item.untradeable_quantity,
+                unknown_quantity: item.unknown_quantity,
+                leveled_quantity: item.leveled_quantity,
                 equipped_quantity: item.equipped_quantity,
                 equipped_placements,
                 sellable_quantity: item.sellable_quantity,
                 resolution: item.resolution,
                 vault_status: VaultStatus::Unknown,
-                closed_median_48h: None,
-                has_reliable_price: false,
             }
         })
         .collect();
@@ -3431,10 +3960,7 @@ fn inventory_view_from_snapshot(
 }
 
 fn inventory_item_visible(item: &ResolvedInventoryItem) -> bool {
-    matches!(
-        item.resolution,
-        InventoryResolution::Resolved | InventoryResolution::ExactVariantUnavailable
-    ) && (item.tradeable_quantity > 0 || item.equipped_quantity > 0)
+    item.owned_quantity > 0 || item.equipped_quantity > 0
 }
 
 fn enrich_inventory_view(
@@ -3494,10 +4020,6 @@ fn enrich_inventory_view(
                 .map(|item| (item.game_ref.as_str(), item.display_name_ru.as_str()))
                 .collect()
         });
-    let market_source_date = lock_database(database)?
-        .current_market_snapshot()?
-        .map(|snapshot| snapshot.source_date);
-
     for item in &mut view.items {
         for placement in &mut item.equipped_placements {
             let localized = equipment_names_ru
@@ -3528,20 +4050,6 @@ fn enrich_inventory_view(
             .get(vault_slug)
             .copied()
             .unwrap_or(VaultStatus::Unknown);
-        let Some(key) = item.key.as_ref() else {
-            continue;
-        };
-        if item.resolution != InventoryResolution::Resolved {
-            continue;
-        }
-        item.closed_median_48h = if let Some(as_of) = market_source_date {
-            let database_guard = lock_database(database)?;
-            let points = market_history_with_regular_fallback(&database_guard, key, 2, as_of)?;
-            weighted_closed_median(&points)
-        } else {
-            None
-        };
-        item.has_reliable_price = item.closed_median_48h.is_some();
     }
     Ok(view)
 }
@@ -3614,33 +4122,6 @@ fn catalog_bulk_tradable(explicit: bool, tags: &[String]) -> bool {
                     | "ayatan_star"
             )
         })
-}
-
-/// Медиана дневных closed-агрегатов за последние 48 часов с весом по числу
-/// фактически закрытых сделок. Активные sell/buy-ордера сюда не попадают.
-fn weighted_closed_median(points: &[MarketHistoryPoint]) -> Option<f64> {
-    let mut priced: Vec<(f64, f64)> = points
-        .iter()
-        .filter_map(|point| {
-            let price = point.closed_median?;
-            (price.is_finite()
-                && price > 0.0
-                && point.closed_volume.is_finite()
-                && point.closed_volume > 0.0)
-                .then_some((price, point.closed_volume))
-        })
-        .collect();
-    priced.sort_by(|left, right| left.0.total_cmp(&right.0));
-    let total_volume: f64 = priced.iter().map(|(_, volume)| volume).sum();
-    let midpoint = total_volume / 2.0;
-    let mut cumulative = 0.0;
-    for (price, volume) in priced {
-        cumulative += volume;
-        if cumulative >= midpoint {
-            return Some(price);
-        }
-    }
-    None
 }
 
 fn vault_status_by_slug(
@@ -3752,7 +4233,11 @@ impl HistoryService {
                 target_days: HISTORY_TARGET_DAYS,
                 imported_days: 0,
                 skipped_days: 0,
-                coverage: lock_database(database)?.history_coverage()?,
+                coverage: lock_database(database)?.history_coverage_window_at_least(
+                    Utc::now().date_naive(),
+                    HISTORY_TARGET_DAYS,
+                    MARKET_PRICE_SCHEMA_VERSION,
+                )?,
                 failures: Vec::new(),
             });
         };
@@ -3765,7 +4250,9 @@ impl HistoryService {
                 break;
             }
             let source_date = current.source_date - ChronoDuration::days(i64::from(offset));
-            if lock_database(database)?.has_history_date(source_date)? {
+            if lock_database(database)?
+                .has_history_date_at_least(source_date, MARKET_PRICE_SCHEMA_VERSION)?
+            {
                 skipped_days += 1;
                 continue;
             }
@@ -3806,7 +4293,11 @@ impl HistoryService {
             target_days: HISTORY_TARGET_DAYS,
             imported_days,
             skipped_days,
-            coverage: lock_database(database)?.history_coverage()?,
+            coverage: lock_database(database)?.history_coverage_window_at_least(
+                current.source_date,
+                HISTORY_TARGET_DAYS,
+                MARKET_PRICE_SCHEMA_VERSION,
+            )?,
             failures,
         })
     }
@@ -3864,26 +4355,78 @@ impl HistoryService {
         let all_points =
             market_history_with_regular_fallback(&database, key, HISTORY_TARGET_DAYS, as_of)?;
         let first_date = as_of - ChronoDuration::days(i64::from(requested_days - 1));
-        let points = all_points
+        let points: Vec<MarketHistoryPoint> = all_points
             .iter()
             .filter(|point| point.source_date >= first_date)
             .cloned()
             .collect();
-        let trend = platscope_trends::calculate(
-            &all_points,
+        let mut trend = platscope_trends::calculate(
+            &points,
             TrendContext {
                 as_of,
                 current_price,
                 live_lowest_ask,
             },
         );
+        let minimum_schema_version = if key.charges.is_some() {
+            MARKET_PRICE_SCHEMA_VERSION
+        } else {
+            1
+        };
+        let coverage_7d =
+            database.history_coverage_window_at_least(as_of, 7, minimum_schema_version)?;
+        let coverage_30d =
+            database.history_coverage_window_at_least(as_of, 30, minimum_schema_version)?;
+        let coverage_90d =
+            database.history_coverage_window_at_least(as_of, 90, minimum_schema_version)?;
+        suppress_incomplete_history_windows(
+            &mut trend,
+            coverage_7d.day_count,
+            coverage_30d.day_count,
+            coverage_90d.day_count,
+        );
+        let coverage = match requested_days {
+            7 => coverage_7d,
+            30 => coverage_30d,
+            90 => coverage_90d,
+            _ => unreachable!("requested history range was validated"),
+        };
         Ok(MarketHistoryView {
             key: key.clone(),
             requested_days,
             points,
             trend,
-            coverage: database.history_coverage()?,
+            coverage,
         })
+    }
+}
+
+fn suppress_incomplete_history_windows(
+    trend: &mut TrendSummary,
+    coverage_7d: u64,
+    coverage_30d: u64,
+    coverage_90d: u64,
+) {
+    // Отсутствующая строка товара в загруженном дне означает нулевой объём.
+    // Отсутствующий сам дневной снимок означает неизвестные данные и не должен
+    // незаметно превращаться в ноль или в короткий «90-дневный» тренд.
+    if coverage_7d < 7 {
+        trend.median_7d = None;
+        trend.change_7d = None;
+        trend.volume_avg_7d = None;
+    }
+    if coverage_30d < 30 {
+        trend.median_30d = None;
+        trend.change_30d = None;
+        trend.volume_avg_30d = None;
+    }
+    if coverage_90d < 90 {
+        trend.median_90d = None;
+        trend.change_90d = None;
+        trend.volume_avg_90d = None;
+        trend.historical_low = None;
+        trend.historical_high = None;
+        trend.timing = None;
     }
 }
 
@@ -4097,6 +4640,12 @@ fn validate_relative_size(
     candidate: &platscope_domain::SnapshotMetadata,
 ) -> Result<(), ProviderError> {
     if let Some(previous) = previous {
+        if candidate.source_date < previous.source_date {
+            return Err(ProviderError::validation(format!(
+                "snapshot source_date {} старше текущего {}",
+                candidate.source_date, previous.source_date
+            )));
+        }
         validate_relative_count(
             Some(previous.item_count),
             candidate.item_count,
@@ -4255,6 +4804,36 @@ mod tests {
         SnapshotMetadata,
     };
 
+    fn empty_inventory_view(schema_version: u32) -> InventoryView {
+        InventoryView {
+            metadata: InventorySnapshotMetadata {
+                source: InventorySource::ReadOnlyScan,
+                observed_at: Utc::now(),
+                schema_version,
+                item_count: 0,
+                checksum_sha256: "empty-inventory".into(),
+            },
+            keep_copies: 1,
+            mod_usage_scanned: false,
+            summary: InventorySummary {
+                owned_quantity: 0,
+                sellable_quantity: 0,
+                resolved_rows: 0,
+                attention_rows: 0,
+            },
+            items: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn old_inventory_without_void_traces_keeps_the_balance_unknown() {
+        assert_eq!(void_trace_balance(&empty_inventory_view(1)), None);
+        assert_eq!(
+            void_trace_balance(&empty_inventory_view(READ_ONLY_SCHEMA_VERSION)),
+            Some(0)
+        );
+    }
+
     #[test]
     fn current_nightwave_tag_resolves_exact_currency() {
         assert_eq!(
@@ -4290,6 +4869,9 @@ mod tests {
                 game_ref: Some("/Lotus/Upgrades/Mods/Aura/EnemyArmorReductionAuraMod".into()),
                 bulk_tradable: false,
                 max_rank: Some(5),
+                max_charges: None,
+                max_amber_stars: None,
+                max_cyan_stars: None,
                 subtypes: Vec::new(),
                 tags: vec!["mod".into()],
             }],
@@ -4460,6 +5042,83 @@ mod tests {
     }
 
     #[test]
+    fn loid_pack_uses_fresh_sell_only_prices_with_a_conservative_haircut() {
+        let now = Utc::now();
+        let catalog = ItemCatalog {
+            metadata: CatalogMetadata {
+                provider: ProviderId::WarframeMarket,
+                fetched_at: now,
+                schema_version: CURRENT_CATALOG_SCHEMA_VERSION,
+                item_count: 1,
+                checksum_sha256: "arcane-catalog".into(),
+            },
+            items: vec![CatalogItem {
+                item_id: "arcane-id".into(),
+                slug: "arcane_test".into(),
+                display_name_en: "Arcane Test".into(),
+                display_name_ru: Some("Тестовый мистификатор".into()),
+                thumb: None,
+                thumb_ru: None,
+                game_ref: Some("/Lotus/Test/Arcane".into()),
+                bulk_tradable: false,
+                max_rank: Some(5),
+                max_charges: None,
+                max_amber_stars: None,
+                max_cyan_stars: None,
+                subtypes: Vec::new(),
+                tags: vec!["arcane_enhancement".into()],
+            }],
+        };
+        let market = NormalizedMarketSnapshot {
+            metadata: SnapshotMetadata {
+                provider: ProviderId::RelicsRun,
+                source_date: now.date_naive(),
+                fetched_at: now,
+                schema_version: 1,
+                item_count: 1,
+                record_count: 1,
+                checksum_sha256: "arcane-market".into(),
+            },
+            records: vec![MarketRecord {
+                key: MarketVariantKey::new("arcane_test", Platform::Pc, Some(0), None::<String>)
+                    .expect("key"),
+                external_item_id: "arcane-id".into(),
+                display_name_en: "Arcane Test".into(),
+                observed_at: now,
+                order_type: MarketOrderType::Sell,
+                median: Some(10.0),
+                average: Some(10.0),
+                min_price: Some(9.0),
+                max_price: Some(11.0),
+                volume: 100.0,
+                raw_json: "{}".into(),
+            }],
+        };
+        let mut database = Database::open_in_memory().expect("database");
+        database.promote_catalog(&catalog).expect("catalog");
+        database.promote_market_snapshot(&market).expect("market");
+        let database = Mutex::new(database);
+        let pack = ArcanePackDefinition {
+            key: "test-pack".into(),
+            display_name_ru: "Тестовый набор".into(),
+            rolls: vec![HashMap::from([("RARE".into(), 1.0)])],
+            components: vec![platscope_domain::ArcanePackComponentDefinition {
+                game_ref: "/Lotus/Test/Arcane".into(),
+                rarity: "RARE".into(),
+            }],
+        };
+        let catalog_by_ref = HashMap::from([("/Lotus/Test/Arcane", &catalog.items[0])]);
+
+        let result = best_arcane_pack(&database, &AppSettings::default(), &[pack], &catalog_by_ref)
+            .expect("calculation")
+            .expect("pack remains calculable");
+
+        assert_eq!(result.0, "Тестовый набор");
+        assert!((result.1 - 7.0).abs() < f64::EPSILON);
+        assert!((result.2 - 100.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
     fn arcane_sale_keeps_reserve_and_dissolves_only_the_remainder() {
         let definition = platscope_domain::ArcaneDissolutionDefinition {
             slug: "arcane_test".into(),
@@ -4521,6 +5180,157 @@ mod tests {
     }
 
     #[test]
+    fn missing_syndicate_title_is_inferred_from_cumulative_standing() {
+        let max_rank = SyndicateStanding {
+            tag: "SteelMeridianSyndicate".into(),
+            standing: 240_000,
+            title: None,
+        };
+        assert!(syndicate_offer_accessible(&max_rank, "Protector"));
+        assert!(syndicate_offer_accessible(&max_rank, "General"));
+
+        let rank_three = SyndicateStanding {
+            standing: 140_999,
+            ..max_rank
+        };
+        assert!(!syndicate_offer_accessible(&rank_three, "Protector"));
+        assert!(!syndicate_offer_accessible(&rank_three, "General"));
+    }
+
+    #[test]
+    fn syndicate_converter_uses_spendable_remainder_not_lifetime_standing() {
+        let standing = SyndicateStanding {
+            tag: "SteelMeridianSyndicate".into(),
+            standing: 366_323,
+            title: None,
+        };
+
+        assert_eq!(syndicate_spendable_standing(&standing), 126_323);
+        assert!(syndicate_offer_accessible(&standing, "General"));
+    }
+
+    #[test]
+    fn title_from_another_syndicate_is_not_treated_as_access() {
+        let standing = SyndicateStanding {
+            tag: "NewLokaSyndicate".into(),
+            standing: 372_000,
+            title: None,
+        };
+        assert!(!syndicate_offer_accessible(&standing, "Exalted"));
+        assert!(syndicate_offer_accessible(&standing, "Flawless"));
+    }
+
+    #[test]
+    fn single_currency_converter_combines_offers_to_use_balance_profitably() {
+        let candidate = |slug: &str, cost: u64, value: f64| ResourceConversionAction {
+            vendor_name: "Тест".into(),
+            currency: ResourceCurrency::NightwaveCred,
+            balance: 10,
+            cost,
+            item_slug: slug.into(),
+            item_name: slug.into(),
+            image_url: None,
+            quantity: 1,
+            unit_price: value,
+            estimated_platinum: value,
+            included_in_total: true,
+        };
+        let actions = optimize_single_currency(
+            10,
+            vec![candidate("six", 6, 10.0), candidate("four", 4, 7.0)],
+        );
+
+        assert_eq!(actions.len(), 2);
+        assert_eq!(actions.iter().map(|action| action.quantity).sum::<u32>(), 2);
+        let total = actions
+            .iter()
+            .map(|action| action.estimated_platinum)
+            .sum::<f64>();
+        assert!((total - 17.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn dual_currency_converter_combines_baro_offers() {
+        let candidate = |slug: &str, ducats: u64, credits: u64, value: f64| DualCurrencyCandidate {
+            action: ResourceConversionAction {
+                vendor_name: "Баро".into(),
+                currency: ResourceCurrency::Ducat,
+                balance: 10,
+                cost: ducats,
+                item_slug: slug.into(),
+                item_name: slug.into(),
+                image_url: None,
+                quantity: 1,
+                unit_price: value,
+                estimated_platinum: value,
+                included_in_total: true,
+            },
+            secondary_cost: credits,
+        };
+        let actions = optimize_dual_currency(
+            10,
+            10,
+            vec![
+                candidate("heavy", 6, 4, 10.0),
+                candidate("light", 4, 6, 9.0),
+            ],
+        );
+
+        assert_eq!(actions.len(), 2);
+        let total = actions
+            .iter()
+            .map(|action| action.estimated_platinum)
+            .sum::<f64>();
+        assert!((total - 19.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn arcane_without_market_price_is_held_and_equipped_copies_are_protected() {
+        let definition = platscope_domain::ArcaneDissolutionDefinition {
+            slug: "test_arcane".into(),
+            game_ref: "/Lotus/Test/Arcane".into(),
+            display_name_en: "Test Arcane".into(),
+            display_name_ru: Some("Тестовый мистификатор".into()),
+            image_url: None,
+            vosfor: 20,
+        };
+        let input = ArcaneDecisionInput {
+            definition: &definition,
+            display_name: "Тестовый мистификатор".into(),
+            rank: 0,
+            market_price_each: None,
+            vosfor_each: 20,
+            equivalent_platinum_each: 4.0,
+        };
+        let item = ResolvedInventoryItem {
+            canonical_game_id: definition.game_ref.clone(),
+            display_name_en: Some(definition.display_name_en.clone()),
+            display_name_ru: definition.display_name_ru.clone(),
+            tags: vec!["arcane_enhancement".into()],
+            key: None,
+            rank: Some(0),
+            subtype: None,
+            owned_quantity: 5,
+            tradeable_quantity: 5,
+            untradeable_quantity: 0,
+            unknown_quantity: 0,
+            leveled_quantity: 0,
+            equipped_quantity: 3,
+            equipped_tradeable_quantity: 3,
+            equipped_placements: Vec::new(),
+            sellable_quantity: 2,
+            resolution: InventoryResolution::Resolved,
+        };
+        let mut decisions = ArcaneDecisionBuckets::default();
+
+        append_arcane_decisions(&item, 1, &input, &mut decisions);
+
+        assert!(decisions.sell.is_empty());
+        assert!(decisions.dissolve.is_empty());
+        assert_eq!(decisions.hold[0].quantity, 2);
+    }
+
+    #[test]
     fn equipment_names_use_russian_localization_without_internal_paths() {
         assert_eq!(
             clean_equipment_display_name(
@@ -4561,42 +5371,7 @@ mod tests {
     }
 
     #[test]
-    fn closed_median_48h_uses_closed_trade_volume_as_weight() {
-        let points = vec![
-            MarketHistoryPoint {
-                source_date: NaiveDate::from_ymd_opt(2026, 8, 26).expect("valid date"),
-                closed_median: Some(20.0),
-                closed_volume: 3.0,
-                sell_median: Some(18.0),
-                buy_median: Some(16.0),
-            },
-            MarketHistoryPoint {
-                source_date: NaiveDate::from_ymd_opt(2026, 8, 27).expect("valid date"),
-                closed_median: Some(30.0),
-                closed_volume: 9.0,
-                sell_median: Some(28.0),
-                buy_median: Some(25.0),
-            },
-        ];
-
-        assert_eq!(weighted_closed_median(&points), Some(30.0));
-    }
-
-    #[test]
-    fn closed_median_48h_ignores_days_without_real_sales() {
-        let points = vec![MarketHistoryPoint {
-            source_date: NaiveDate::from_ymd_opt(2026, 8, 27).expect("valid date"),
-            closed_median: Some(30.0),
-            closed_volume: 0.0,
-            sell_median: Some(28.0),
-            buy_median: Some(25.0),
-        }];
-
-        assert_eq!(weighted_closed_median(&points), None);
-    }
-
-    #[test]
-    fn inventory_view_exposes_tradeable_items_without_guessing_variants() {
+    fn inventory_view_keeps_owned_items_visible_without_guessing_sellability() {
         let visible = ResolvedInventoryItem {
             canonical_game_id: "/Lotus/Test/Tradeable".into(),
             display_name_en: Some("Tradeable".into()),
@@ -4617,11 +5392,11 @@ mod tests {
             resolution: InventoryResolution::Resolved,
         };
         assert!(inventory_item_visible(&visible));
-        assert!(!inventory_item_visible(&ResolvedInventoryItem {
+        assert!(inventory_item_visible(&ResolvedInventoryItem {
             tradeable_quantity: 0,
             ..visible.clone()
         }));
-        assert!(!inventory_item_visible(&ResolvedInventoryItem {
+        assert!(inventory_item_visible(&ResolvedInventoryItem {
             resolution: InventoryResolution::UnknownItem,
             ..visible
         }));
@@ -4702,6 +5477,9 @@ mod tests {
                 game_ref: None,
                 bulk_tradable: false,
                 max_rank: Some(5),
+                max_charges: None,
+                max_amber_stars: None,
+                max_cyan_stars: None,
                 subtypes: vec!["regular".into(), "atragraph".into()],
                 tags: vec!["mod".into()],
             }],
@@ -4723,7 +5501,7 @@ mod tests {
             Some("regular")
         );
         assert_eq!(repaired.items[0].resolution, InventoryResolution::Resolved);
-        assert_eq!(repaired.items[0].sellable_quantity, 2);
+        assert_eq!(repaired.items[0].sellable_quantity, 0);
     }
 
     fn relic_refinement_fixtures() -> [(
@@ -4801,6 +5579,9 @@ mod tests {
                 game_ref: None,
                 bulk_tradable: true,
                 max_rank: None,
+                max_charges: None,
+                max_amber_stars: None,
+                max_cyan_stars: None,
                 subtypes: refinements
                     .iter()
                     .map(|(_, _, subtype)| (*subtype).into())
@@ -4999,16 +5780,53 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![26, 25, 24, 23, 22]
         );
+
+        let cheap_lot = LiveOrder {
+            side: LiveOrderSide::Sell,
+            platinum: 18,
+            quantity: 6,
+            per_trade: 3,
+            user_status: UserStatus::Online,
+        };
+        let expensive_single = LiveOrder {
+            side: LiveOrderSide::Sell,
+            platinum: 7,
+            quantity: 1,
+            per_trade: 1,
+            user_status: UserStatus::Online,
+        };
+        let mixed = [&expensive_single, &cheap_lot];
+        let sorted = bounded_live_orders(&mixed);
+        assert_eq!(sorted[0].platinum, 18);
+        assert_eq!(sorted[0].per_trade, 3);
     }
 
     #[test]
-    fn riven_catalog_items_use_the_separate_pricing_boundary() {
+    fn unique_riven_catalog_items_use_the_separate_pricing_boundary() {
         let key = MarketVariantKey::new("soma_riven_mod", Platform::Pc, None, None::<String>)
             .expect("Riven key");
         assert_eq!(
             market_item_kind(&["riven".into(), "mod".into()], &key),
             MarketItemKind::Riven
         );
+    }
+
+    #[test]
+    fn veiled_riven_commodities_use_exact_standard_market_prices() {
+        for (slug, tags) in [
+            (
+                "rifle_riven_mod_(veiled)",
+                vec!["mod".into(), "riven_mod".into(), "veiled_riven".into()],
+            ),
+            (
+                "companion_weapon_riven_mod_(veiled)",
+                vec!["mod".into(), "riven".into()],
+            ),
+        ] {
+            let key = MarketVariantKey::new(slug, Platform::Pc, None, Some("unrevealed"))
+                .expect("veiled Riven key");
+            assert_eq!(market_item_kind(&tags, &key), MarketItemKind::Standard);
+        }
     }
 
     #[test]
@@ -5038,6 +5856,9 @@ mod tests {
                 game_ref: None,
                 bulk_tradable: false,
                 max_rank: None,
+                max_charges: None,
+                max_amber_stars: None,
+                max_cyan_stars: None,
                 subtypes: Vec::new(),
                 tags: vec!["prime".into(), "set".into()],
             }],
@@ -5119,6 +5940,9 @@ mod tests {
                 game_ref: None,
                 bulk_tradable: false,
                 max_rank: Some(5),
+                max_charges: None,
+                max_amber_stars: None,
+                max_cyan_stars: None,
                 subtypes: vec!["regular".into(), "atragraph".into()],
                 tags: vec!["mod".into()],
             }],
@@ -5233,6 +6057,7 @@ mod tests {
                 market_key,
                 MarketItemKind::Standard,
                 &AppSettings::default(),
+                None,
             )
             .await
             .expect("live pricing succeeds")
@@ -5263,6 +6088,7 @@ mod tests {
                 market_key,
                 MarketItemKind::Standard,
                 &AppSettings::default(),
+                None,
             )
             .await
             .expect("cached live pricing succeeds")
@@ -5335,6 +6161,36 @@ mod tests {
         assert_eq!(settings.live_quote_ttl_seconds, 90);
         assert_eq!(settings.keep_inventory_copies, 1);
         assert!(settings.crossplay);
+    }
+
+    #[test]
+    fn incomplete_archive_never_masquerades_as_a_full_market_window() {
+        let mut trend = TrendSummary {
+            median_7d: Some(10.0),
+            median_30d: Some(11.0),
+            median_90d: Some(12.0),
+            change_7d: Some(1.0),
+            change_30d: Some(2.0),
+            change_90d: Some(3.0),
+            volume_avg_7d: Some(4.0),
+            volume_avg_30d: Some(5.0),
+            volume_avg_90d: Some(6.0),
+            historical_low: Some(7.0),
+            historical_high: Some(14.0),
+            timing: Some(platscope_trends::TimingSignal::Sell),
+            trusted_days: 40,
+        };
+
+        suppress_incomplete_history_windows(&mut trend, 7, 30, 89);
+
+        assert_eq!(trend.median_7d, Some(10.0));
+        assert_eq!(trend.median_30d, Some(11.0));
+        assert_eq!(trend.median_90d, None);
+        assert_eq!(trend.change_90d, None);
+        assert_eq!(trend.volume_avg_90d, None);
+        assert_eq!(trend.historical_low, None);
+        assert_eq!(trend.historical_high, None);
+        assert_eq!(trend.timing, None);
     }
 
     #[test]

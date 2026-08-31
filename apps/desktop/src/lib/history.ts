@@ -56,10 +56,14 @@ export function buildHistoryChart(
   width = 320,
   height = 150,
 ): HistoryChartModel | null {
-  const priced = points.filter(
-    (point): point is MarketHistoryPoint & { closedMedian: number } =>
-      point.closedMedian !== null && Number.isFinite(point.closedMedian),
-  );
+  const priced = [...points]
+    .filter(
+      (point): point is MarketHistoryPoint & { closedMedian: number } =>
+        point.closedMedian !== null
+        && Number.isFinite(point.closedMedian)
+        && Number.isFinite(Date.parse(`${point.sourceDate}T00:00:00Z`)),
+    )
+    .sort((left, right) => left.sourceDate.localeCompare(right.sourceDate));
   if (priced.length < 2) return null;
   const prices = priced.map((point) => point.closedMedian);
   const rawMin = Math.min(...prices);
@@ -71,11 +75,12 @@ export function buildHistoryChart(
   const plotRight = width - 8;
   const plotTop = 10;
   const plotBottom = height - 24;
-  const dots = priced.map((point, index) => {
-    const x =
-      priced.length === 1
-        ? (plotLeft + plotRight) / 2
-        : plotLeft + (index / (priced.length - 1)) * (plotRight - plotLeft);
+  const firstTimestamp = Date.parse(`${priced[0].sourceDate}T00:00:00Z`);
+  const lastTimestamp = Date.parse(`${priced.at(-1)?.sourceDate}T00:00:00Z`);
+  const dateSpan = Math.max(1, lastTimestamp - firstTimestamp);
+  const dots = priced.map((point) => {
+    const timestamp = Date.parse(`${point.sourceDate}T00:00:00Z`);
+    const x = plotLeft + ((timestamp - firstTimestamp) / dateSpan) * (plotRight - plotLeft);
     const y =
       plotBottom -
       ((point.closedMedian - minPrice) / Math.max(0.001, maxPrice - minPrice)) *

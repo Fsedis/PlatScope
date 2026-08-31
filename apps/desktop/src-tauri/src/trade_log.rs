@@ -1,14 +1,36 @@
-//! Read-only parser for confirmed Warframe trades written to `EE.log`.
+//! Read-only разбор подтверждённых обменов Warframe из `EE.log`.
 //!
-//! The dialog shape and state-machine safeguards follow the approach used by
-//! `TennoWorth` (MIT): a dialog is buffered, sealed by the next framework line and
-//! emitted only after the game's explicit success marker.
+//! Диалог буферизуется и превращается в событие только после явного сообщения игры
+//! об успешном обмене. Поддерживаются фактические русские и английские строки клиента.
 
 use platscope_storage::TradeItem;
 
 pub const DIALOG_START: &str = "Are you sure you want to accept this trade?";
 pub const TRADE_SUCCESS: &str = "The trade was successful!";
+pub const DIALOG_START_RU: &str = "Вы хотите принять условия сделки?";
+pub const TRADE_SUCCESS_RU: &str = "Обмен успешно завершён!";
 const DIALOG_TIMEOUT_MS: u64 = 120_000;
+
+#[derive(Clone, Copy)]
+struct TradeDialogMarkers {
+    offering: &'static str,
+    receive_from: &'static str,
+    following: &'static str,
+    platinum: &'static str,
+}
+
+const ENGLISH_MARKERS: TradeDialogMarkers = TradeDialogMarkers {
+    offering: "You are offering:",
+    receive_from: "and will receive from",
+    following: "the following:",
+    platinum: "Platinum",
+};
+const RUSSIAN_MARKERS: TradeDialogMarkers = TradeDialogMarkers {
+    offering: "Вы предлагаете:",
+    receive_from: "и получаете от",
+    following: "следующее:",
+    platinum: "Платина",
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedTrade {
@@ -29,7 +51,7 @@ pub struct TradeMachine {
 
 impl TradeMachine {
     pub fn feed(&mut self, line: &str, now_ms: u64) -> Option<ParsedTrade> {
-        if line.contains(DIALOG_START) {
+        if is_trade_dialog_start(line) {
             self.buffer = Some(vec![line.to_owned()]);
             self.started_ms = now_ms;
             self.sealed = line.contains("leftItem=") || line.contains("rightItem=");
@@ -44,7 +66,7 @@ impl TradeMachine {
             }
         }
 
-        if line.contains(TRADE_SUCCESS) {
+        if is_trade_success(line) {
             let buffer = self.buffer.take()?;
             self.sealed = false;
             return parse_trade_dialog(&buffer);
@@ -55,16 +77,17 @@ impl TradeMachine {
 
 pub fn parse_trade_dialog(lines: &[String]) -> Option<ParsedTrade> {
     let text = lines.join("\n");
-    let start = text.find("You are offering:")?;
+    let markers = dialog_markers(&text)?;
+    let start = text.find(markers.offering)?;
     let description = &text[start..];
-    let divider_start = description.find("and will receive from")?;
-    let after_divider = &description[divider_start + "and will receive from".len()..];
-    let following = after_divider.find("the following:")?;
+    let divider_start = description.find(markers.receive_from)?;
+    let after_divider = &description[divider_start + markers.receive_from.len()..];
+    let following = after_divider.find(markers.following)?;
     let partner = strip_glyphs(after_divider[..following].trim());
-    let offering = &description["You are offering:".len()..divider_start];
-    let receiving = &after_divider[following + "the following:".len()..];
-    let (given_items, platinum_given) = parse_item_block(offering);
-    let (received_items, platinum_received) = parse_item_block(receiving);
+    let offering = &description[markers.offering.len()..divider_start];
+    let receiving = &after_divider[following + markers.following.len()..];
+    let (given_items, platinum_given) = parse_item_block(offering, markers.platinum);
+    let (received_items, platinum_received) = parse_item_block(receiving, markers.platinum);
     let log_stamp = lines
         .first()
         .and_then(|line| line.split_whitespace().next())
@@ -88,7 +111,25 @@ pub fn parse_trade_dialog(lines: &[String]) -> Option<ParsedTrade> {
     })
 }
 
-fn parse_item_block(block: &str) -> (Vec<TradeItem>, u32) {
+fn is_trade_dialog_start(line: &str) -> bool {
+    line.contains(DIALOG_START) || line.contains(DIALOG_START_RU)
+}
+
+fn is_trade_success(line: &str) -> bool {
+    line.contains(TRADE_SUCCESS) || line.contains(TRADE_SUCCESS_RU)
+}
+
+fn dialog_markers(text: &str) -> Option<TradeDialogMarkers> {
+    [RUSSIAN_MARKERS, ENGLISH_MARKERS]
+        .into_iter()
+        .find(|markers| {
+            text.contains(markers.offering)
+                && text.contains(markers.receive_from)
+                && text.contains(markers.following)
+        })
+}
+
+fn parse_item_block(block: &str, platinum_label: &str) -> (Vec<TradeItem>, u32) {
     let mut items: Vec<TradeItem> = Vec::new();
     let mut platinum = 0_u32;
     for line in block.lines() {
@@ -106,7 +147,7 @@ fn parse_item_block(block: &str) -> (Vec<TradeItem>, u32) {
         if cleaned.is_empty() {
             continue;
         }
-        if let Some(rest) = cleaned.strip_prefix("Platinum") {
+        if let Some(rest) = cleaned.strip_prefix(platinum_label) {
             let rest = rest.trim();
             if rest.is_empty() {
                 platinum = platinum.saturating_add(1);
@@ -186,6 +227,27 @@ mod tests {
         "1234.567 Sys [Info]: Dialog.lua: Dialog::CreateOkCancel(description=Are you sure you want to accept this trade?\nYou are offering:\nPrimed Flow\nLith C5 Relic x 3\nand will receive from SomeTenno\u{e000} the following:\nPlatinum x 45, leftItem=/Menu/Confirm_Item_Ok)".to_owned()
     }
 
+    fn russian_sale_dialog() -> Vec<String> {
+        [
+            "14809.831 Script [Info]: Dialog.lua: Dialog::CreateOkCancel(description=Вы хотите принять условия сделки? Вы предлагаете:",
+            "",
+            "ЧЕРТЁЖ: Хильдрин Прайм: Каркас",
+            "",
+            "ЧЕРТЁЖ: Хильдрин Прайм: Нейрооптика",
+            "",
+            "ЧЕРТЁЖ: Хильдрин Прайм: Система",
+            "",
+            "ЧЕРТЁЖ: Хильдрин Прайм",
+            "",
+            "и получаете от BuyerTenno\u{e000} следующее:",
+            "",
+            "Платина x 69, title= leftItem=/Menu/Confirm_Item_Ok, rightItem=/Menu/Confirm_Item_Cancel)",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
+    }
+
     #[test]
     fn parses_confirmed_sale_with_stacks_and_platform_glyph() {
         let mut machine = TradeMachine::default();
@@ -210,6 +272,47 @@ mod tests {
             ]
         );
         assert_eq!(trade.log_stamp.as_deref(), Some("1234.567"));
+    }
+
+    #[test]
+    fn parses_confirmed_russian_sale_from_current_ee_log_shape() {
+        let mut machine = TradeMachine::default();
+        for line in russian_sale_dialog() {
+            assert!(machine.feed(&line, 0).is_none());
+        }
+        let trade = machine
+            .feed(
+                "14814.325 Script [Info]: Dialog.lua: Dialog::CreateOk(description=Обмен успешно завершён!, title= leftItem=/Menu/Confirm_Item_Ok)",
+                5_000,
+            )
+            .expect("русский подтверждённый обмен");
+
+        assert_eq!(trade.partner.as_deref(), Some("BuyerTenno"));
+        assert_eq!(trade.platinum_received, 69);
+        assert_eq!(trade.platinum_given, 0);
+        assert_eq!(
+            trade.given_items,
+            vec![
+                TradeItem {
+                    name: "ЧЕРТЁЖ: Хильдрин Прайм: Каркас".into(),
+                    quantity: 1,
+                },
+                TradeItem {
+                    name: "ЧЕРТЁЖ: Хильдрин Прайм: Нейрооптика".into(),
+                    quantity: 1,
+                },
+                TradeItem {
+                    name: "ЧЕРТЁЖ: Хильдрин Прайм: Система".into(),
+                    quantity: 1,
+                },
+                TradeItem {
+                    name: "ЧЕРТЁЖ: Хильдрин Прайм".into(),
+                    quantity: 1,
+                },
+            ]
+        );
+        assert!(trade.received_items.is_empty());
+        assert_eq!(trade.log_stamp.as_deref(), Some("14809.831"));
     }
 
     #[test]

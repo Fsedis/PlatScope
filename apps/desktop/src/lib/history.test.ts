@@ -26,6 +26,16 @@ describe("history presentation", () => {
     expect(model?.dots).toHaveLength(2);
   });
 
+  it("сохраняет календарные разрывы между точками", () => {
+    const model = buildHistoryChart([
+      { sourceDate: "2026-08-01", closedMedian: 10, closedVolume: 5, sellMedian: null, buyMedian: null },
+      { sourceDate: "2026-08-02", closedMedian: 11, closedVolume: 5, sellMedian: null, buyMedian: null },
+      { sourceDate: "2026-08-11", closedMedian: 12, closedVolume: 5, sellMedian: null, buyMedian: null },
+    ]);
+    const [first, second, last] = model?.dots ?? [];
+    expect(second.x - first.x).toBeLessThan((last.x - first.x) / 2);
+  });
+
   it("локализует изменение и момент продажи", () => {
     expect(formatChange(12.34)).toBe("+12,3%");
     expect(timingLabel("peak")).toContain("Лучший момент");

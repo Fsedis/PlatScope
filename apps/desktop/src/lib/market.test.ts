@@ -22,6 +22,7 @@ function row(name: string, fair: number | null, volume: number): MarketSearchRow
         slug: name.toLowerCase(),
         platform: "pc",
         rank: null,
+        charges: null,
         subtype: null,
         amberStars: null,
         cyanStars: null,
@@ -77,6 +78,12 @@ describe("market presentation helpers", () => {
     );
   });
 
+  it("при любой сортировке оставляет отсутствующие числа внизу", () => {
+    const rows = [row("Unknown", null, 0), row("Known", 10, 5)];
+    expect(filterAndSortRows(rows, "all", "fair", "asc").at(-1)?.displayName).toBe("Unknown");
+    expect(filterAndSortRows(rows, "all", "fair", "desc").at(-1)?.displayName).toBe("Unknown");
+  });
+
   it("сортирует числовые столбцы, не смешивая строковые значения", () => {
     const rows = [row("Low", 5, 2), row("High", 20, 10)];
     expect(filterAndSortRows(rows, "all", "fair", "desc")[0]?.displayName).toBe(
@@ -90,11 +97,24 @@ describe("market presentation helpers", () => {
         slug: "axi_test_relic",
         platform: "pc",
         rank: null,
+        charges: null,
         subtype: "radiant",
         amberStars: null,
         cyanStars: null,
       }),
     ).toBe("radiant");
+  });
+
+  it("показывает число зарядов точного варианта", () => {
+    expect(variantLabel({
+      slug: "charged_item",
+      platform: "pc",
+      rank: null,
+      charges: 3,
+      subtype: null,
+      amberStars: null,
+      cyanStars: null,
+    })).toContain("заряды 3");
   });
 
   it("явно помечает stale live-кэш", () => {

@@ -10,7 +10,7 @@ import {
 
 function recommendation(overrides: Partial<PriceRecommendation> = {}): PriceRecommendation {
   return {
-    key: { slug: "test", platform: "pc", rank: null, subtype: null, amberStars: null, cyanStars: null },
+    key: { slug: "test", platform: "pc", rank: null, charges: null, subtype: null, amberStars: null, cyanStars: null },
     provider: "relics_run",
     sourceDate: "2026-08-29",
     fairPrice: null,

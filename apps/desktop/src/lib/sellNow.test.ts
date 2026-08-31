@@ -30,6 +30,7 @@ function row(
     slug,
     platform: "pc" as const,
     rank: null,
+    charges: null,
     subtype: null,
     amberStars: null,
     cyanStars: null,
@@ -53,8 +54,6 @@ function row(
     sellableQuantity: 1,
     resolution: "resolved",
     vaultStatus: "unknown",
-    closedMedian48h: fairPrice,
-    hasReliablePrice: fairPrice !== null,
   };
   const recommendation = {
     key,
@@ -99,7 +98,6 @@ function row(
         quantity: 0.2,
         price: 0.4,
         liquidity: 0.5,
-        confidenceMultiplier: 1,
         timingMultiplier: 1,
       },
       reasons: [],
@@ -185,6 +183,19 @@ describe("sell now presentation", () => {
     expect(
       filterAndSortSellNowRows([unpriced], { ...filters, preset: "unpriced" }),
     ).toEqual([unpriced]);
+  });
+
+  it("keeps missing numeric values last in both directions", () => {
+    const unpriced = row("missing", 0, null, null);
+    const priced = row("priced", 10, 5, "neutral");
+    for (const sortDirection of ["asc", "desc"] as const) {
+      const result = filterAndSortSellNowRows([unpriced, priced], {
+        ...filters,
+        sortKey: "fair",
+        sortDirection,
+      });
+      expect(result.at(-1)).toBe(unpriced);
+    }
   });
 
   it("sell now preset requires priced SELL or PEAK timing", () => {
