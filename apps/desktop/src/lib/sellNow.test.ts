@@ -5,6 +5,7 @@ import type { PriceRecommendation } from "./market";
 import {
   filterAndSortSellNowRows,
   priorityReasonMessages,
+  resolveSellNowSelection,
   sellPriorityRanks,
   sellNowRowIdentity,
   type SellNowFilters,
@@ -261,6 +262,20 @@ describe("sell now presentation", () => {
         category: "warframe",
       }).map((item) => item.inventory.canonicalGameId),
     ).toEqual(["warframe_set"]);
+  });
+
+  it("switches selection to the first row of the newly filtered item type", () => {
+    const relic = row("lith_a1_relic", 40, 20, "neutral");
+    relic.inventory.tags = ["relic", "lith"];
+    const mod = row("primed_flow", 40, 20, "neutral");
+    mod.inventory.tags = ["mod"];
+
+    const visibleMods = filterAndSortSellNowRows([relic, mod], {
+      ...filters,
+      category: "mod",
+    });
+
+    expect(resolveSellNowSelection(visibleMods, sellNowRowIdentity(relic))).toBe(mod);
   });
 
   it("identity preserves exact rank", () => {

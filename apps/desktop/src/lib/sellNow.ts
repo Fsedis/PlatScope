@@ -140,6 +140,15 @@ export function sellNowRowIdentity(row: SellNowRow): string {
     : row.inventory.canonicalGameId;
 }
 
+export function resolveSellNowSelection(
+  visibleRows: SellNowRow[],
+  selectedIdentity: string,
+): SellNowRow | null {
+  return visibleRows.find((row) => sellNowRowIdentity(row) === selectedIdentity)
+    ?? visibleRows[0]
+    ?? null;
+}
+
 /** Возвращает устойчивое место предмета в общей очереди продажи. */
 export function sellPriorityRanks(rows: SellNowRow[]): Map<string, number> {
   const ranked = rows

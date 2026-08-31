@@ -39,11 +39,11 @@
   import {
     filterAndSortSellNowRows,
     priorityReasonMessages,
+    resolveSellNowSelection,
     sellPriorityRanks,
     sellNowRowIdentity,
     type LiveSellNowResult,
     type EquippedFilter,
-    type SellNowFilters,
     type SellNowPreset,
     type SellNowRow,
     type SellNowSortDirection,
@@ -156,14 +156,6 @@
   let sortDirection: SellNowSortDirection = "desc";
   let viewPreferencesReady = false;
 
-  $: filters = {
-    query,
-    category,
-    preset,
-    equipped,
-    sortKey,
-    sortDirection,
-  } satisfies SellNowFilters;
   $: if (viewPreferencesReady) {
     saveSellNowViewPreferences({
       category,
@@ -173,16 +165,27 @@
       sortDirection,
     });
   }
-  $: visibleRows = filterAndSortSellNowRows(view?.rows ?? [], filters);
+  $: visibleRows = filterAndSortSellNowRows(view?.rows ?? [], {
+    query,
+    category,
+    preset,
+    equipped,
+    sortKey,
+    sortDirection,
+  });
   $: priorityRanks = sellPriorityRanks(view?.rows ?? []);
-  $: recommendedCount = filterAndSortSellNowRows(view?.rows ?? [], { ...filters, query: "", category: "all", preset: "sell_now" }).length;
+  $: recommendedCount = filterAndSortSellNowRows(view?.rows ?? [], {
+    query: "",
+    category: "all",
+    preset: "sell_now",
+    equipped,
+    sortKey,
+    sortDirection,
+  }).length;
   $: categories = INVENTORY_CATEGORIES.filter((candidate) =>
     view?.rows.some((row) => inventoryCategory(row.inventory) === candidate),
   );
-  $: selectedRow =
-    visibleRows.find((row) => sellNowRowIdentity(row) === selectedIdentity) ??
-    visibleRows[0] ??
-    null;
+  $: selectedRow = resolveSellNowSelection(visibleRows, selectedIdentity);
   $: currentOrder = selectedRow
     ? matchingSellOrder(selectedRow.inventory, accountView)
     : null;
@@ -375,6 +378,14 @@
 
   function selectRow(row: SellNowRow): void {
     selectedIdentity = sellNowRowIdentity(row);
+    liveError = "";
+  }
+
+  function changeCategory(event: Event): void {
+    category = (event.currentTarget as HTMLSelectElement).value as InventoryCategoryFilter;
+    selectedIdentity = "";
+    liveResult = null;
+    liveIdentity = "";
     liveError = "";
   }
 
@@ -571,7 +582,7 @@
       </div>
       <div class="filter-field">
         <label for="sell-category">{c.category}</label>
-        <select id="sell-category" bind:value={category}>
+        <select id="sell-category" value={category} onchange={changeCategory}>
           <option value="all">{c.allCategories}</option>
           {#each categories as itemCategory}
             <option value={itemCategory}>{categoryLabels[itemCategory]}</option>
