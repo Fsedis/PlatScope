@@ -14,14 +14,15 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Utc};
 use platscope_core::{
-    AccountOrder, AccountOrderType, AccountService, AccountView, AppSettings, CreateListingInput,
-    DEFAULT_MARKET_SEARCH_LIMIT, GameMetadataRefreshOutcome, GameMetadataService,
-    HistoryBootstrapOutcome, HistoryService, InsightsService, InsightsView, InventoryService,
-    InventoryView, LivePricingResult, LivePricingService, LiveSellNowResult, LoggingGuard,
-    MarketBrowserService, MarketDataService, MarketHistoryView, MarketRefreshOutcome,
-    MarketSearchResult, MarketSearchRow, PriceRecommendation, PricingService,
-    ResourceConverterService, ResourceConverterView, SETTINGS_KEY, SellNowService, SellNowView,
-    SetComponentInsight, UpdateListingInput, enrich_account_view, init_logging,
+    AccountOrder, AccountOrderItemView, AccountOrderType, AccountService, AccountSetComponentView,
+    AccountView, AppSettings, CreateListingInput, DEFAULT_MARKET_SEARCH_LIMIT,
+    GameMetadataRefreshOutcome, GameMetadataService, HistoryBootstrapOutcome, HistoryService,
+    InsightsService, InsightsView, InventoryService, InventoryView, LivePricingResult,
+    LivePricingService, LiveSellNowResult, LoggingGuard, MarketBrowserService, MarketDataService,
+    MarketHistoryView, MarketRefreshOutcome, MarketSearchResult, MarketSearchRow,
+    PriceRecommendation, PricingService, ResourceConverterService, ResourceConverterView,
+    SETTINGS_KEY, SellNowService, SellNowView, SetComponentInsight, UpdateListingInput,
+    enrich_account_view, init_logging,
 };
 use platscope_domain::{
     GameMetadataSnapshot, InventoryResolution, MarketItemKind, MarketVariantKey, PriceConfidence,
@@ -32,7 +33,7 @@ use platscope_readonly_scan::inventory::{
 };
 use platscope_storage::{
     Database, HistoryCoverage, MarketSnapshotSummary, NewTradeEvent, ProviderHealth, TradeEvent,
-    TradeEventStatus, TradeSalesSummary,
+    TradeEventStatus, TradeItem, TradeSalesSummary,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, State};
@@ -49,6 +50,7 @@ struct AppState {
     game_metadata_service: GameMetadataService,
     resource_converter_service: ResourceConverterService,
     account_service: AccountService,
+    trade_reconciliation_lock: tokio::sync::Mutex<()>,
     read_only_inventory_scanner: Arc<ReadOnlyInventoryScanner>,
     reward_scan_in_flight: AtomicBool,
     reward_realtime_active: AtomicBool,
@@ -704,6 +706,7 @@ async fn account_status(state: State<'_, AppState>) -> Result<AccountView, Strin
 async fn account_connect(
     email: String,
     password: String,
+    app_handle: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<AccountView, String> {
     let view = state
@@ -722,6 +725,7 @@ async fn account_connect(
         .map(localize_account_images)
         .map_err(|error| error.to_string())?;
     tracing::info!(event = "wfm_account_connected", "WFM account connected");
+    spawn_pending_trade_reconciliation(app_handle);
     Ok(view)
 }
 
@@ -1244,6 +1248,361 @@ fn trade_event_restore(id: i64, state: State<'_, AppState>) -> Result<bool, Stri
         .map_err(|_| "database state is unavailable".to_owned())?
         .set_trade_event_status(id, TradeEventStatus::Pending, None, None)
         .map_err(|error| error.to_string())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum AutomaticTradeActionKind {
+    Close,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AutomaticTradeAction {
+    kind: AutomaticTradeActionKind,
+    before: AccountOrder,
+    item_name: String,
+    sold_quantity: u32,
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // Tauri deserializes command values by ownership.
+async fn trade_event_retry(id: i64, app_handle: AppHandle) -> Result<bool, String> {
+    let event = app_handle
+        .state::<AppState>()
+        .database
+        .lock()
+        .map_err(|_| "database state is unavailable".to_owned())?
+        .recent_trade_events(100)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .find(|event| event.id == id)
+        .ok_or_else(|| "Сделка не найдена в локальном журнале.".to_owned())?;
+    reconcile_trade_event(&app_handle, event).await
+}
+
+fn is_confirmed_sale(event: &TradeEvent) -> bool {
+    event.platinum_received > 0
+        && event.platinum_given == 0
+        && !event.given_items.is_empty()
+        && event.received_items.is_empty()
+}
+
+fn plan_automatic_trade_reconciliation(
+    event: &TradeEvent,
+    account: &AccountView,
+) -> Option<Vec<AutomaticTradeAction>> {
+    if !is_confirmed_sale(event) {
+        return None;
+    }
+    let sold_items = aggregate_trade_items(&event.given_items);
+    if sold_items.is_empty() {
+        return None;
+    }
+    let complete_set_candidates = account
+        .orders
+        .iter()
+        .filter_map(|order| {
+            if order.order_type != AccountOrderType::Sell {
+                return None;
+            }
+            let item = order
+                .item_id
+                .as_ref()
+                .and_then(|item_id| account.order_items.get(item_id))?;
+            if item.set_components.is_empty() {
+                return None;
+            }
+            let sold_quantity = complete_set_quantity(&sold_items, &item.set_components)?;
+            Some((order, item, sold_quantity))
+        })
+        .collect::<Vec<_>>();
+    if !complete_set_candidates.is_empty() {
+        if complete_set_candidates.len() != 1 {
+            return None;
+        }
+        let (order, item, sold_quantity) = complete_set_candidates[0];
+        if sold_quantity > order.quantity || !is_safe_trade_order(order, sold_quantity, event) {
+            return None;
+        }
+        return Some(vec![AutomaticTradeAction {
+            kind: AutomaticTradeActionKind::Close,
+            before: order.clone(),
+            item_name: item.display_name.clone(),
+            sold_quantity,
+        }]);
+    }
+
+    let mut used_order_ids = HashSet::new();
+    let mut actions = Vec::with_capacity(sold_items.len());
+    for sold in sold_items {
+        let candidates = account
+            .orders
+            .iter()
+            .filter_map(|order| {
+                if order.order_type != AccountOrderType::Sell {
+                    return None;
+                }
+                let item = order
+                    .item_id
+                    .as_ref()
+                    .and_then(|item_id| account.order_items.get(item_id))?;
+                item_matches_trade_name(item, &sold.name).then_some((order, item))
+            })
+            .collect::<Vec<_>>();
+        if candidates.len() != 1 {
+            return None;
+        }
+        let (order, item) = candidates[0];
+        if !used_order_ids.insert(order.id.clone())
+            || sold.quantity > order.quantity
+            || !is_safe_trade_order(order, sold.quantity, event)
+        {
+            return None;
+        }
+        actions.push(AutomaticTradeAction {
+            kind: AutomaticTradeActionKind::Close,
+            before: order.clone(),
+            item_name: item.display_name.clone(),
+            sold_quantity: sold.quantity,
+        });
+    }
+    (!actions.is_empty()).then_some(actions)
+}
+
+fn aggregate_trade_items(items: &[TradeItem]) -> Vec<TradeItem> {
+    let mut positions = HashMap::<String, usize>::new();
+    let mut aggregated = Vec::<TradeItem>::new();
+    for item in items.iter().filter(|item| item.quantity > 0) {
+        let identity = normalize_trade_name(&item.name);
+        if identity.is_empty() {
+            continue;
+        }
+        if let Some(position) = positions.get(&identity).copied() {
+            aggregated[position].quantity =
+                aggregated[position].quantity.saturating_add(item.quantity);
+        } else {
+            positions.insert(identity, aggregated.len());
+            aggregated.push(item.clone());
+        }
+    }
+    aggregated
+}
+
+fn complete_set_quantity(
+    sold_items: &[TradeItem],
+    components: &[AccountSetComponentView],
+) -> Option<u32> {
+    if components.is_empty() || sold_items.len() != components.len() {
+        return None;
+    }
+    let mut used_items = HashSet::new();
+    let mut complete_sets = None;
+    for component in components {
+        if component.required_quantity == 0 {
+            return None;
+        }
+        let aliases = [
+            normalize_trade_name(&component.display_name),
+            normalize_trade_name(&component.display_name_en),
+        ];
+        let matching = sold_items
+            .iter()
+            .enumerate()
+            .filter(|(index, sold)| {
+                !used_items.contains(index) && aliases.contains(&normalize_trade_name(&sold.name))
+            })
+            .collect::<Vec<_>>();
+        if matching.len() != 1 {
+            return None;
+        }
+        let (index, sold) = matching[0];
+        if !sold.quantity.is_multiple_of(component.required_quantity) {
+            return None;
+        }
+        let quantity = sold.quantity / component.required_quantity;
+        if quantity == 0 || complete_sets.is_some_and(|current| current != quantity) {
+            return None;
+        }
+        complete_sets = Some(quantity);
+        used_items.insert(index);
+    }
+    (used_items.len() == sold_items.len())
+        .then_some(complete_sets)
+        .flatten()
+}
+
+fn item_matches_trade_name(item: &AccountOrderItemView, trade_name: &str) -> bool {
+    let normalized = normalize_trade_name(trade_name);
+    [&item.display_name, &item.display_name_en]
+        .into_iter()
+        .any(|candidate| normalize_trade_name(candidate) == normalized)
+}
+
+fn is_safe_trade_order(order: &AccountOrder, sold_quantity: u32, event: &TradeEvent) -> bool {
+    order.rank.is_none()
+        && order.charges.is_none()
+        && order.subtype.is_none()
+        && order.amber_stars.is_none()
+        && order.cyan_stars.is_none()
+        && order.updated_at <= event.occurred_at
+        && order.per_trade.is_none_or(|per_trade| {
+            per_trade > 0
+                && sold_quantity.is_multiple_of(per_trade)
+                && (order.quantity <= sold_quantity
+                    || (order.quantity - sold_quantity).is_multiple_of(per_trade))
+        })
+}
+
+fn normalize_trade_name(value: &str) -> String {
+    let mut value = value
+        .trim()
+        .to_lowercase()
+        .replace('ё', "е")
+        .replace(['’', '\'', 'ʼ'], "");
+    for prefix in ["чертеж:", "blueprint:"] {
+        if let Some(stripped) = value.strip_prefix(prefix) {
+            value = stripped.trim().to_owned();
+            break;
+        }
+    }
+    for suffix in ["(чертеж)", "(blueprint)"] {
+        if let Some(stripped) = value.strip_suffix(suffix) {
+            value = stripped.trim().to_owned();
+            break;
+        }
+    }
+    value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .replace(" :", ":")
+        .replace(": ", ":")
+}
+
+async fn reconcile_trade_event(app_handle: &AppHandle, event: TradeEvent) -> Result<bool, String> {
+    let state = app_handle.state::<AppState>();
+    let _reconciliation_guard = state.trade_reconciliation_lock.lock().await;
+    let still_pending = state
+        .database
+        .lock()
+        .map_err(|_| "database state is unavailable".to_owned())?
+        .recent_trade_events(100)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .any(|stored| stored.id == event.id && stored.status == TradeEventStatus::Pending);
+    if !still_pending {
+        return Ok(false);
+    }
+    let account = state
+        .account_service
+        .view()
+        .await
+        .map_err(|error| error.to_string())?;
+    if !account.connected {
+        return Ok(false);
+    }
+    let language = state
+        .database
+        .lock()
+        .map_err(|_| "database state is unavailable".to_owned())?
+        .get_setting::<AppSettings>(SETTINGS_KEY)
+        .map_err(|error| error.to_string())?
+        .unwrap_or_default()
+        .language;
+    let account = enrich_account_view(&state.database, language, account)
+        .map_err(|error| error.to_string())?;
+    let Some(actions) = plan_automatic_trade_reconciliation(&event, &account) else {
+        return Ok(false);
+    };
+    let planned_count = actions.len();
+    let mut completed = Vec::with_capacity(planned_count);
+    let mut failure = None;
+    for action in actions {
+        match state
+            .account_service
+            .close_listing(&action.before.id, action.sold_quantity)
+            .await
+        {
+            Ok(()) => completed.push(action),
+            Err(error) => {
+                failure = Some(error.to_string());
+                break;
+            }
+        }
+    }
+    if completed.is_empty() {
+        return failure.map_or(Ok(false), Err);
+    }
+    let reconciliation_json =
+        serde_json::to_string(&completed).map_err(|error| error.to_string())?;
+    let matched_order_id = (completed.len() == 1).then(|| completed[0].before.id.as_str());
+    state
+        .database
+        .lock()
+        .map_err(|_| "database state is unavailable".to_owned())?
+        .set_trade_event_status(
+            event.id,
+            TradeEventStatus::Reconciled,
+            matched_order_id,
+            Some(&reconciliation_json),
+        )
+        .map_err(|error| error.to_string())?;
+    tracing::info!(
+        event = "wfm_trade_auto_closed",
+        trade_event_id = event.id,
+        completed = completed.len(),
+        planned = planned_count,
+        partial = failure.is_some(),
+        "confirmed game sale was automatically recorded through WFM order close"
+    );
+    if let Some(error) = failure {
+        tracing::warn!(
+            event = "wfm_trade_auto_close_partial",
+            trade_event_id = event.id,
+            error = %error,
+            "only a safe completed subset was recorded; automatic retry is disabled"
+        );
+    }
+    let _ = app_handle.emit("trade-reconciled", event.id);
+    Ok(completed.len() == planned_count)
+}
+
+fn spawn_trade_reconciliation(app_handle: AppHandle, event: TradeEvent) {
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) = reconcile_trade_event(&app_handle, event).await {
+            tracing::warn!(
+                event = "wfm_trade_auto_close_failed",
+                error = %error,
+                "confirmed game sale remains pending for automatic retry"
+            );
+            let _ = app_handle.emit("trade-reconciliation-failed", ());
+        }
+    });
+}
+
+fn spawn_pending_trade_reconciliation(app_handle: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        let events = app_handle
+            .state::<AppState>()
+            .database
+            .lock()
+            .ok()
+            .and_then(|database| database.recent_trade_events(100).ok())
+            .unwrap_or_default();
+        for event in events
+            .into_iter()
+            .filter(|event| event.status == TradeEventStatus::Pending && is_confirmed_sale(event))
+        {
+            if let Err(error) = reconcile_trade_event(&app_handle, event).await {
+                tracing::warn!(
+                    event = "wfm_pending_trade_retry_failed",
+                    error = %error,
+                    "pending confirmed sale could not be synchronized"
+                );
+            }
+        }
+    });
 }
 
 #[tauri::command]
@@ -2866,16 +3225,28 @@ fn handle_trade_log_chunk(
             given_items: trade.given_items,
             received_items: trade.received_items,
         };
-        let inserted = app_handle
+        let inserted_id = app_handle
             .state::<AppState>()
             .database
             .lock()
             .ok()
             .and_then(|database| database.record_trade_event(&event).ok())
-            .unwrap_or(false);
-        if !inserted {
+            .flatten();
+        let Some(event_id) = inserted_id else {
             continue;
-        }
+        };
+        let trade_event = TradeEvent {
+            id: event_id,
+            occurred_at: event.occurred_at,
+            partner: event.partner,
+            platinum_given: event.platinum_given,
+            platinum_received: event.platinum_received,
+            given_items: event.given_items,
+            received_items: event.received_items,
+            status: TradeEventStatus::Pending,
+            matched_order_id: None,
+            reconciliation_json: None,
+        };
         tracing::info!(
             event = "confirmed_trade_detected",
             "confirmed trade was recorded from EE.log"
@@ -2887,6 +3258,7 @@ fn handle_trade_log_chunk(
                 "trade was recorded but UI event failed"
             );
         }
+        spawn_trade_reconciliation(app_handle.clone(), trade_event);
     }
 }
 
@@ -3348,6 +3720,7 @@ pub fn run() {
                 game_metadata_service,
                 resource_converter_service,
                 account_service,
+                trade_reconciliation_lock: tokio::sync::Mutex::new(()),
                 read_only_inventory_scanner: Arc::new(ReadOnlyInventoryScanner::new()),
                 reward_scan_in_flight: AtomicBool::new(false),
                 reward_realtime_active: AtomicBool::new(false),
@@ -3360,6 +3733,7 @@ pub fn run() {
 
             spawn_history_bootstrap(app.handle().clone());
             spawn_market_refresh_scheduler(app.handle().clone());
+            spawn_pending_trade_reconciliation(app.handle().clone());
             spawn_reward_log_watcher(app.handle().clone());
             spawn_reward_realtime_watcher(app.handle().clone());
             Ok(())
@@ -3384,6 +3758,7 @@ pub fn run() {
             trade_event_reconciled,
             trade_event_ignore,
             trade_event_restore,
+            trade_event_retry,
             search_market,
             scan_relic_rewards,
             preview_reward_overlay,
@@ -4086,5 +4461,159 @@ mod tests {
         assert_eq!(five_parts.width, four_parts.width);
         assert_eq!(five_parts.x, four_parts.x);
         assert_eq!(five_parts.y, four_parts.y);
+    }
+
+    fn automatic_trade_order(
+        item_id: &str,
+        quantity: u32,
+        occurred_at: DateTime<Utc>,
+    ) -> AccountOrder {
+        AccountOrder {
+            id: format!("order-{item_id}"),
+            item_id: Some(item_id.to_owned()),
+            order_type: AccountOrderType::Sell,
+            platinum: 25,
+            quantity,
+            per_trade: None,
+            rank: None,
+            charges: None,
+            subtype: None,
+            amber_stars: None,
+            cyan_stars: None,
+            visible: true,
+            created_at: occurred_at - chrono::Duration::hours(1),
+            updated_at: occurred_at - chrono::Duration::seconds(1),
+        }
+    }
+
+    fn automatic_trade_event(items: Vec<TradeItem>, occurred_at: DateTime<Utc>) -> TradeEvent {
+        TradeEvent {
+            id: 7,
+            occurred_at,
+            partner: Some("MarketTenno".into()),
+            platinum_given: 0,
+            platinum_received: 25,
+            given_items: items,
+            received_items: Vec::new(),
+            status: TradeEventStatus::Pending,
+            matched_order_id: None,
+            reconciliation_json: None,
+        }
+    }
+
+    #[test]
+    fn automatic_trade_plan_closes_instead_of_deleting_order() {
+        let occurred_at = Utc::now();
+        let order = automatic_trade_order("item-123", 3, occurred_at);
+        let account = AccountView {
+            connected: true,
+            profile: None,
+            orders: vec![order.clone()],
+            order_items: HashMap::from([(
+                "item-123".into(),
+                AccountOrderItemView {
+                    slug: "strun_prime_stock".into(),
+                    display_name: "Стран Прайм: Приклад".into(),
+                    display_name_en: "Strun Prime Stock".into(),
+                    image_url: None,
+                    item_kind: MarketItemKind::Standard,
+                    set_components: Vec::new(),
+                },
+            )]),
+        };
+        let event = automatic_trade_event(
+            vec![TradeItem {
+                name: "Стран Прайм: Приклад".into(),
+                quantity: 1,
+            }],
+            occurred_at,
+        );
+
+        let actions = plan_automatic_trade_reconciliation(&event, &account)
+            .expect("sale matches exactly one order");
+
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].kind, AutomaticTradeActionKind::Close);
+        assert_eq!(actions[0].before.id, order.id);
+        assert_eq!(actions[0].sold_quantity, 1);
+    }
+
+    #[test]
+    fn automatic_trade_plan_recognizes_complete_set_from_components() {
+        let occurred_at = Utc::now();
+        let order = automatic_trade_order("hildryn-set", 1, occurred_at);
+        let component = |slug: &str, ru: &str, en: &str| AccountSetComponentView {
+            slug: slug.into(),
+            required_quantity: 1,
+            display_name: ru.into(),
+            display_name_en: en.into(),
+        };
+        let components = vec![
+            component(
+                "hildryn_prime_blueprint",
+                "Хильдрин Прайм",
+                "Hildryn Prime Blueprint",
+            ),
+            component(
+                "hildryn_prime_chassis",
+                "Хильдрин Прайм: Каркас",
+                "Hildryn Prime Chassis Blueprint",
+            ),
+            component(
+                "hildryn_prime_neuroptics",
+                "Хильдрин Прайм: Нейрооптика",
+                "Hildryn Prime Neuroptics Blueprint",
+            ),
+            component(
+                "hildryn_prime_systems",
+                "Хильдрин Прайм: Система",
+                "Hildryn Prime Systems Blueprint",
+            ),
+        ];
+        let account = AccountView {
+            connected: true,
+            profile: None,
+            orders: vec![order],
+            order_items: HashMap::from([(
+                "hildryn-set".into(),
+                AccountOrderItemView {
+                    slug: "hildryn_prime_set".into(),
+                    display_name: "Хильдрин Прайм: Комплект".into(),
+                    display_name_en: "Hildryn Prime Set".into(),
+                    image_url: None,
+                    item_kind: MarketItemKind::Standard,
+                    set_components: components,
+                },
+            )]),
+        };
+        let event = automatic_trade_event(
+            vec![
+                TradeItem {
+                    name: "Хильдрин Прайм".into(),
+                    quantity: 1,
+                },
+                TradeItem {
+                    name: "Хильдрин Прайм: Каркас".into(),
+                    quantity: 1,
+                },
+                TradeItem {
+                    name: "Хильдрин Прайм: Нейрооптика".into(),
+                    quantity: 1,
+                },
+                TradeItem {
+                    name: "Хильдрин Прайм: Система".into(),
+                    quantity: 1,
+                },
+            ],
+            occurred_at,
+        );
+
+        let actions = plan_automatic_trade_reconciliation(&event, &account)
+            .expect("all components form one complete set");
+
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].kind, AutomaticTradeActionKind::Close);
+        assert_eq!(actions[0].item_name, "Хильдрин Прайм: Комплект");
+        assert_eq!(actions[0].sold_quantity, 1);
     }
 }

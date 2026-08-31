@@ -27,7 +27,12 @@ import type {
 import type { LiveSellNowResult, SellNowRow, SellNowView } from "./sellNow";
 import type { RelicRewardScanView } from "./relicRewards";
 import type { ResourceConverterView } from "./resourceConverter";
-import { isSaleTrade, type TradeEvent } from "./tradeShift";
+import {
+  isSaleTrade,
+  planTradeReconciliation,
+  type TradeEvent,
+  type TradeReconciliationAction,
+} from "./tradeShift";
 
 const sourceDate = "2026-08-26";
 const snapshot = {
@@ -479,6 +484,34 @@ export async function installMarketBrowserMock(): Promise<void> {
       } : event);
       return true;
     }
+    if (command === "trade_event_retry") {
+      const id = Number((args as { id?: number })?.id);
+      const event = tradeEvents.find((candidate) => candidate.id === id);
+      if (!event) throw new Error("trade event not found");
+      const plan = planTradeReconciliation(event, account);
+      if (!plan.actions.length || plan.unmatched.length || plan.unsafe.length) return false;
+      const closed: TradeReconciliationAction[] = plan.actions.map((action) => ({
+        ...action,
+        kind: "close",
+      }));
+      for (const action of closed) {
+        account = {
+          ...account,
+          orders: account.orders.flatMap((order) => {
+            if (order.id !== action.before.id) return [order];
+            const quantity = order.quantity - action.soldQuantity;
+            return quantity > 0 ? [{ ...order, quantity }] : [];
+          }),
+        };
+      }
+      tradeEvents = tradeEvents.map((candidate) => candidate.id === id ? {
+        ...candidate,
+        status: "reconciled",
+        matchedOrderId: closed.length === 1 ? closed[0].before.id : null,
+        reconciliationJson: JSON.stringify(closed),
+      } : candidate);
+      return true;
+    }
     if (command === "trade_event_ignore") {
       const id = Number((args as { id?: number })?.id);
       tradeEvents = tradeEvents.map((event) => event.id === id ? { ...event, status: "ignored" } : event);
@@ -772,6 +805,13 @@ export async function installMarketBrowserMock(): Promise<void> {
         quoteState: "network",
         sellOrderCount: 5,
         buyOrderCount: 4,
+        orders: [
+          { side: "sell", platinum: fair === null ? 30 : fair + 2, quantity: 1, perTrade: 1, userStatus: "in_game" },
+          { side: "sell", platinum: fair === null ? 31 : fair + 3, quantity: 3, perTrade: 1, userStatus: "online" },
+          { side: "sell", platinum: fair === null ? 32 : fair + 4, quantity: 5, perTrade: 1, userStatus: "in_game" },
+          { side: "buy", platinum: fair === null ? 18 : Math.max(1, fair - 9), quantity: 2, perTrade: 1, userStatus: "in_game" },
+          { side: "buy", platinum: fair === null ? 17 : Math.max(1, fair - 10), quantity: 4, perTrade: 1, userStatus: "online" },
+        ],
         warning: null,
       } satisfies LiveSellNowResult;
     }

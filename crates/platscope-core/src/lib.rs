@@ -483,6 +483,7 @@ pub struct LiveSellNowResult {
     pub quote_state: LiveQuoteState,
     pub sell_order_count: usize,
     pub buy_order_count: usize,
+    pub orders: Vec<LiveOrderView>,
     pub warning: Option<String>,
 }
 
@@ -2977,6 +2978,23 @@ impl AccountService {
         Ok(self.client.delete_order(&token, id).await?)
     }
 
+    /// Отмечает количество ордера проданным через транзакционный `/close` WFM.
+    ///
+    /// Метод предназначен только для автоматически подтверждённых игрой обменов
+    /// из EE.log. Дополнительное пользовательское подтверждение здесь не требуется:
+    /// вызывающая сторона обязана сначала однозначно сопоставить продажу и ордер.
+    ///
+    /// # Errors
+    ///
+    /// Возвращает [`CoreError`] при отсутствии credential, некорректных данных
+    /// либо отклонённом API-запросе.
+    pub async fn close_listing(&self, id: &str, quantity: u32) -> Result<(), CoreError> {
+        let _operation_guard = self.operation_lock.lock().await;
+        let token = self.require_token()?;
+        self.client.close_order(&token, id, quantity).await?;
+        Ok(())
+    }
+
     async fn view_with_token(
         &self,
         token: &platscope_account::AccountToken,
@@ -3635,7 +3653,7 @@ impl SellNowService {
             quote_state,
             sell_order_count,
             buy_order_count,
-            orders: _,
+            orders,
             warning,
         } = live;
         let live_lowest_ask = recommendation.lowest_ask;
@@ -3652,6 +3670,7 @@ impl SellNowService {
             quote_state,
             sell_order_count,
             buy_order_count,
+            orders,
             warning,
         }))
     }

@@ -85,7 +85,14 @@ export async function checkForAppUpdate(manual = false): Promise<void> {
     }));
     try {
       await loadCurrentVersion();
-      const update = await check({ timeout: 20_000 });
+      const update = await check({
+        timeout: 20_000,
+        headers: {
+          Accept: "application/json",
+          "Cache-Control": "no-cache, no-store",
+          Pragma: "no-cache",
+        },
+      });
       if (!update) {
         pendingUpdate = null;
         appUpdateState.update((state) => ({
@@ -110,11 +117,11 @@ export async function checkForAppUpdate(manual = false): Promise<void> {
         errorMessage: "",
         bannerDismissed: false,
       }));
-    } catch {
+    } catch (error) {
       appUpdateState.update((state) => ({
         ...state,
         status: "error",
-        errorMessage: "Не удалось проверить обновления. Проверьте подключение и повторите попытку.",
+        errorMessage: updateCheckErrorMessage(error),
       }));
     } finally {
       activeCheck = null;
@@ -122,6 +129,23 @@ export async function checkForAppUpdate(manual = false): Promise<void> {
   })();
 
   return activeCheck;
+}
+
+export function updateCheckErrorMessage(error: unknown): string {
+  const detail = String(error).toLocaleLowerCase("ru");
+  if (detail.includes("timed out") || detail.includes("timeout")) {
+    return "GitHub не ответил вовремя. Повторите проверку через несколько секунд.";
+  }
+  if (
+    detail.includes("network") ||
+    detail.includes("connection") ||
+    detail.includes("dns") ||
+    detail.includes("fetch") ||
+    detail.includes("http")
+  ) {
+    return "Не удалось связаться с GitHub. Проверьте подключение и повторите проверку.";
+  }
+  return "Ответ GitHub не удалось проверить. Повторите попытку; установленная версия продолжит работать.";
 }
 
 function applyDownloadEvent(event: DownloadEvent): void {

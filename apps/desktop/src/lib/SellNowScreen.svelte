@@ -1,3 +1,9 @@
+<script module lang="ts">
+  import type { SellNowView as CachedSellNowView } from "./sellNow";
+
+  let cachedSellNowView: CachedSellNowView | null = null;
+</script>
+
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -21,7 +27,15 @@
   } from "./inventory";
 
   import { formatChange, timingLabel, timingShortLabel } from "./history";
-  import { formatPlatinum, formatVolume, liveQuoteLabel, priceReasonMessage, variantLabel } from "./market";
+  import {
+    formatPlatinum,
+    formatVolume,
+    freshnessLabel,
+    liveQuoteLabel,
+    liveUserStatusLabel,
+    priceReasonMessage,
+    variantLabel,
+  } from "./market";
   import {
     filterAndSortSellNowRows,
     priorityReasonMessages,
@@ -52,7 +66,7 @@
   } as const;
   const copy = {
     ru: {
-      matching: "Загружаем ваши предметы…", shown: (visible: number, total: number) => `${visible} из ${total} предметов показано`,
+      matching: "Загружаем ваши предметы…", refreshingItems: "Обновляем цены и расчёты…", shown: (visible: number, total: number) => `${visible} из ${total} предметов показано`,
       loadError: (_reason: string) => "Не удалось открыть инвентарь. Сохранённые данные не изменились.",
       missingVariant: "Этот вариант больше не доступен для продажи. Обновите список.", liveError: (_reason: string) => "Не удалось получить текущую цену. Сохранённая оценка не изменилась.",
       noSignal: "Нет рекомендации", retry: "Повторить", notImported: "Инвентарь не обновлён", addSnapshot: "Сначала обновите инвентарь",
@@ -67,17 +81,17 @@
       dailyTrades: (value: string) => `${value} сделок/день`,
       priceUp: (value: string) => `Цена растёт ↑ ${value} за 90 дней`, priceDown: (value: string) => `Цена падает ↓ ${value} за 90 дней`, priceFlat: "Цена стабильна →", noPriceTrend: "Нет данных о цене за 90 дней",
       noFiltered: "Нет кандидатов для этих фильтров", changeFilters: "Измените тип предмета или другие фильтры.", reset: "Сбросить фильтры",
-      candidate: "Предмет инвентаря", gettingLive: "Проверяем текущие ордера…", updateLive: "Обновить ордера", getLive: "Проверить ордера сейчас",
+      candidate: "Предмет инвентаря", gettingLive: "Проверяем текущие цены…", updateLive: "Обновить текущие цены", getLive: "Проверить текущие цены",
       liveHint: "Покажет активные ордера на продажу и покупку для этого варианта.", forSale: "Можно выставить", of: "из", moment: "Когда продавать",
       nominalWarning: "Скорость продажи зависит от спроса и вашей цены.", whyPrice: "Как рассчитана цена?", noPriceSignal: "Сделок пока недостаточно для расчёта цены.", whyPriority: "Почему этот предмет выше или ниже?", details: "Подробности продажи", selectCandidate: "Выберите предмет в очереди.",
       ownedSellable: "Есть / продать", owned: "есть", sellableLabel: "можно продать", fairListQuick: "Выставить по цене",
       noPrice: "нет данных",
-      priority: "Приоритет продажи", priorityHint: "№1 — предмет, который стоит выставить первым.", priorityPosition: (rank: number | null, score: number) => rank === null ? `Приоритет не рассчитан · ${score}/100` : `№${rank} в очереди · ${score}/100`, fairPrice: "Ориентир рынка", listPrice: "Рекомендуемый ордер", quickSell: "Лучшая покупка сейчас", sell: "на продажу", buy: "на покупку",
+      priority: "Приоритет продажи", priorityHint: "№1 — предмет, который стоит выставить первым.", priorityPosition: (rank: number | null, score: number) => rank === null ? `Приоритет не рассчитан · ${score}/100` : `№${rank} в очереди · ${score}/100`, fairPrice: "Оценка рынка", listPrice: "Ориентир размещения", closedVolume: "Закрытые сделки", lowestAsk: "Минимальная цена продажи", depthThree: "Средняя цена до 3 шт.", depthPrice: "Средняя цена до 5 шт.", quickSell: "Лучшая заявка на покупку", sell: "на продажу", buy: "на покупку", currentOrders: "Активные ордера", side: "Тип", price: "Цена", quantityLot: "Количество · лот", playerStatus: "Статус", sellOrder: "Продажа", buyOrder: "Покупка", noActiveOrders: "Для этого варианта нет активных ордеров.", freshness: "Актуальность", dataDate: "Цена рассчитана по данным от",
       wfmOrder: "Ордер Warframe Market", loadingOrders: "Проверяем ваши ордера…", accountUnavailable: "Не удалось загрузить ордера Warframe Market.", retryOrders: "Повторить", accountDisconnected: "Warframe Market не подключён", accountDisconnectedBody: "Подключите аккаунт, чтобы выставить этот предмет.", openAccount: "Подключить Warframe Market", unverifiedAccount: "Подтвердите игровой аккаунт на Warframe Market, чтобы менять ордера.", notSellable: "После резерва нет подтверждённых копий для продажи.", noCurrentOrder: "Ордер ещё не выставлен", currentOrder: (price: string, quantity: number, status: string, perTrade: number | null) => perTrade === null ? `Выставлено: ${price}p × ${quantity} · ${status}` : `Выставлено: ${quantity} шт., по ${perTrade} за сделку за ${price}p · ${status}`,
       manageOrder: "Управлять ордером", orderPrice: "Цена, платина", bulkOrderPrice: "Цена за 1 предмет, платина", orderQuantity: "Всего предметов", orderPerTrade: "Предметов за одну сделку", publishOrder: "Сразу показать ордер на рынке", reviewCreate: "Проверить ордер", variantUnavailable: "Этот вариант не найден на Warframe Market. Обновите рыночные данные.", createTitle: "Подтвердите новый ордер", confirmCreate: (name: string, price: number, quantity: number, perTrade: number | null) => perTrade === null ? `${name}: выставить ${quantity} шт. по ${price}p.` : `${name}: всего ${quantity} шт., по ${perTrade} за сделку за ${price}p за лот.`, confirmChecked: "Я проверил предмет, цену и количество", createOrder: "Создать ордер", cancelOrderAction: "Отменить", confirmRequired: "Подтвердите, что проверили параметры ордера.", orderCreated: "Ордер создан на Warframe Market.", orderActionError: (reason: string) => accountActionErrorMessage(reason, "ru"),
     },
     en: {
-      matching: "Loading your items…", shown: (visible: number, total: number) => `${visible} of ${total} items shown`,
+      matching: "Loading your items…", refreshingItems: "Refreshing prices and calculations…", shown: (visible: number, total: number) => `${visible} of ${total} items shown`,
       loadError: (_reason: string) => "Unable to open inventory. Saved data was not changed.",
       missingVariant: "The exact variant is no longer sellable. Refresh the list.", liveError: (reason: string) => `Current price unavailable; the local estimate was preserved. ${reason}`,
       noSignal: "No signal", retry: "Recalculate", notImported: "Inventory not imported", addSnapshot: "Add a local inventory snapshot",
@@ -97,7 +111,7 @@
       nominalWarning: "Nominal value does not account for how quickly the full volume may sell.", whyPrice: "Why this price?", noPriceSignal: "There are not enough completed trades to calculate a price.", whyPriority: "Why this priority?", details: "Sell details", selectCandidate: "Select a candidate from the queue.",
       ownedSellable: "Owned / list", owned: "owned", sellableLabel: "can list", fairListQuick: "Recommended price",
       noPrice: "no price",
-      priority: "Sale priority", priorityHint: "No. 1 is the item to list first.", priorityPosition: (rank: number | null, score: number) => rank === null ? `Priority unavailable · ${score}/100` : `No. ${rank} in the queue · ${score}/100`, fairPrice: "Fair price", listPrice: "List price", quickSell: "Quick Sell", sell: "sell", buy: "buy",
+      priority: "Sale priority", priorityHint: "No. 1 is the item to list first.", priorityPosition: (rank: number | null, score: number) => rank === null ? `Priority unavailable · ${score}/100` : `No. ${rank} in the queue · ${score}/100`, fairPrice: "Fair price", listPrice: "List price", closedVolume: "Closed trades", lowestAsk: "Lowest ask", depthThree: "Up to 3 units average", depthPrice: "Up to 5 units average", quickSell: "Best buy order", sell: "sell", buy: "buy", currentOrders: "Active orders", side: "Side", price: "Price", quantityLot: "Quantity · lot", playerStatus: "Status", sellOrder: "Sell", buyOrder: "Buy", noActiveOrders: "No active orders are available for the exact variant.", freshness: "Freshness", dataDate: "Price data from",
       wfmOrder: "Warframe Market order", loadingOrders: "Checking your orders…", accountUnavailable: "Unable to load Warframe Market orders.", retryOrders: "Try again", accountDisconnected: "Warframe Market is not connected", accountDisconnectedBody: "Connect your account to list this item.", openAccount: "Connect Warframe Market", unverifiedAccount: "Verify your game account on Warframe Market to change orders.", notSellable: "There are no confirmed copies to sell after the reserve.", noCurrentOrder: "Not listed yet", currentOrder: (price: string, quantity: number, status: string, perTrade: number | null) => perTrade === null ? `Listed: ${price}p × ${quantity} · ${status}` : `Listed: ${quantity} total, ${perTrade} per trade for ${price}p · ${status}`,
       manageOrder: "Manage order", orderPrice: "Price, platinum", bulkOrderPrice: "Price per item, platinum", orderQuantity: "Total items", orderPerTrade: "Items per trade", publishOrder: "Show order on the market immediately", reviewCreate: "Review order", variantUnavailable: "This variant is not available on Warframe Market. Refresh market data.", createTitle: "Confirm new order", confirmCreate: (name: string, price: number, quantity: number, perTrade: number | null) => perTrade === null ? `${name}: list ${quantity} at ${price}p each.` : `${name}: ${quantity} total, ${perTrade} per trade for ${price}p per lot.`, confirmChecked: "I reviewed the item, price, and quantity", createOrder: "Create order", cancelOrderAction: "Cancel", confirmRequired: "Confirm that you reviewed the order parameters.", orderCreated: "Order created on Warframe Market.", orderActionError: (reason: string) => accountActionErrorMessage(reason, "en"),
     },
@@ -105,7 +119,7 @@
   $: c = copy[$locale];
   $: categoryLabels = categoryCopy[$locale];
 
-  let view: SellNowView | null = null;
+  let view: SellNowView | null = cachedSellNowView;
   let accountView: AccountView | null = null;
   let accountLoading = true;
   let accountError = "";
@@ -124,7 +138,8 @@
   let listingConfirmationHeading: HTMLElement;
   let listingConfirmationCheckbox: HTMLInputElement;
   let listingConfirmationTrigger: HTMLElement | null = null;
-  let loading = true;
+  let loading = cachedSellNowView === null;
+  let refreshing = false;
   let scanning = false;
   let reserveUpdating = false;
   let errorMessage = "";
@@ -188,16 +203,21 @@
       : null;
   $: resultStatus = loading
     ? c.matching
+    : refreshing
+      ? c.refreshingItems
     : view
       ? c.shown(visibleRows.length, view.rows.length)
       : "";
 
   async function loadSellNow(): Promise<void> {
-    loading = true;
+    const hasCurrentView = view !== null;
+    loading = !hasCurrentView;
+    refreshing = hasCurrentView;
     errorMessage = "";
     try {
       const result = await invoke<SellNowView | null>("sell_now");
       view = result;
+      cachedSellNowView = result;
       const stillExists = result?.rows.some(
         (row) => sellNowRowIdentity(row) === selectedIdentity,
       );
@@ -206,10 +226,11 @@
       liveIdentity = "";
       liveError = "";
     } catch (error) {
-      view = null;
+      if (!hasCurrentView) view = null;
       errorMessage = c.loadError(String(error));
     } finally {
       loading = false;
+      refreshing = false;
     }
   }
 
@@ -675,8 +696,40 @@
           <dl class="price-grid sell-price-grid">
             <div class="price-grid__primary"><dt>{c.fairPrice}</dt><dd>{formatPlatinum(selectedRow.recommendation?.fairPrice ?? null, $locale)}</dd></div>
             <div><dt>{c.listPrice}</dt><dd>{formatPlatinum(selectedRow.recommendation?.listPrice ?? null, $locale)}</dd></div>
-            <div><dt>{c.quickSell}</dt><dd>{formatPlatinum(selectedRow.recommendation?.quickSell ?? null, $locale)}</dd></div>
+            <div><dt>{c.closedVolume}</dt><dd>{formatVolume(selectedRow.recommendation?.closedVolume ?? null, $locale)}</dd></div>
           </dl>
+
+          {#if activeLive}
+            <dl class="live-price-grid">
+              <div><dt>{c.lowestAsk}</dt><dd>{formatPlatinum(selectedRow.recommendation?.lowestAsk ?? null, $locale)}</dd></div>
+              <div><dt>{c.depthThree}</dt><dd>{formatPlatinum(selectedRow.recommendation?.depthThree ?? null, $locale)}</dd></div>
+              <div><dt>{c.depthPrice}</dt><dd>{formatPlatinum(selectedRow.recommendation?.depthPrice ?? null, $locale)}</dd></div>
+              <div><dt>{c.quickSell}</dt><dd>{formatPlatinum(selectedRow.recommendation?.quickSell ?? null, $locale)}</dd></div>
+            </dl>
+
+            <section class="live-orders" aria-labelledby="inventory-live-orders-heading">
+              <h3 id="inventory-live-orders-heading">{c.currentOrders}</h3>
+              <div class="live-orders__scroll">
+                <table>
+                  <thead>
+                    <tr><th>{c.side}</th><th>{c.price}</th><th>{c.quantityLot}</th><th>{c.playerStatus}</th></tr>
+                  </thead>
+                  <tbody>
+                    {#each activeLive.orders as order, index (`${order.side}:${order.platinum}:${order.quantity}:${index}`)}
+                      <tr>
+                        <th scope="row"><span class={`order-side order-side--${order.side}`}>{order.side === "sell" ? c.sellOrder : c.buyOrder}</span></th>
+                        <td>{formatPlatinum(order.platinum, $locale)}</td>
+                        <td>{order.quantity.toLocaleString(localeCode($locale))} · {order.perTrade.toLocaleString(localeCode($locale))}</td>
+                        <td>{liveUserStatusLabel(order.userStatus, $locale)}</td>
+                      </tr>
+                    {:else}
+                      <tr><td colspan="4">{c.noActiveOrders}</td></tr>
+                    {/each}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          {/if}
 
           <section class="wfm-order-panel" aria-labelledby="wfm-order-heading" aria-busy={accountLoading || orderBusy}>
             <div class="wfm-order-heading">
@@ -761,6 +814,8 @@
           </section>
 
           <div class="detail-meta">
+            <div><span>{c.freshness}</span><strong>{selectedRow.recommendation ? freshnessLabel(selectedRow.recommendation.freshness, $locale) : c.noPrice}</strong></div>
+            <div><span>{c.dataDate}</span><strong>{selectedRow.recommendation?.sourceDate ?? c.noPrice}</strong></div>
             <div><span>{c.forSale}</span><strong>{selectedRow.inventory.sellableQuantity} {c.of} {selectedRow.inventory.ownedQuantity}</strong></div>
             <div><span>{c.moment}</span><strong>{selectedRow.trend?.timing ? timingLabel(selectedRow.trend.timing, $locale) : c.noSignal}</strong></div>
             <div><span>{c.priority}</span><strong>{c.priorityPosition(priorityRank(selectedRow), selectedRow.priority.score)}</strong></div>

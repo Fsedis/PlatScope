@@ -226,7 +226,7 @@ impl Database {
     /// # Errors
     ///
     /// Возвращает [`StorageError`] при нарушении bounds, ошибке JSON или SQLite.
-    pub fn record_trade_event(&self, event: &NewTradeEvent) -> Result<bool, StorageError> {
+    pub fn record_trade_event(&self, event: &NewTradeEvent) -> Result<Option<i64>, StorageError> {
         if event.fingerprint.trim().is_empty() || event.fingerprint.len() > 4_096 {
             return Err(StorageError::Invariant(
                 "trade event fingerprint is empty or too long".into(),
@@ -253,7 +253,7 @@ impl Database {
                 Utc::now().to_rfc3339(),
             ],
         )?;
-        Ok(changed == 1)
+        Ok((changed == 1).then(|| self.connection.last_insert_rowid()))
     }
 
     /// Возвращает последние сделки для сверки с WFM-ордерами.
@@ -2053,11 +2053,17 @@ mod tests {
             }],
             received_items: Vec::new(),
         };
-        assert!(database.record_trade_event(&event).expect("event inserts"));
         assert!(
-            !database
+            database
                 .record_trade_event(&event)
-                .expect("duplicate ignored")
+                .expect("event inserts")
+                .is_some()
+        );
+        assert_eq!(
+            database
+                .record_trade_event(&event)
+                .expect("duplicate ignored"),
+            None
         );
 
         let events = database.recent_trade_events(10).expect("events load");

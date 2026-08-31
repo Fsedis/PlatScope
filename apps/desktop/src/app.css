@@ -1575,14 +1575,6 @@ td {
   color: var(--danger);
 }
 
-.sell-price-grid .price-grid__primary {
-  grid-column: auto;
-}
-
-.sell-price-grid .price-grid__primary dd {
-  font-size: 1rem;
-}
-
 .sell-detail .explanation p {
   margin: 0;
   padding: 0 1rem 0.85rem;

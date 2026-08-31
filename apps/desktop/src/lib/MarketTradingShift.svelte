@@ -50,7 +50,6 @@
   let selectedIds = new Set<string>();
   let reviewOpen = false;
   let visibilityIntent: boolean | null = null;
-  let tradeToApply: TradeEvent | null = null;
   let tradeToUndo: TradeEvent | null = null;
   let applying = false;
   let applyProgress = "";
@@ -79,6 +78,11 @@
     void loadAll();
     void Promise.all([
       listen("trade-detected", () => void loadEvents(true)),
+      listen("trade-reconciled", () => {
+        actionMessage = "Продажа автоматически учтена в Warframe Market.";
+        void loadAll();
+      }),
+      listen("trade-reconciliation-failed", () => void loadEvents()),
       listen("inventory-updated", () => void loadInventoryAndPrices()),
     ]).then((items) => {
       if (disposed) items.forEach((unlisten) => unlisten());
@@ -131,7 +135,7 @@
         invoke<TradeEvent[]>("trade_events"),
         invoke<TradeSalesSummary>("trade_sales_summary"),
       ]);
-      if (announce) actionMessage = "Сделка записана. Для продажи проверьте ордер.";
+      if (announce) actionMessage = "Сделка записана. Синхронизируем продажу с Warframe Market автоматически.";
     } catch {
       if (announce) actionMessage = "Сделка обнаружена, но журнал пока не открылся. Обновите ордера.";
     }
@@ -343,46 +347,22 @@
     await reloadAccount();
   }
 
-  async function applyTrade(event: TradeEvent): Promise<void> {
-    if (!account || applying) return;
-    const plan = planTradeReconciliation(event, account);
-    if (!plan.actions.length || plan.unmatched.length || plan.unsafe.length) return;
+  async function retryTrade(event: TradeEvent): Promise<void> {
+    if (applying) return;
     applying = true;
-    const completed: TradeReconciliationAction[] = [];
-    for (const action of plan.actions) {
-      try {
-        if (action.kind === "delete") {
-          await invoke<AccountOrder>("account_delete_listing", {
-            id: action.before.id,
-            confirmed: true,
-          });
-        } else {
-          await invoke<AccountOrder>("account_update_listing", {
-            id: action.before.id,
-            input: updateInput({ quantity: action.before.quantity - action.soldQuantity }),
-            confirmed: true,
-          });
-        }
-        completed.push(action);
-      } catch (error) {
-        errorMessage = `${action.itemName}: ${accountActionErrorMessage(String(error))}`;
-        break;
-      }
+    errorMessage = "";
+    try {
+      const completed = await invoke<boolean>("trade_event_retry", { id: event.id });
+      actionMessage = completed
+        ? "Продажа учтена в Warframe Market."
+        : "Однозначный активный ордер пока не найден.";
+    } catch (error) {
+      errorMessage = accountActionErrorMessage(String(error));
+    } finally {
+      applying = false;
+      await reloadAccount();
+      await loadEvents();
     }
-    if (completed.length === plan.actions.length) {
-      await invoke<boolean>("trade_event_reconciled", {
-        id: event.id,
-        orderId: completed.length === 1 ? completed[0].before.id : null,
-        reconciliationJson: JSON.stringify(completed),
-      });
-      actionMessage = "Продажа отражена в ордерах.";
-    } else if (completed.length) {
-      actionMessage = `Обновлено ${completed.length} из ${plan.actions.length}. Проверьте оставшиеся ордера вручную.`;
-    }
-    applying = false;
-    tradeToApply = null;
-    await reloadAccount();
-    await loadEvents();
   }
 
   async function undoTrade(event: TradeEvent): Promise<void> {
@@ -392,6 +372,10 @@
       actions = JSON.parse(event.reconciliationJson) as TradeReconciliationAction[];
     } catch {
       errorMessage = "Сохранённое изменение повреждено; отмена недоступна.";
+      return;
+    }
+    if (actions.some((action) => action.kind === "close")) {
+      errorMessage = "Продажа уже записана в статистику Warframe Market; отменить транзакцию через API нельзя.";
       return;
     }
     applying = true;
@@ -539,6 +523,16 @@
       : null;
   }
 
+  function wasClosedOnMarket(event: TradeEvent): boolean {
+    if (!event.reconciliationJson) return false;
+    try {
+      const actions = JSON.parse(event.reconciliationJson) as TradeReconciliationAction[];
+      return actions.some((action) => action.kind === "close");
+    } catch {
+      return false;
+    }
+  }
+
   function receivedItems(event: TradeEvent): string {
     return event.receivedItems.map((item) => `${localizedTradeName(item.name)} ×${item.quantity}`).join(", ") || "без предметов";
   }
@@ -655,10 +649,10 @@
     {#if pendingEvents.length}
       <section class="priority-panel" aria-labelledby="pending-sales-heading">
         <header class="section-heading">
-          <div><p class="section-kicker">Требуют подтверждения</p><h3 id="pending-sales-heading">Продажи из игры</h3></div>
+          <div><p class="section-kicker">Не синхронизированы</p><h3 id="pending-sales-heading">Продажи из игры</h3></div>
           <span class="count-badge">{pendingEvents.length}</span>
         </header>
-        <p class="section-hint">PlatScope ничего не меняет автоматически. Подтвердите совпавший ордер или пропустите событие.</p>
+        <p class="section-hint">Обычно PlatScope отмечает продажу на WFM сам. Здесь остаются только сделки без однозначного ордера или после сетевой ошибки.</p>
         <div class="trade-events">
           {#each pendingEvents as event (event.id)}
             <article class="pending">
@@ -669,7 +663,7 @@
               </div>
               <div class="trade-event__actions">
                 {#if eventCanApply(event)}
-                  <button class="compact" type="button" onclick={() => (tradeToApply = event)}>Обновить ордер</button>
+                  <button class="compact" type="button" disabled={applying} onclick={() => retryTrade(event)}>Повторить синхронизацию</button>
                 {:else}
                   <span class="manual">Ордер не найден однозначно</span>
                 {/if}
@@ -678,16 +672,6 @@
             </article>
           {/each}
         </div>
-      </section>
-    {/if}
-
-    {#if tradeToApply}
-      {@const plan = account ? planTradeReconciliation(tradeToApply, account) : null}
-      <section class="confirm-panel" aria-labelledby="trade-apply-heading">
-        <h3 id="trade-apply-heading">Обновить ордер после продажи?</h3>
-        <ul>{#each plan?.actions ?? [] as action}<li><strong>{action.itemName}</strong>: {action.kind === "delete" ? "закрыть ордер" : `${action.before.quantity} → ${action.before.quantity - action.soldQuantity} шт.`}</li>{/each}</ul>
-        <p>Изменится только ордер WFM. Инвентарь обновится из своего источника.</p>
-        <div class="confirm-actions"><button type="button" disabled={applying} onclick={() => tradeToApply && applyTrade(tradeToApply)}>Обновить ордер</button><button class="secondary" type="button" disabled={applying} onclick={() => (tradeToApply = null)}>Отмена</button></div>
       </section>
     {/if}
 
@@ -816,7 +800,13 @@
             <article>
               <div class="trade-event__copy"><strong>{eventTitle(event)}</strong><span>{eventItems(event)}{event.partner ? ` · ${event.partner}` : ""}</span><small>{new Date(event.occurredAt).toLocaleString("ru-RU")}</small></div>
               <div class="trade-event__actions">
-                {#if event.status === "reconciled" && event.reconciliationJson}<span class="done">Ордер обновлён</span><button class="text-button compact" type="button" onclick={() => (tradeToUndo = event)}>Отменить</button>{:else if event.status === "ignored" && isSaleTrade(event)}<span class="done">Без изменения ордера</span><button class="text-button compact" type="button" onclick={() => restoreTradeEvent(event)}>Вернуть</button>{:else}<span class="done">Записано</span>{/if}
+                {#if event.status === "reconciled" && event.reconciliationJson}
+                  {#if wasClosedOnMarket(event)}
+                    <span class="done">Продажа учтена WFM</span>
+                  {:else}
+                    <span class="done">Ордер обновлён</span><button class="text-button compact" type="button" onclick={() => (tradeToUndo = event)}>Отменить</button>
+                  {/if}
+                {:else if event.status === "ignored" && isSaleTrade(event)}<span class="done">Без изменения ордера</span><button class="text-button compact" type="button" onclick={() => restoreTradeEvent(event)}>Вернуть</button>{:else}<span class="done">Записано</span>{/if}
               </div>
             </article>
           {:else}

@@ -80,7 +80,7 @@ export interface TradeShiftRow {
 }
 
 export interface TradeReconciliationAction {
-  kind: "update" | "delete";
+  kind: "update" | "delete" | "close";
   before: AccountOrder;
   itemName: string;
   soldQuantity: number;

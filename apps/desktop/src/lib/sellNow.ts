@@ -9,6 +9,7 @@ import {
 } from "./inventory";
 import type { MarketSnapshotSummary } from "./foundation";
 import type {
+  LiveOrderView,
   LiveQuoteState,
   MarketItemKind,
   PriceRecommendation,
@@ -62,6 +63,7 @@ export interface LiveSellNowResult {
   quoteState: LiveQuoteState;
   sellOrderCount: number;
   buyOrderCount: number;
+  orders: LiveOrderView[];
   warning: string | null;
 }
 

@@ -103,6 +103,12 @@ pub struct UpdateListingInput {
     pub cyan_stars: Option<u16>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CloseOrderInput {
+    quantity: u32,
+}
+
 impl CreateListingInput {
     /// Проверяет documented WFM bounds до любого сетевого write.
     ///
@@ -408,6 +414,36 @@ impl WfmAccountClient {
             .await
     }
 
+    /// Отмечает указанное количество ордера проданным и создаёт транзакцию WFM.
+    ///
+    /// В отличие от удаления ордера, `/close` попадает в историю закрытых сделок
+    /// Warframe Market. При частичном закрытии сервер сохраняет ордер с остатком.
+    ///
+    /// # Errors
+    ///
+    /// Возвращает [`AccountError`] при некорректном ID/количестве, отсутствии
+    /// авторизации или отклонённом API-запросе.
+    pub async fn close_order(
+        &self,
+        token: &AccountToken,
+        id: &str,
+        quantity: u32,
+    ) -> Result<serde_json::Value, AccountError> {
+        validate_id("order_id", id)?;
+        if !(1..=9_999).contains(&quantity) {
+            return Err(AccountError::Validation(
+                "closed quantity must be within 1..=9999".into(),
+            ));
+        }
+        self.auth_json(
+            Method::POST,
+            &format!("order/{id}/close"),
+            token,
+            Some(&CloseOrderInput { quantity }),
+        )
+        .await
+    }
+
     async fn auth_json<T: DeserializeOwned, B: Serialize + ?Sized>(
         &self,
         method: Method,
@@ -644,6 +680,14 @@ mod tests {
         assert!(value.get("orderType").is_none());
         assert_eq!(value["itemId"], "valid-item-id");
         assert!(value.get("charges").is_none());
+    }
+
+    #[test]
+    fn close_order_uses_current_v2_quantity_field() {
+        let value = serde_json::to_value(CloseOrderInput { quantity: 3 })
+            .expect("serialize close-order body");
+        assert_eq!(value, serde_json::json!({ "quantity": 3 }));
+        assert!(value.get("Quantity").is_none());
     }
 
     #[test]
