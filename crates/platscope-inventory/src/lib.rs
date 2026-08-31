@@ -3,32 +3,25 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::BuildHasher;
 
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use platscope_domain::{
     CatalogItem, EquipmentKind, EquippedModInstance, InventoryItem, InventoryModPlacement,
     InventoryResolution, InventorySnapshotMetadata, InventorySource, ItemCatalog, MarketVariantKey,
     Platform, PlayerInventory, ResolvedInventoryItem, ResolvedInventorySnapshot,
     ResolvedModPlacement, SyndicateStanding, Tradeability,
 };
-use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-pub const IMPORT_SCHEMA_VERSION: u32 = 1;
-pub const COMPANION_SCHEMA_VERSION: u32 = 1;
-pub const MAX_IMPORT_BYTES: usize = 8 * 1024 * 1024;
-const OVERWOLF_COMPANION_PRODUCER: &str = "platscope-overwolf-companion";
-const WARFRAME_OVERWOLF_GAME_ID: u32 = 8_954;
-const MAX_IMPORT_ITEMS: usize = 100_000;
+pub const READ_ONLY_SCHEMA_VERSION: u32 = 1;
+pub const MAX_INVENTORY_BYTES: usize = 8 * 1024 * 1024;
+const MAX_INVENTORY_ITEMS: usize = 100_000;
 // Long-lived accounts can legitimately hold more than one million common
 // resources. Keep arithmetic bounded without rejecting real DE snapshots.
 const MAX_QUANTITY: u32 = 100_000_000;
 const MAX_IDENTIFIER_LENGTH: usize = 256;
-const MAX_SUBTYPE_LENGTH: usize = 64;
 const MAX_RANK: u16 = 100;
-const MAX_HELPER_DEPTH: usize = 64;
-const MAX_HELPER_NODES: usize = 250_000;
 const MAX_EQUIPMENT_CONFIGS: usize = 16;
 const MAX_CONFIG_UPGRADES: usize = 64;
 const MAX_AFFILIATIONS: usize = 128;
@@ -79,40 +72,6 @@ const READ_ONLY_EQUIPMENT_CATEGORIES: [(&str, EquipmentKind); 29] = [
     ("OperatorAccessories", EquipmentKind::Other),
 ];
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ImportDocument {
-    schema_version: u32,
-    observed_at: DateTime<Utc>,
-    item_count: u64,
-    items: Vec<ImportItem>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ImportItem {
-    canonical_game_id: String,
-    quantity: u32,
-    rank: Option<u16>,
-    subtype: Option<String>,
-    tradeability: Tradeability,
-    #[serde(default)]
-    leveled: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct CompanionDocument {
-    schema_version: u32,
-    producer: String,
-    observed_at: DateTime<Utc>,
-    game_id: u32,
-    feature: String,
-    key: String,
-    complete: bool,
-    value: Value,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct GroupKey {
     canonical_game_id: String,
@@ -137,121 +96,8 @@ struct EquippedModSource {
     placements: Vec<InventoryModPlacement>,
 }
 
-/// Разбирает собственный versioned JSON-формат и валидирует coherent snapshot.
-///
-/// # Errors
-///
-/// Возвращает [`InventoryError`], если payload превышает лимит, нарушает JSON schema
-/// или содержит несогласованные/небезопасные значения.
-pub fn parse_platscope_json(raw: &str) -> Result<PlayerInventory, InventoryError> {
-    if raw.len() > MAX_IMPORT_BYTES {
-        return Err(InventoryError::PayloadTooLarge);
-    }
-    let document: ImportDocument = serde_json::from_str(raw)?;
-    if document.schema_version != IMPORT_SCHEMA_VERSION {
-        return Err(InventoryError::UnsupportedSchema(document.schema_version));
-    }
-    if document.items.len() > MAX_IMPORT_ITEMS {
-        return Err(InventoryError::TooManyItems(document.items.len()));
-    }
-    if document.item_count != document.items.len() as u64 {
-        return Err(InventoryError::ItemCountMismatch {
-            declared: document.item_count,
-            actual: document.items.len(),
-        });
-    }
-
-    let mut identities = HashSet::with_capacity(document.items.len());
-    let mut items = Vec::with_capacity(document.items.len());
-    for item in document.items {
-        let canonical_game_id = item.canonical_game_id.trim().to_owned();
-        if canonical_game_id.is_empty() || canonical_game_id.len() > MAX_IDENTIFIER_LENGTH {
-            return Err(InventoryError::InvalidIdentifier);
-        }
-        if item.quantity == 0 || item.quantity > MAX_QUANTITY {
-            return Err(InventoryError::InvalidQuantity(item.quantity));
-        }
-        if item.rank.is_some_and(|rank| rank > MAX_RANK) {
-            return Err(InventoryError::InvalidRank(item.rank.unwrap_or_default()));
-        }
-        let subtype = item.subtype.map(|value| value.trim().to_lowercase());
-        if subtype
-            .as_ref()
-            .is_some_and(|value| value.is_empty() || value.len() > MAX_SUBTYPE_LENGTH)
-        {
-            return Err(InventoryError::InvalidSubtype);
-        }
-        let identity = (
-            canonical_game_id.to_lowercase(),
-            item.rank,
-            subtype.clone(),
-            item.tradeability,
-            item.leveled,
-        );
-        if !identities.insert(identity) {
-            return Err(InventoryError::DuplicateItem);
-        }
-        items.push(InventoryItem {
-            canonical_game_id,
-            quantity: item.quantity,
-            rank: item.rank,
-            subtype,
-            tradeability: item.tradeability,
-            leveled: item.leveled,
-        });
-    }
-
-    Ok(PlayerInventory {
-        metadata: InventorySnapshotMetadata {
-            source: InventorySource::PlatscopeJson,
-            observed_at: document.observed_at,
-            schema_version: document.schema_version,
-            item_count: document.item_count,
-            checksum_sha256: hex::encode(Sha256::digest(raw.as_bytes())),
-        },
-        items,
-        mod_usage_scanned: false,
-        equipped_mods: Vec::new(),
-        credits: None,
-        syndicates: Vec::new(),
-    })
-}
-
-/// Автоматически определяет собственный `PlatScope` JSON v1 либо внешний helper inventory export.
-///
-/// # Errors
-///
-/// Возвращает [`InventoryError`] при превышении лимитов, schema drift или некорректных значениях.
-pub fn parse_inventory_json(raw: &str) -> Result<PlayerInventory, InventoryError> {
-    if raw.len() > MAX_IMPORT_BYTES {
-        return Err(InventoryError::PayloadTooLarge);
-    }
-    let root: Value = serde_json::from_str(raw)?;
-    if root.get("producer").is_some() {
-        parse_companion_value(raw, root)
-    } else if root.get("schemaVersion").is_some() {
-        parse_platscope_json(raw)
-    } else {
-        parse_helper_value(raw, root)
-    }
-}
-
-/// Разбирает `inventory.json`, созданный совместимым helper/Overwolf export.
-/// Внешний формат не доказывает tradeability, поэтому все строки нормализуются как `unknown`.
-///
-/// # Errors
-///
-/// Возвращает [`InventoryError`] при превышении лимитов, schema drift или отсутствии item rows.
-pub fn parse_helper_json(raw: &str) -> Result<PlayerInventory, InventoryError> {
-    if raw.len() > MAX_IMPORT_BYTES {
-        return Err(InventoryError::PayloadTooLarge);
-    }
-    let root: Value = serde_json::from_str(raw)?;
-    parse_helper_value(raw, root)
-}
-
 /// Разбирает сырой ответ inventory endpoint, полученный встроенным read-only scanner.
-/// Формат проходит те же bounds и нормализацию, что helper export, но сохраняет
+/// Ответ проходит ограничение размера и строгую нормализацию, сохраняя
 /// отдельный доверенный источник для UI, диагностики и истории.
 ///
 /// # Errors
@@ -259,11 +105,11 @@ pub fn parse_helper_json(raw: &str) -> Result<PlayerInventory, InventoryError> {
 /// Возвращает [`InventoryError`] при превышении лимитов, schema drift или
 /// отсутствии распознаваемых строк `ItemType`.
 pub fn parse_read_only_scan_json(raw: &str) -> Result<PlayerInventory, InventoryError> {
-    if raw.len() > MAX_IMPORT_BYTES {
+    if raw.len() > MAX_INVENTORY_BYTES {
         return Err(InventoryError::PayloadTooLarge);
     }
     let root: Value = serde_json::from_str(raw)?;
-    let payload = unwrap_helper_payload(root)?;
+    let payload = unwrap_inventory_payload(root)?;
     normalize_read_only_payload(raw, &payload)
 }
 
@@ -277,7 +123,7 @@ fn normalize_read_only_payload(
         .unwrap_or(payload);
     let root = root
         .as_object()
-        .ok_or(InventoryError::InvalidHelperField("Inventory"))?;
+        .ok_or(InventoryError::InvalidInventoryField("Inventory"))?;
     let mut items = Vec::new();
 
     for category in READ_ONLY_INVENTORY_CATEGORIES {
@@ -286,28 +132,28 @@ fn normalize_read_only_payload(
         };
         let entries = entries
             .as_array()
-            .ok_or(InventoryError::InvalidHelperField("inventory category"))?;
+            .ok_or(InventoryError::InvalidInventoryField("inventory category"))?;
         for entry in entries {
             let map = entry
                 .as_object()
-                .ok_or(InventoryError::InvalidHelperField("inventory item"))?;
+                .ok_or(InventoryError::InvalidInventoryField("inventory item"))?;
             let Some(item_type) = map.get("ItemType").or_else(|| map.get("Type")) else {
                 continue;
             };
             let canonical_game_id = item_type
                 .as_str()
-                .ok_or(InventoryError::InvalidHelperField("ItemType"))?
+                .ok_or(InventoryError::InvalidInventoryField("ItemType"))?
                 .trim()
                 .to_owned();
             if canonical_game_id.is_empty() || canonical_game_id.len() > MAX_IDENTIFIER_LENGTH {
                 return Err(InventoryError::InvalidIdentifier);
             }
-            let quantity = helper_u32(map.get("ItemCount"), "ItemCount", 1)?;
+            let quantity = inventory_u32(map.get("ItemCount"), "ItemCount", 1)?;
             if quantity == 0 || quantity > MAX_QUANTITY {
                 return Err(InventoryError::InvalidQuantity(quantity));
             }
             let rank = read_only_rank(category, map)?;
-            let xp = helper_u32(map.get("XP"), "XP", 0)?;
+            let xp = inventory_u32(map.get("XP"), "XP", 0)?;
             items.push(InventoryItem {
                 canonical_game_id,
                 quantity,
@@ -320,13 +166,13 @@ fn normalize_read_only_payload(
                 },
                 leveled: xp > 0 || rank.is_some_and(|value| value > 0),
             });
-            if items.len() > MAX_IMPORT_ITEMS {
+            if items.len() > MAX_INVENTORY_ITEMS {
                 return Err(InventoryError::TooManyItems(items.len()));
             }
         }
     }
     if items.is_empty() {
-        return Err(InventoryError::HelperItemsMissing);
+        return Err(InventoryError::InventoryItemsMissing);
     }
 
     // Equipment/configuration data is an optional extension of the inventory
@@ -343,7 +189,7 @@ fn normalize_read_only_payload(
         metadata: InventorySnapshotMetadata {
             source: InventorySource::ReadOnlyScan,
             observed_at: Utc::now(),
-            schema_version: IMPORT_SCHEMA_VERSION,
+            schema_version: READ_ONLY_SCHEMA_VERSION,
             item_count: items.len() as u64,
             checksum_sha256: hex::encode(Sha256::digest(raw.as_bytes())),
         },
@@ -361,9 +207,9 @@ fn read_only_credits(root: &serde_json::Map<String, Value>) -> Result<Option<u64
     };
     let credits = value
         .as_u64()
-        .ok_or(InventoryError::InvalidHelperField("Credits"))?;
+        .ok_or(InventoryError::InvalidInventoryField("Credits"))?;
     if credits > MAX_WALLET_AMOUNT {
-        return Err(InventoryError::InvalidHelperField("Credits"));
+        return Err(InventoryError::InvalidInventoryField("Credits"));
     }
     Ok(Some(credits))
 }
@@ -376,15 +222,15 @@ fn read_only_syndicates(
     };
     let entries = value
         .as_array()
-        .ok_or(InventoryError::InvalidHelperField("Affiliations"))?;
+        .ok_or(InventoryError::InvalidInventoryField("Affiliations"))?;
     if entries.len() > MAX_AFFILIATIONS {
-        return Err(InventoryError::InvalidHelperField("Affiliations"));
+        return Err(InventoryError::InvalidInventoryField("Affiliations"));
     }
     let mut by_tag = BTreeMap::new();
     for entry in entries {
         let entry = entry
             .as_object()
-            .ok_or(InventoryError::InvalidHelperField("Affiliations item"))?;
+            .ok_or(InventoryError::InvalidInventoryField("Affiliations item"))?;
         let Some(tag) = entry.get("Tag").and_then(Value::as_str) else {
             continue;
         };
@@ -447,26 +293,26 @@ fn read_only_upgrade_instances(
     if let Some(upgrades) = root.get("Upgrades") {
         let upgrades = upgrades
             .as_array()
-            .ok_or(InventoryError::InvalidHelperField("Upgrades"))?;
+            .ok_or(InventoryError::InvalidInventoryField("Upgrades"))?;
         for upgrade in upgrades {
             let map = upgrade
                 .as_object()
-                .ok_or(InventoryError::InvalidHelperField("upgrade"))?;
-            let Some(item_id) = helper_reference_id(map.get("ItemId"))? else {
+                .ok_or(InventoryError::InvalidInventoryField("upgrade"))?;
+            let Some(item_id) = inventory_reference_id(map.get("ItemId"))? else {
                 continue;
             };
             let canonical_game_id = map
                 .get("ItemType")
                 .or_else(|| map.get("Type"))
                 .and_then(Value::as_str)
-                .ok_or(InventoryError::InvalidHelperField("ItemType"))?
+                .ok_or(InventoryError::InvalidInventoryField("ItemType"))?
                 .trim()
                 .to_owned();
             if canonical_game_id.is_empty() || canonical_game_id.len() > MAX_IDENTIFIER_LENGTH {
                 return Err(InventoryError::InvalidIdentifier);
             }
             let rank = read_only_rank("Upgrades", map)?.unwrap_or_default();
-            let xp = helper_u32(map.get("XP"), "XP", 0)?;
+            let xp = inventory_u32(map.get("XP"), "XP", 0)?;
             let source = EquippedModSource {
                 canonical_game_id,
                 rank,
@@ -482,7 +328,7 @@ fn read_only_upgrade_instances(
                     || previous.rank != source.rank
                     || previous.tradeability != source.tradeability)
             {
-                return Err(InventoryError::InvalidHelperField("duplicate ItemId"));
+                return Err(InventoryError::InvalidInventoryField("duplicate ItemId"));
             }
         }
     }
@@ -499,11 +345,11 @@ fn attach_equipment_placements(
         };
         let entries = entries
             .as_array()
-            .ok_or(InventoryError::InvalidHelperField("equipment category"))?;
+            .ok_or(InventoryError::InvalidInventoryField("equipment category"))?;
         for (equipment_index, entry) in entries.iter().enumerate() {
             let map = entry
                 .as_object()
-                .ok_or(InventoryError::InvalidHelperField("equipment"))?;
+                .ok_or(InventoryError::InvalidInventoryField("equipment"))?;
             let Some(equipment_game_id) = map
                 .get("ItemType")
                 .or_else(|| map.get("Type"))
@@ -526,9 +372,9 @@ fn attach_equipment_placements(
                 .as_ref()
                 .is_some_and(|name| name.len() > MAX_IDENTIFIER_LENGTH)
             {
-                return Err(InventoryError::InvalidHelperField("ItemName"));
+                return Err(InventoryError::InvalidInventoryField("ItemName"));
             }
-            let raw_equipment_id = helper_reference_id(map.get("ItemId"))?
+            let raw_equipment_id = inventory_reference_id(map.get("ItemId"))?
                 .unwrap_or_else(|| format!("{category}:{equipment_index}:{equipment_game_id}"));
             let equipment_instance_key = hex::encode(Sha256::digest(raw_equipment_id.as_bytes()));
             let Some(configs) = map.get("Configs") else {
@@ -536,9 +382,9 @@ fn attach_equipment_placements(
             };
             let configs = configs
                 .as_array()
-                .ok_or(InventoryError::InvalidHelperField("Configs"))?;
+                .ok_or(InventoryError::InvalidInventoryField("Configs"))?;
             if configs.len() > MAX_EQUIPMENT_CONFIGS {
-                return Err(InventoryError::InvalidHelperField("Configs"));
+                return Err(InventoryError::InvalidInventoryField("Configs"));
             }
             for (config_index, config) in configs.iter().enumerate() {
                 // The live API uses null placeholders for empty loadout slots.
@@ -551,14 +397,14 @@ fn attach_equipment_placements(
                 };
                 let upgrades = upgrades
                     .as_array()
-                    .ok_or(InventoryError::InvalidHelperField("Config.Upgrades"))?;
+                    .ok_or(InventoryError::InvalidInventoryField("Config.Upgrades"))?;
                 if upgrades.len() > MAX_CONFIG_UPGRADES {
-                    return Err(InventoryError::InvalidHelperField("Config.Upgrades"));
+                    return Err(InventoryError::InvalidInventoryField("Config.Upgrades"));
                 }
                 let config_index = u16::try_from(config_index)
-                    .map_err(|_| InventoryError::InvalidHelperField("Config index"))?;
+                    .map_err(|_| InventoryError::InvalidInventoryField("Config index"))?;
                 for upgrade in upgrades {
-                    let Some(upgrade_id) = helper_reference_id(Some(upgrade))? else {
+                    let Some(upgrade_id) = inventory_reference_id(Some(upgrade))? else {
                         continue;
                     };
                     // Intrinsic/default upgrades use canonical Lotus paths rather
@@ -586,7 +432,7 @@ fn attach_equipment_placements(
     Ok(())
 }
 
-fn helper_reference_id(value: Option<&Value>) -> Result<Option<String>, InventoryError> {
+fn inventory_reference_id(value: Option<&Value>) -> Result<Option<String>, InventoryError> {
     let Some(value) = value else {
         return Ok(None);
     };
@@ -597,11 +443,11 @@ fn helper_reference_id(value: Option<&Value>) -> Result<Option<String>, Inventor
             .or_else(|| map.get("$oid"))
             .and_then(Value::as_str),
         Value::Null => None,
-        _ => return Err(InventoryError::InvalidHelperField("ItemId")),
+        _ => return Err(InventoryError::InvalidInventoryField("ItemId")),
     };
     let candidate = candidate.map(str::trim).filter(|value| !value.is_empty());
     if candidate.is_some_and(|value| value.len() > MAX_IDENTIFIER_LENGTH) {
-        return Err(InventoryError::InvalidHelperField("ItemId"));
+        return Err(InventoryError::InvalidInventoryField("ItemId"));
     }
     Ok(candidate.map(ToOwned::to_owned))
 }
@@ -621,118 +467,19 @@ fn read_only_rank(
             let fingerprint = map
                 .get("UpgradeFingerprint")
                 .and_then(Value::as_str)
-                .ok_or(InventoryError::InvalidHelperField("UpgradeFingerprint"))?;
+                .ok_or(InventoryError::InvalidInventoryField("UpgradeFingerprint"))?;
             let decoded: Value = serde_json::from_str(fingerprint)
-                .map_err(|_| InventoryError::InvalidHelperField("UpgradeFingerprint"))?;
+                .map_err(|_| InventoryError::InvalidInventoryField("UpgradeFingerprint"))?;
             let object = decoded
                 .as_object()
-                .ok_or(InventoryError::InvalidHelperField("UpgradeFingerprint"))?;
-            Ok(helper_optional_rank(object.get("lvl"))?.or(Some(0)))
+                .ok_or(InventoryError::InvalidInventoryField("UpgradeFingerprint"))?;
+            Ok(inventory_optional_rank(object.get("lvl"))?.or(Some(0)))
         }
-        _ => helper_optional_rank(map.get("Rank").or_else(|| map.get("UpgradeLevel"))),
+        _ => inventory_optional_rank(map.get("Rank").or_else(|| map.get("UpgradeLevel"))),
     }
 }
 
-fn parse_helper_value(raw: &str, root: Value) -> Result<PlayerInventory, InventoryError> {
-    let payload = unwrap_helper_payload(root)?;
-    normalize_helper_payload(raw, &payload, InventorySource::HelperImport, Utc::now(), 1)
-}
-
-fn parse_companion_value(raw: &str, root: Value) -> Result<PlayerInventory, InventoryError> {
-    let document: CompanionDocument = serde_json::from_value(root)?;
-    if document.schema_version != COMPANION_SCHEMA_VERSION {
-        return Err(InventoryError::UnsupportedSchema(document.schema_version));
-    }
-    if document.producer != OVERWOLF_COMPANION_PRODUCER {
-        return Err(InventoryError::InvalidCompanionEnvelope("producer"));
-    }
-    if document.game_id != WARFRAME_OVERWOLF_GAME_ID {
-        return Err(InventoryError::InvalidCompanionEnvelope("gameId"));
-    }
-    if document.feature != "match_info" {
-        return Err(InventoryError::InvalidCompanionEnvelope("feature"));
-    }
-    if document.key != "inventory" {
-        return Err(InventoryError::InvalidCompanionEnvelope("key"));
-    }
-    if !document.complete {
-        return Err(InventoryError::IncompleteCompanionSnapshot);
-    }
-    let payload = match document.value {
-        Value::String(encoded) => serde_json::from_str(&encoded)?,
-        value @ (Value::Object(_) | Value::Array(_)) => value,
-        _ => return Err(InventoryError::InvalidCompanionEnvelope("value")),
-    };
-    normalize_helper_payload(
-        raw,
-        &payload,
-        InventorySource::OverwolfCompanion,
-        document.observed_at,
-        document.schema_version,
-    )
-}
-
-fn normalize_helper_payload(
-    raw: &str,
-    payload: &Value,
-    source: InventorySource,
-    observed_at: DateTime<Utc>,
-    schema_version: u32,
-) -> Result<PlayerInventory, InventoryError> {
-    let mut nodes = 0;
-    let mut rows = Vec::new();
-    collect_helper_rows(payload, 0, &mut nodes, &mut rows)?;
-    if rows.is_empty() {
-        return Err(InventoryError::HelperItemsMissing);
-    }
-
-    let mut grouped: BTreeMap<GroupKey, u32> = BTreeMap::new();
-    for (canonical_game_id, quantity, rank) in rows {
-        let key = GroupKey {
-            canonical_game_id,
-            rank,
-            subtype: None,
-        };
-        let total = grouped.entry(key).or_default();
-        *total = total
-            .checked_add(quantity)
-            .ok_or(InventoryError::InvalidQuantity(u32::MAX))?;
-        if *total > MAX_QUANTITY {
-            return Err(InventoryError::InvalidQuantity(*total));
-        }
-    }
-    if grouped.len() > MAX_IMPORT_ITEMS {
-        return Err(InventoryError::TooManyItems(grouped.len()));
-    }
-
-    let items = grouped
-        .into_iter()
-        .map(|(key, quantity)| InventoryItem {
-            canonical_game_id: key.canonical_game_id,
-            quantity,
-            rank: key.rank,
-            subtype: None,
-            tradeability: Tradeability::Unknown,
-            leveled: key.rank.is_some_and(|rank| rank > 0),
-        })
-        .collect::<Vec<_>>();
-    Ok(PlayerInventory {
-        metadata: InventorySnapshotMetadata {
-            source,
-            observed_at,
-            schema_version,
-            item_count: items.len() as u64,
-            checksum_sha256: hex::encode(Sha256::digest(raw.as_bytes())),
-        },
-        items,
-        mod_usage_scanned: false,
-        equipped_mods: Vec::new(),
-        credits: None,
-        syndicates: Vec::new(),
-    })
-}
-
-fn unwrap_helper_payload(root: Value) -> Result<Value, InventoryError> {
+fn unwrap_inventory_payload(root: Value) -> Result<Value, InventoryError> {
     let Some(value) = root.get("value") else {
         return Ok(root);
     };
@@ -743,57 +490,7 @@ fn unwrap_helper_payload(root: Value) -> Result<Value, InventoryError> {
     }
 }
 
-fn collect_helper_rows(
-    value: &Value,
-    depth: usize,
-    nodes: &mut usize,
-    rows: &mut Vec<(String, u32, Option<u16>)>,
-) -> Result<(), InventoryError> {
-    if depth > MAX_HELPER_DEPTH {
-        return Err(InventoryError::HelperNestingTooDeep);
-    }
-    *nodes = nodes.saturating_add(1);
-    if *nodes > MAX_HELPER_NODES {
-        return Err(InventoryError::HelperNodeLimit);
-    }
-    match value {
-        Value::Object(map) => {
-            if let Some(item_type) = map.get("ItemType") {
-                let canonical_game_id = item_type
-                    .as_str()
-                    .ok_or(InventoryError::InvalidHelperField("ItemType"))?
-                    .trim()
-                    .to_owned();
-                if canonical_game_id.is_empty() || canonical_game_id.len() > MAX_IDENTIFIER_LENGTH {
-                    return Err(InventoryError::InvalidIdentifier);
-                }
-                let quantity = helper_u32(map.get("ItemCount"), "ItemCount", 1)?;
-                if quantity == 0 || quantity > MAX_QUANTITY {
-                    return Err(InventoryError::InvalidQuantity(quantity));
-                }
-                let rank =
-                    helper_optional_rank(map.get("Rank").or_else(|| map.get("UpgradeLevel")))?;
-                rows.push((canonical_game_id, quantity, rank));
-                if rows.len() > MAX_IMPORT_ITEMS {
-                    return Err(InventoryError::TooManyItems(rows.len()));
-                }
-                return Ok(());
-            }
-            for child in map.values() {
-                collect_helper_rows(child, depth + 1, nodes, rows)?;
-            }
-        }
-        Value::Array(values) => {
-            for child in values {
-                collect_helper_rows(child, depth + 1, nodes, rows)?;
-            }
-        }
-        _ => {}
-    }
-    Ok(())
-}
-
-fn helper_u32(
+fn inventory_u32(
     value: Option<&Value>,
     field: &'static str,
     default: u32,
@@ -804,18 +501,18 @@ fn helper_u32(
     let value = value
         .as_u64()
         .and_then(|value| u32::try_from(value).ok())
-        .ok_or(InventoryError::InvalidHelperField(field))?;
+        .ok_or(InventoryError::InvalidInventoryField(field))?;
     Ok(value)
 }
 
-fn helper_optional_rank(value: Option<&Value>) -> Result<Option<u16>, InventoryError> {
+fn inventory_optional_rank(value: Option<&Value>) -> Result<Option<u16>, InventoryError> {
     let Some(value) = value else {
         return Ok(None);
     };
     let rank = value
         .as_u64()
         .and_then(|value| u16::try_from(value).ok())
-        .ok_or(InventoryError::InvalidHelperField("Rank"))?;
+        .ok_or(InventoryError::InvalidInventoryField("Rank"))?;
     if rank > MAX_RANK {
         return Err(InventoryError::InvalidRank(rank));
     }
@@ -894,7 +591,7 @@ pub fn resolve_inventory<S: BuildHasher>(
     }
 }
 
-/// Пересчитывает резерв без повторного resolver/import.
+/// Пересчитывает резерв без повторного сопоставления исходного снимка.
 #[must_use]
 pub fn apply_keep_copies(
     snapshot: &ResolvedInventorySnapshot,
@@ -1176,38 +873,22 @@ fn normalized_identifier(value: &str) -> String {
 
 #[derive(Debug, Error)]
 pub enum InventoryError {
-    #[error("inventory import exceeds the 8 MiB limit")]
+    #[error("inventory response exceeds the 8 MiB limit")]
     PayloadTooLarge,
     #[error("invalid inventory JSON: {0}")]
     Json(#[from] serde_json::Error),
-    #[error("unsupported inventory schema version {0}")]
-    UnsupportedSchema(u32),
     #[error("inventory contains too many rows: {0}")]
     TooManyItems(usize),
-    #[error("inventory item_count mismatch: declared {declared}, actual {actual}")]
-    ItemCountMismatch { declared: u64, actual: usize },
     #[error("canonicalGameId must contain 1..=256 bytes")]
     InvalidIdentifier,
     #[error("quantity must be within 1..={MAX_QUANTITY}, received {0}")]
     InvalidQuantity(u32),
     #[error("rank must be within 0..={MAX_RANK}, received {0}")]
     InvalidRank(u16),
-    #[error("subtype must contain 1..={MAX_SUBTYPE_LENGTH} bytes")]
-    InvalidSubtype,
-    #[error("inventory contains a duplicate exact row")]
-    DuplicateItem,
-    #[error("helper inventory does not contain recognizable ItemType rows")]
-    HelperItemsMissing,
-    #[error("helper inventory nesting exceeds the safe limit")]
-    HelperNestingTooDeep,
-    #[error("helper inventory contains too many JSON nodes")]
-    HelperNodeLimit,
-    #[error("helper inventory field {0} has an invalid type")]
-    InvalidHelperField(&'static str),
-    #[error("Overwolf companion envelope field {0} is invalid")]
-    InvalidCompanionEnvelope(&'static str),
-    #[error("Overwolf companion snapshot is not complete")]
-    IncompleteCompanionSnapshot,
+    #[error("inventory does not contain recognizable ItemType rows")]
+    InventoryItemsMissing,
+    #[error("inventory field {0} has an invalid type")]
+    InvalidInventoryField(&'static str),
 }
 
 #[cfg(test)]
@@ -1273,15 +954,6 @@ mod tests {
             credits: None,
             syndicates: Vec::new(),
         }
-    }
-
-    #[test]
-    fn parser_rejects_incoherent_count() {
-        let error = parse_platscope_json(
-            r#"{"schemaVersion":1,"observedAt":"2026-08-27T00:00:00Z","itemCount":2,"items":[]}"#,
-        )
-        .expect_err("count mismatch must fail");
-        assert!(matches!(error, InventoryError::ItemCountMismatch { .. }));
     }
 
     #[test]
@@ -1408,56 +1080,6 @@ mod tests {
         let resolved = resolve_inventory(&source, &catalog(), &variants, Platform::Pc, 0);
         assert_eq!(resolved.items[0].unknown_quantity, 4);
         assert_eq!(resolved.items[0].sellable_quantity, 0);
-    }
-
-    #[test]
-    fn helper_export_is_grouped_and_never_assumes_tradeability() {
-        let parsed = parse_helper_json(include_str!(
-            "../../../fixtures/inventory/helper_inventory.json"
-        ))
-        .expect("helper fixture parses");
-        assert_eq!(parsed.metadata.source, InventorySource::HelperImport);
-        assert_eq!(parsed.metadata.item_count, 3);
-        let prime_part = parsed
-            .items
-            .iter()
-            .find(|item| item.canonical_game_id.ends_with("NyxPrimeChassis"))
-            .expect("prime part");
-        assert_eq!(prime_part.quantity, 3);
-        assert_eq!(prime_part.tradeability, Tradeability::Unknown);
-        let mod_item = parsed
-            .items
-            .iter()
-            .find(|item| item.canonical_game_id.ends_with("PrimedFlow"))
-            .expect("ranked mod");
-        assert_eq!(mod_item.rank, Some(10));
-        assert!(mod_item.leveled);
-
-        let variants = HashSet::from([MarketVariantKey::new(
-            "primed_flow",
-            Platform::Pc,
-            Some(10),
-            None::<String>,
-        )
-        .expect("exact helper variant")]);
-        let resolved = resolve_inventory(&parsed, &catalog(), &variants, Platform::Pc, 0);
-        let resolved_mod = resolved
-            .items
-            .iter()
-            .find(|item| item.canonical_game_id.ends_with("PrimedFlow"))
-            .expect("resolved helper mod");
-        assert_eq!(resolved_mod.resolution, InventoryResolution::Resolved);
-        assert_eq!(resolved_mod.owned_quantity, 1);
-        assert_eq!(resolved_mod.unknown_quantity, 1);
-        assert_eq!(resolved_mod.sellable_quantity, 0);
-    }
-
-    #[test]
-    fn helper_wrapper_string_is_supported() {
-        let raw = r#"{"feature":"match_info","key":"inventory","value":"{\"MiscItems\":[{\"ItemType\":\"/Lotus/Test/Part\",\"ItemCount\":2}]}"}"#;
-        let parsed = parse_inventory_json(raw).expect("Overwolf-style wrapper parses");
-        assert_eq!(parsed.metadata.source, InventorySource::HelperImport);
-        assert_eq!(parsed.items[0].quantity, 2);
     }
 
     #[test]
@@ -1606,13 +1228,13 @@ mod tests {
             r#"{"Upgrades":[{"ItemType":"/Lotus/Test/Mod","UpgradeFingerprint":"not-json"}]}"#;
         assert!(matches!(
             parse_read_only_scan_json(invalid_json),
-            Err(InventoryError::InvalidHelperField("UpgradeFingerprint"))
+            Err(InventoryError::InvalidInventoryField("UpgradeFingerprint"))
         ));
 
         let invalid_level = r#"{"Upgrades":[{"ItemType":"/Lotus/Test/Mod","UpgradeFingerprint":"{\"lvl\":\"five\"}"}]}"#;
         assert!(matches!(
             parse_read_only_scan_json(invalid_level),
-            Err(InventoryError::InvalidHelperField("Rank"))
+            Err(InventoryError::InvalidInventoryField("Rank"))
         ));
     }
 
@@ -1651,61 +1273,5 @@ mod tests {
             .expect("rank five instances");
         assert_eq!(rank_five.owned_quantity, 2);
         assert_eq!(rank_five.sellable_quantity, 2);
-    }
-
-    #[test]
-    fn versioned_overwolf_companion_envelope_preserves_observation_time() {
-        let raw = include_str!("../../../fixtures/inventory/overwolf_companion_v1.json");
-        let parsed = parse_inventory_json(raw).expect("companion envelope parses");
-        assert_eq!(parsed.metadata.source, InventorySource::OverwolfCompanion);
-        assert_eq!(
-            parsed.metadata.observed_at,
-            Utc.with_ymd_and_hms(2026, 8, 27, 10, 15, 30).unwrap()
-        );
-        assert_eq!(parsed.items.len(), 2);
-        assert_eq!(parsed.items[0].quantity, 1);
-        assert_eq!(parsed.items[0].rank, Some(10));
-        assert_eq!(parsed.items[0].tradeability, Tradeability::Unknown);
-        assert_eq!(parsed.items[1].quantity, 2);
-        assert_eq!(parsed.items[1].tradeability, Tradeability::Unknown);
-    }
-
-    #[test]
-    fn overwolf_companion_envelope_fails_closed() {
-        let incomplete = r#"{
-            "schemaVersion":1,
-            "producer":"platscope-overwolf-companion",
-            "observedAt":"2026-08-27T10:15:30Z",
-            "gameId":8954,
-            "feature":"match_info",
-            "key":"inventory",
-            "complete":false,
-            "value":{"Inventory":{"MiscItems":[
-                {"ItemType":"/Lotus/Test/Part","ItemCount":2}
-            ]}}
-        }"#;
-        assert!(matches!(
-            parse_inventory_json(incomplete),
-            Err(InventoryError::IncompleteCompanionSnapshot)
-        ));
-
-        let wrong_game = incomplete
-            .replace("\"gameId\":8954", "\"gameId\":1")
-            .replace("\"complete\":false", "\"complete\":true");
-        assert!(matches!(
-            parse_inventory_json(&wrong_game),
-            Err(InventoryError::InvalidCompanionEnvelope("gameId"))
-        ));
-    }
-
-    #[test]
-    fn helper_schema_drift_fails_closed() {
-        let error = parse_helper_json(r#"{"Inventory":{"MiscItems":[{"ItemType":7}]}}"#)
-            .expect_err("invalid ItemType must fail");
-        assert!(matches!(
-            error,
-            InventoryError::InvalidHelperField("ItemType")
-        ));
-        assert!(parse_helper_json(r#"{"Inventory":{"Credits":100}}"#).is_err());
     }
 }

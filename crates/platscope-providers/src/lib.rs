@@ -12,7 +12,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, Utc};
 use platscope_domain::{
     GameMetadataSnapshot, ItemCatalog, LiveOrderBook, MarketVariantKey, NormalizedMarketSnapshot,
-    PlayerInventory, ProviderId,
+    ProviderId,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -100,12 +100,6 @@ pub trait HistoricalMarketProvider: Send + Sync {
         dump: &RawMarketDump,
         catalog: &ItemCatalog,
     ) -> Result<NormalizedMarketSnapshot, ProviderError>;
-}
-
-#[async_trait]
-pub trait InventoryProvider: Send + Sync {
-    fn id(&self) -> ProviderId;
-    async fn load_inventory(&self) -> Result<PlayerInventory, ProviderError>;
 }
 
 #[async_trait]

@@ -1,201 +1,82 @@
-# Источники данных
+# Источники и обновление данных
 
-## Общая политика
+## Матрица источников
 
-Каждый источник имеет отдельный transport DTO, parser, validation profile, health record и cache namespace. Данные разных bulk providers не смешиваются в одном snapshot.
+| Данные | Источник | Назначение |
+| --- | --- | --- |
+| текущий bulk-снимок и история | `relics.run` | закрытые сделки, объём и медианы точных вариантов |
+| резервный bulk-снимок | `FrameForgePricing` | fallback при недоступности основного снимка |
+| каталог, live-ордера и аккаунт | Warframe Market v2 | русские имена, изображения, текущий стакан и собственные listings |
+| игровые определения | `WFCD/warframe-items` | комплекты, реликвии, дукаты, моды, изображения частей и требования мастерства |
+| публичные ротации | `api.warframestat.us` | Баро, Стальной путь и идентификатор текущей Ночной волны |
+| точный инвентарь и Нора | Digital Extremes `inventory.php` и `getVendorInfo.php` | owned-количество, ранги, сборки, валюты и актуальный ассортимент |
+| сделки и экран наград | локальные DBWIN и `EE.log` | триггеры OCR и подтверждённые торговые события |
 
-## relics.run — primary bulk price provider
+## Правила доверия
 
-URL-шаблон:
+- У каждого HTTP-источника собственные transport DTO, лимит ответа, parser и health-запись.
+- Данные разных bulk-провайдеров не смешиваются внутри одного снимка.
+- Внешнее display name никогда не является ключом. Связь строится по canonical ID/slug и точным измерениям варианта.
+- Невалидный ответ не заменяет предыдущий валидный LKG.
+- Отсутствующая цена хранится как `None`, а не как `0p` или выдуманный минимум.
+
+## Рыночные цены
+
+Основной daily URL:
 
 ```text
 https://www.relics.run/history/price_history_YYYY-MM-DD.json
 ```
 
-Поиск выполняется от текущей UTC-даты до `today - 5 days`. `404` для сегодняшнего дня является ожидаемым состоянием публикации, а не немедленной поломкой provider.
+Поиск свежего снимка идёт назад не более чем на пять UTC-дней. История до 90 дней загружается инкрементально: сервис запрашивает только пропущенные даты и не скачивает уже сохранённый день повторно.
 
-## Warframe Market — основной каталог предметов
-
-Catalog URL:
-
-```text
-GET https://api.warframe.market/v2/items
-Language: ru
-Platform: pc
-```
-
-Каталог WFM v2 хранит canonical `slug` как идентичность, английское и русское имена, а также отдельные `thumb` для каждой локали. При русском языке приложение показывает русские названия во всех рыночных представлениях и русскую карточку мода. Для Prime-компонентов точное изображение детали из WFCD имеет приоритет над общей картинкой WFM. Локализация влияет только на отображение и поиск и никогда не заменяет ключ варианта.
-
-Catalog schema v3 принудительно обновляет старый LKG без русских полей при следующей фоновой проверке. Уже сохранённый снимок инвентаря обогащается актуальным каталогом при чтении, поэтому повторный импорт не требуется.
-
-relics.run остаётся основным источником текущих и исторических bulk-цен; его `item_id` сопоставляется с WFM catalog `id` до публикации снимка.
-
-Price root на 2026-08-26:
-
-```text
-Map<display_name, RawMarketRecord[]>
-```
-
-`display_name` используется только для диагностики. Нормализация связывает запись по `item_id` с catalog `id`, получает `slug`, а затем строит `MarketVariantKey`.
-
-Наблюдаемый daily dump не содержит отдельного платформенного измерения и нормализуется как `Platform::Pc`. Это явная граница покрытия: bulk-цены и bulk-history не переносятся на PlayStation, Xbox, Switch или Mobile.
-
-Обязательные record fields:
-
-```text
-datetime: RFC3339 string
-volume: finite non-negative number
-median: finite non-negative number
-order_type: closed | buy | sell
-item_id: string
-```
-
-Условные измерения:
-
-```text
-mod_rank?: integer
-subtype?: string
-amber_stars?: integer
-cyan_stars?: integer
-```
-
-Дополнительные числовые поля сохраняются для диагностики и последующего пересчёта. Не все поля присутствуют у каждого `order_type`.
-
-## FrameForgePricing — mirror bulk price provider
-
-Текущий raw URL:
+FrameForge используется только как целый резервный price snapshot:
 
 ```text
 https://raw.githubusercontent.com/WyrmStudios/FrameForgePricing/main/price_history_latest.json
 ```
 
-На 27 августа 2026 года зеркало не публикует `items.json`. Поэтому:
+Bulk-набор не содержит надёжного платформенного измерения и поэтому применяется только к PC. Для другой платформы приложение не показывает PC-оценку как её цену.
 
-- mirror отвечает только за price dump;
-- catalog берётся из собственного LKG cache или обновляется отдельным provider;
-- несовместимость `item_id` с текущим каталогом отклоняет snapshot либо помещает неизвестные записи в quarantine по заранее заданному порогу;
-- `provider = frameforge_mirror` фиксируется для всего snapshot.
+## Warframe Market
 
-## Local Cache Provider
+Каталог и live-ордера запрашиваются через v2 API с `Language: ru`. В базе хранятся canonical slug, русское имя и локализованное изображение. Ссылки пользователя открываются в русской локали сайта.
 
-Local cache возвращает только полностью promoted snapshot/catalog. Temporary download никогда не виден читателям. Metadata:
+Live-запрос принимает platform, crossplay, rank, subtype и звёзды. После ответа PlatScope повторно проверяет эти измерения и исключает невидимые, offline и несовпадающие ордера.
 
-```text
-provider
-source_date
-fetched_at
-promoted_at
-schema_version
-item_count
-record_count
-checksum_sha256
-```
+Токен подключённого аккаунта хранится в Windows Credential Manager. Чтение собственных ордеров не требует подтверждения; create/update/delete требуют явной проверки предмета, цены и количества.
 
-Desktop lifecycle не блокирует старт сетью. После инициализации UI отдельный scheduler сразу проверяет возраст текущего LKG, затем повторяет проверку каждые пять минут. Реальный download выполняется только когда `promoted_at` старше `bulk_refresh_hours` (значение ограничивается диапазоном 1–24 часа) либо snapshot отсутствует. Ручной и фоновый refresh используют один async lock, поэтому не создают последовательный двойной download. UI получает `market-data-updated` только после успешной validation и atomic promotion; при provider failure остаётся прежний LKG.
+## WFCD
 
-Экран «Настройки» позволяет выбрать рыночную платформу, интервал bulk-проверки от 1 до 24 часов, TTL локального live quote от 30 до 600 секунд и crossplay-контекст явных WFM-запросов. Интерфейс прямо сообщает, что daily bulk покрывает только PC. Команда сохранения независимо проверяет полный объект: bulk interval 1–24 часа, live TTL 15–600 секунд и резерв inventory copies 0–10. Поэтому значения за пределами безопасного operational envelope не попадут в SQLite даже при прямом IPC-вызове.
+Метаданные игры обновляются независимо от цен и атомарно сохраняются отдельным LKG. Из них берутся:
 
-## WFCD game metadata
+- состав и количество частей Prime-комплектов;
+- таблицы наград реликвий и вероятности refinement;
+- дукаты, mastery rank и Riven disposition;
+- русские названия модов и точные изображения компонентов;
+- правила растворения мистификаторов и доступные наборы.
 
-Поддерживаемый источник игровых определений — [WFCD/warframe-items](https://github.com/WFCD/warframe-items). Он обновляется отдельно от bulk prices и атомарно публикуется как metadata LKG. Schema v2 добавила Riven `disposition` и точный `omegaAttenuation` из `Primary`, `Secondary`, `Melee`, `SentinelWeapons`, `Arch-Gun` и `Arch-Melee`. Schema v3 нормализует `masteryReq` в диапазоне 0–50 для предметов, точно сопоставленных WFM-каталогу; Item Detail различает настоящее `MR 0` и отсутствие определения.
+Riven disposition является характеристикой оружия и не превращается в цену уникального Riven roll.
 
-Riven-поля используются только как общая характеристика оружия. Они не подаются в ordinary pricing path и не создают fair/list/quick price для уникального roll.
+## Инвентарь и точная Ночная волна
 
-## Historical daily dumps
+Пользователь вручную запускает read-only scan. Из памяти процесса извлекается только краткоживущая session info, после чего Rust-клиент запрашивает официальный inventory endpoint. Те же временные реквизиты используются для `getVendorInfo.php`; после завершения они обнуляются.
 
-History bootstrap использует тот же immutable URL `price_history_YYYY-MM-DD.json`, transport limit, parser и validation profile, что и latest ingestion. После нормализации raw body освобождается; в SQLite остаются только `closed_median`, `closed_volume`, `sell_median` и `buy_median` точного варианта.
+Публичный Nightwave endpoint нужен только для определения текущего season tag. Ассортимент и цены Норы считаются подтверждёнными лишь при успешном ответе Digital Extremes и действуют до указанного expiry. При ошибке Ночная волна исключается из расчёта, а не угадывается по статическому списку.
 
-Текущий snapshot попадает в историю автоматически. При каждом запуске background service ищет пропуски назад до 90 дней и импортирует максимум семь новых дат. Такой incremental режим даёт минимальные 7 дней быстро и не создаёт burst из десятков больших запросов.
+## Локальные сигналы игры
 
-## Локальный inventory import
+`EE.log` читается только с текущей позиции и не изменяется. Торговый диалог ограничен timeout и становится событием лишь после success-маркера. DBWIN используется как быстрый сигнал экрана наград; `EE.log` остаётся резервом.
 
-PlatScope JSON v1 — текущий поддерживаемый acquisition adapter. Файл выбирает пользователь; payload ограничен 8 МиБ, валидируется целиком и после нормализации не хранится. В SQLite попадают только checksum/metadata и resolved quantities. Инвентарь не отправляется внешним providers и не логируется.
+OCR получает каталог русских названий из локального LKG. Захваченные изображения не сохраняются и не отправляются внешним сервисам.
 
-Экспорты helper tools подключаются только отдельными versioned adapters после проверки схемы и лицензии. Строгий [Overwolf companion envelope v1](OVERWOLF_COMPANION.md) принимается отдельным opt-in poller: путь задаётся пользователем, стабильность файла проверяется до импорта, а helper JSON автоматически не принимается. Companion distribution и реальный GEP runtime остаются выключены до Overwolf approval. Read-only process scan не включается без актуальной policy/security проверки и явного opt-in.
+## Частота обновления
 
-## EE.log — подтверждение сделок
+- market LKG: проверка при запуске и каждые пять минут, реальная загрузка только после истечения настроенного интервала;
+- live quote: короткий TTL, по умолчанию 90 секунд;
+- история: до семи отсутствующих дней за один фоновый проход;
+- WFCD: раз в сутки либо вручную;
+- инвентарь и точная Нора: только по кнопке пользователя;
+- сделки и награды: локальное наблюдение во время работы приложения.
 
-PlatScope читает только новые данные локального `%LOCALAPPDATA%\Warframe\EE.log` и не изменяет файл. Начало торгового диалога, блоки `You are offering` / `will receive` и success-маркер игры образуют один bounded event. Незавершённый диалог удаляется через 120 секунд; строка успеха без сохранённого диалога игнорируется.
-
-Источник сообщает английские display names и количество, но не гарантирует точные измерения WFM-варианта. Поэтому журнал может предложить изменение только единственного нерангового ордера с точным английским именем. Он не заменяет inventory source и не применяется как источник цены.
-
-## Warframe.Market — live provider
-
-Официальная документация: [docs.warframe.market](https://docs.warframe.market/).
-
-Используемые v2 endpoints:
-
-```text
-GET /v2/versions
-GET /v2/items
-GET /v2/orders/item/{slug}
-GET /v2/orders/item/{slug}/top
-```
-
-Контекстные headers:
-
-```text
-User-Agent: PlatScope/<version> (+repository-or-contact)
-Language: en | ru
-Platform: pc | ps4 | xbox | switch | mobile
-Crossplay: true | false
-```
-
-`Platform` берётся из сохранённого `AppSettings` и также входит в ключ live-cache. Смена платформы не может вернуть quote или bulk-рекомендацию от прежнего рынка.
-
-Response envelope:
-
-```text
-{
-  apiVersion: string,
-  data: object | array | null,
-  error: object | null
-}
-```
-
-Для `/v2/orders/item/{slug}` offline orders не удаляются сервером. PlatScope фильтрует `visible`, нужную сторону, exact variant и acceptable online status. Для краткой live-котировки предпочтителен `/top`, но полный endpoint нужен для depth и объяснения.
-
-Этап 5 использует `/v2/orders/item/{slug}/top`: endpoint возвращает до пяти sell и пяти buy orders от online-пользователей и принимает exact `rank`, `subtype`, `amberStars`, `cyanStars`. Клиент повторно проверяет эти измерения после парсинга. Контракт сверялся с официальной документацией API `v0.25.0` 27 августа 2026 года.
-
-Текущий официальный общий предел — 3 запроса/с. Это конфигурационная константа с ссылкой на [правила](https://docs.warframe.market/docs/rules/overview/), а не вечное предположение. Реакция на `429`/`509`: respect `Retry-After`, exponential backoff с jitter, ограниченное число попыток, stale cache fallback.
-
-Legacy `/v1/items/{slug}/statistics` наблюдался рабочим, но не входит в актуальную v2-документацию. Он не является foundation dependency.
-
-## Validation gates
-
-До promotion проверяются:
-
-- HTTP success и JSON content type;
-- body не больше 32 MiB;
-- root shape;
-- source date в допустимом диапазоне;
-- item/record counts выше абсолютного floor;
-- падение count относительно LKG не превышает заданный процент без ручного schema override;
-- обязательные поля присутствуют;
-- все используемые числа finite и неотрицательны;
-- доля unknown item IDs ниже порога;
-- rank/subtype совместимы с catalog;
-- checksum вычислен до записи metadata.
-
-Первоначальные floors задаются конфигурацией и тестами после нескольких наблюдений; значения текущего dump не хардкодятся как вечная схема.
-
-## Health и кэш
-
-Для каждого provider хранятся:
-
-```text
-last_attempt
-last_success
-last_error_code
-last_error_message_redacted
-latency_ms
-consecutive_failures
-```
-
-Режимы:
-
-- bulk update check — при старте и раз в несколько часов;
-- immutable historical day — не скачивать повторно после успешного импорта;
-- live quote TTL — 90 секунд по умолчанию;
-- negative live cache — короче успешного и в отдельном key namespace;
-- catalog refresh — по `/v2/versions` hash или умеренному TTL.
+Для каждого провайдера сохраняются `last_attempt`, `last_success`, безопасный код ошибки, задержка и число последовательных сбоев. Raw response и секреты в диагностику не входят.

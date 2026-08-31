@@ -53,30 +53,6 @@ struct NightwavePublicState {
     tag: String,
 }
 
-/// Memory-scan the running game and fetch the raw inventory.json bytes.
-/// Uses ONLY the in-memory session creds (accountId + nonce) вЂ” never the
-/// encrypted JWT вЂ” so the inventory path needs no login. Silent (no prints):
-/// callers add progress output as appropriate. The desktop shell is the only
-/// caller (scan_inventory over IPC).
-pub fn fetch_inventory_bytes(
-    pid: Option<u32>,
-    platform_tag: Option<String>,
-) -> Result<(Vec<u8>, SessionInfo)> {
-    let pid = match pid {
-        Some(p) => p,
-        None => find_wf_pid().ok_or_else(|| {
-            anyhow!(
-                "Warframe doesn't appear to be running.\n\
-                 Start the game, log past the title screen, then retry."
-            )
-        })?,
-    };
-    let info = scan_session(pid).context("memory scan failed")?;
-    let client = game_client(&info)?;
-    let bytes = fetch_inventory_for_session(&client, &info, platform_tag.as_deref())?;
-    Ok((bytes, info))
-}
-
 fn game_client(info: &SessionInfo) -> Result<Client> {
     Client::builder()
         .user_agent(format!(

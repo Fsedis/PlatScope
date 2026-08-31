@@ -11,20 +11,19 @@ pub use platscope_account::{AccountOrder, AccountProfile, CreateListingInput, Up
 use platscope_account::{CredentialStore, OsCredentialStore, WfmAccountClient};
 use platscope_domain::{
     ArcanePackDefinition, CatalogItem, EquipmentKind, GameMetadataSnapshot,
-    GameMetadataSnapshotMetadata, InventoryResolution, InventorySnapshotMetadata, InventorySource,
-    ItemCatalog, LiveOrder, LiveOrderBook, LiveOrderSide, MarketHistoryPoint, MarketItemKind,
-    MarketRecord, MarketVariantKey, NightwaveVendorSnapshot, Platform, PlayerInventory,
-    PriceConfidence, PriceFreshness, PrimePartMetadata, PrimeSetComponentDefinition,
-    PrimeSetDefinition, ProviderId, RelicDefinition, RelicRewardDefinition, ResolvedInventoryItem,
-    ResolvedInventorySnapshot, SyndicateStanding, UserStatus, VaultStatus,
+    GameMetadataSnapshotMetadata, InventoryResolution, InventorySnapshotMetadata, ItemCatalog,
+    LiveOrder, LiveOrderBook, LiveOrderSide, MarketHistoryPoint, MarketItemKind, MarketRecord,
+    MarketVariantKey, NightwaveVendorSnapshot, Platform, PlayerInventory, PriceConfidence,
+    PriceFreshness, PrimePartMetadata, PrimeSetComponentDefinition, PrimeSetDefinition, ProviderId,
+    RelicDefinition, RelicRewardDefinition, ResolvedInventoryItem, ResolvedInventorySnapshot,
+    SyndicateStanding, UserStatus, VaultStatus,
 };
 use platscope_insights::{
     DucatEfficiency, RelicExpectedValue, RelicRewardInput, SetComparison, SetComparisonInput,
     SetPartInput, calculate_ducat_efficiency, calculate_relic_ev, compare_set,
 };
 use platscope_inventory::{
-    InventoryError, apply_keep_copies, parse_inventory_json, parse_read_only_scan_json,
-    resolve_inventory,
+    InventoryError, apply_keep_copies, parse_read_only_scan_json, resolve_inventory,
 };
 pub use platscope_pricing::PriceRecommendation;
 use platscope_pricing::{PricingContext, recommend};
@@ -41,6 +40,9 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::EnvFilter;
+
+#[cfg(test)]
+use platscope_domain::InventorySource;
 
 pub const SETTINGS_KEY: &str = "app.settings";
 pub const NIGHTWAVE_VENDOR_CACHE_KEY: &str = "nightwave.vendor_snapshot";
@@ -72,10 +74,6 @@ pub struct AppSettings {
     pub live_quote_ttl_seconds: u64,
     #[serde(default = "default_keep_copies")]
     pub keep_inventory_copies: u32,
-    #[serde(default)]
-    pub inventory_companion_enabled: bool,
-    #[serde(default)]
-    pub inventory_companion_path: Option<String>,
     #[serde(default = "default_reward_overlay_scale_percent")]
     pub reward_overlay_scale_percent: u16,
     #[serde(default = "default_reward_overlay_offset_percent")]
@@ -93,8 +91,6 @@ impl Default for AppSettings {
             bulk_refresh_hours: 4,
             live_quote_ttl_seconds: DEFAULT_LIVE_QUOTE_TTL_SECONDS,
             keep_inventory_copies: DEFAULT_KEEP_COPIES,
-            inventory_companion_enabled: false,
-            inventory_companion_path: None,
             reward_overlay_scale_percent: DEFAULT_REWARD_OVERLAY_SCALE_PERCENT,
             reward_overlay_offset_x_percent: DEFAULT_REWARD_OVERLAY_OFFSET_PERCENT,
             reward_overlay_offset_y_percent: DEFAULT_REWARD_OVERLAY_OFFSET_PERCENT,
@@ -946,39 +942,6 @@ fn market_search_catalog_context(
 }
 
 impl InventoryService {
-    /// Импортирует bounded `PlatScope` JSON, выполняет exact resolver и атомарно публикует LKG.
-    ///
-    /// # Errors
-    ///
-    /// Возвращает [`CoreError`] при ошибке schema/validation, отсутствии каталога или SQLite.
-    pub fn import_json(
-        database: &Mutex<Database>,
-        raw_json: &str,
-        settings: &AppSettings,
-    ) -> Result<InventoryView, CoreError> {
-        let inventory = parse_inventory_json(raw_json)?;
-        Self::publish_inventory(database, &inventory, settings)
-    }
-
-    /// Импортирует только строгий versioned envelope одобренного Overwolf companion.
-    ///
-    /// # Errors
-    ///
-    /// Отклоняет ручные/helper форматы до изменения LKG и возвращает ошибку validation/storage.
-    pub fn import_companion_json(
-        database: &Mutex<Database>,
-        raw_json: &str,
-        settings: &AppSettings,
-    ) -> Result<InventoryView, CoreError> {
-        let inventory = parse_inventory_json(raw_json)?;
-        if inventory.metadata.source != InventorySource::OverwolfCompanion {
-            return Err(CoreError::InventoryData(
-                "automatic import requires the versioned Overwolf companion envelope".into(),
-            ));
-        }
-        Self::publish_inventory(database, &inventory, settings)
-    }
-
     /// Импортирует только ответ встроенного read-only scanner и помечает снимок
     /// отдельным доверенным источником до атомарной публикации LKG.
     ///
@@ -5039,26 +5002,6 @@ mod tests {
     }
 
     #[test]
-    fn automatic_inventory_import_rejects_non_companion_formats_before_publish() {
-        let database = Mutex::new(Database::open_in_memory().expect("database opens"));
-        let error = InventoryService::import_companion_json(
-            &database,
-            r#"{"Inventory":{"MiscItems":[{"ItemType":"/Lotus/Test/Part","ItemCount":2}]}}"#,
-            &AppSettings::default(),
-        )
-        .expect_err("raw helper exports require explicit manual import");
-        assert!(matches!(error, CoreError::InventoryData(_)));
-        assert!(
-            database
-                .lock()
-                .expect("database lock")
-                .current_inventory_snapshot()
-                .expect("inventory query")
-                .is_none()
-        );
-    }
-
-    #[test]
     fn riven_catalog_items_use_the_separate_pricing_boundary() {
         let key = MarketVariantKey::new("soma_riven_mod", Platform::Pc, None, None::<String>)
             .expect("Riven key");
@@ -5384,20 +5327,6 @@ mod tests {
         assert!(!metadata.stale);
     }
 
-    fn verify_insights(database: &Mutex<Database>) {
-        let insights = InsightsService::view(database, &AppSettings::default())
-            .expect("insights view succeeds")
-            .expect("metadata snapshot exists");
-        eprintln!(
-            "insights_sets={} relics={} ducats={} inventory={}",
-            insights.sets.len(),
-            insights.relics.len(),
-            insights.ducats.len(),
-            insights.inventory_available
-        );
-        assert!(insights.inventory_available);
-    }
-
     #[test]
     fn settings_defaults_are_offline_safe() {
         let settings = AppSettings::default();
@@ -5462,61 +5391,5 @@ mod tests {
         verify_market_search(&database);
 
         verify_live_and_history(&database, &market_key).await;
-
-        let inventory = InventoryService::import_json(
-            &database,
-            include_str!("../../../fixtures/inventory/platscope_v1.json"),
-            &AppSettings::default(),
-        )
-        .expect("inventory fixture resolves against production catalog");
-        eprintln!(
-            "inventory_rows={} owned={} sellable={} resolved={} attention={}",
-            inventory.metadata.item_count,
-            inventory.summary.owned_quantity,
-            inventory.summary.sellable_quantity,
-            inventory.summary.resolved_rows,
-            inventory.summary.attention_rows
-        );
-        assert_eq!(inventory.metadata.item_count, 5);
-        assert_eq!(inventory.summary.owned_quantity, 11);
-        assert_eq!(inventory.summary.sellable_quantity, 3);
-        assert_eq!(inventory.summary.resolved_rows, 4);
-        assert_eq!(inventory.summary.attention_rows, 2);
-
-        let sell_now = SellNowService::view(&database, &AppSettings::default())
-            .expect("sell now view succeeds")
-            .expect("inventory snapshot exists");
-        eprintln!(
-            "sell_now_candidates={} priced={} high_priority={} nominal_value={:.1}",
-            sell_now.summary.candidate_rows,
-            sell_now.summary.priced_rows,
-            sell_now.summary.high_priority_rows,
-            sell_now.summary.nominal_value
-        );
-        assert_eq!(sell_now.summary.candidate_rows, 2);
-        assert_eq!(sell_now.summary.priced_rows, 2);
-        assert_eq!(sell_now.rows.len() as u64, inventory.metadata.item_count);
-        assert_eq!(
-            sell_now.inventory_summary.owned_quantity,
-            inventory.summary.owned_quantity
-        );
-        assert_eq!(
-            sell_now.inventory_summary.sellable_quantity,
-            inventory.summary.sellable_quantity
-        );
-        assert_eq!(
-            sell_now.inventory_summary.attention_rows,
-            inventory.summary.attention_rows
-        );
-        assert_eq!(sell_now.keep_copies, inventory.keep_copies);
-        assert!(sell_now.summary.nominal_value > 0.0);
-        assert!(
-            sell_now
-                .rows
-                .windows(2)
-                .all(|rows| rows[0].priority.score >= rows[1].priority.score)
-        );
-
-        verify_insights(&database);
     }
 }

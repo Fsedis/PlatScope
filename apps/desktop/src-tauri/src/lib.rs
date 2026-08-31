@@ -5,7 +5,6 @@ mod trade_log;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
-#[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -50,7 +49,6 @@ struct AppState {
     resource_converter_service: ResourceConverterService,
     account_service: AccountService,
     read_only_inventory_scanner: Arc<ReadOnlyInventoryScanner>,
-    companion_import_tracker: Mutex<CompanionImportTracker>,
     reward_scan_in_flight: AtomicBool,
     reward_realtime_active: AtomicBool,
     reward_relic_paths: Mutex<HashSet<String>>,
@@ -61,12 +59,8 @@ struct AppState {
 }
 
 const ACCOUNT_DEVICE_ID_KEY: &str = "account.device_id";
-const MAX_COMPANION_FILE_BYTES: u64 = 8 * 1024 * 1024;
-const MAX_COMPANION_PATH_BYTES: usize = 4_096;
-const COMPANION_POLL_INTERVAL: Duration = Duration::from_secs(3);
 const BULK_REFRESH_CHECK_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const GAME_METADATA_REFRESH_HOURS: u16 = 24;
-const COMPANION_MANUAL_STABILITY_DELAY: Duration = Duration::from_millis(750);
 const MAX_MARKET_ITEMS_PER_OPEN: usize = 6;
 const MAX_MARKET_SLUG_BYTES: usize = 96;
 const REWARD_OCR_EXECUTABLE: &str = "platscope-reward-ocr.exe";
@@ -79,16 +73,11 @@ const COMPONENT_IMAGE_PROTOCOL: &str = "component-image";
 const COMPONENT_IMAGE_CACHE_DIRECTORY: &str = "component-images";
 const MAX_COMPONENT_IMAGE_BYTES: usize = 1024 * 1024;
 static COMPONENT_IMAGE_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
-#[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-#[cfg(target_os = "windows")]
 fn hide_process_window(command: &mut Command) {
     command.creation_flags(CREATE_NO_WINDOW);
 }
-
-#[cfg(not(target_os = "windows"))]
-fn hide_process_window(_command: &mut Command) {}
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -243,48 +232,6 @@ struct RewardOverlayGeometry {
     y: i32,
     width: u32,
     height: u32,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct CompanionFileSample {
-    path: PathBuf,
-    bytes: u64,
-    modified_at: SystemTime,
-}
-
-#[derive(Debug, Default)]
-struct CompanionImportTracker {
-    path: Option<PathBuf>,
-    candidate: Option<CompanionFileSample>,
-    attempted: Option<CompanionFileSample>,
-    last_imported_at: Option<DateTime<Utc>>,
-    last_error: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-enum CompanionImportState {
-    Disabled,
-    NeedsPath,
-    Missing,
-    Stabilizing,
-    UpToDate,
-    Imported,
-    Error,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CompanionImportStatus {
-    state: CompanionImportState,
-    last_imported_at: Option<DateTime<Utc>>,
-    last_error: Option<String>,
-}
-
-#[derive(Debug)]
-struct CompanionPollOutcome {
-    status: CompanionImportStatus,
-    imported: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -451,287 +398,6 @@ fn write_safe_diagnostics_report(
     }
     let bytes = u64::try_from(raw.len()).map_err(|_| "report is too large".to_owned())?;
     Ok((destination, bytes))
-}
-
-fn companion_status(
-    tracker: &CompanionImportTracker,
-    state: CompanionImportState,
-) -> CompanionImportStatus {
-    CompanionImportStatus {
-        state,
-        last_imported_at: tracker.last_imported_at,
-        last_error: (state == CompanionImportState::Error)
-            .then(|| tracker.last_error.clone())
-            .flatten(),
-    }
-}
-
-fn compact_companion_error(error: impl std::fmt::Display) -> String {
-    error.to_string().chars().take(240).collect()
-}
-
-fn configured_companion_path(settings: &AppSettings) -> Result<Option<PathBuf>, &'static str> {
-    if !settings.inventory_companion_enabled {
-        return Ok(None);
-    }
-    let Some(raw_path) = settings
-        .inventory_companion_path
-        .as_deref()
-        .map(str::trim)
-        .filter(|path| !path.is_empty())
-    else {
-        return Err("Choose an inventory JSON file before enabling automatic import.");
-    };
-    if raw_path.len() > MAX_COMPANION_PATH_BYTES {
-        return Err("The companion file path is too long.");
-    }
-    let path = PathBuf::from(raw_path);
-    if !path.is_absolute() {
-        return Err("Use an absolute path to the companion inventory JSON file.");
-    }
-    Ok(Some(path))
-}
-
-fn reset_companion_tracker(tracker: &mut CompanionImportTracker, path: Option<PathBuf>) {
-    if tracker.path != path {
-        tracker.path = path;
-        tracker.candidate = None;
-        tracker.attempted = None;
-        tracker.last_imported_at = None;
-        tracker.last_error = None;
-    }
-}
-
-fn read_companion_file_sample(path: &Path) -> Result<Option<CompanionFileSample>, String> {
-    let metadata = match fs::metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(compact_companion_error(error)),
-    };
-    if !metadata.is_file() {
-        return Err("The configured path is not a file.".into());
-    }
-    if metadata.len() > MAX_COMPANION_FILE_BYTES {
-        return Err("The companion inventory file exceeds 8 MiB.".into());
-    }
-    let modified_at = metadata.modified().map_err(compact_companion_error)?;
-    Ok(Some(CompanionFileSample {
-        path: path.to_owned(),
-        bytes: metadata.len(),
-        modified_at,
-    }))
-}
-
-fn poll_companion_file(
-    settings: &AppSettings,
-    tracker: &mut CompanionImportTracker,
-    mut importer: impl FnMut(&str) -> Result<(), String>,
-) -> CompanionPollOutcome {
-    let path = match configured_companion_path(settings) {
-        Ok(None) => {
-            reset_companion_tracker(tracker, None);
-            return CompanionPollOutcome {
-                status: companion_status(tracker, CompanionImportState::Disabled),
-                imported: false,
-            };
-        }
-        Err(error) => {
-            reset_companion_tracker(tracker, None);
-            tracker.last_error = Some(error.into());
-            let state = if settings
-                .inventory_companion_path
-                .as_deref()
-                .is_none_or(|path| path.trim().is_empty())
-            {
-                CompanionImportState::NeedsPath
-            } else {
-                CompanionImportState::Error
-            };
-            return CompanionPollOutcome {
-                status: companion_status(tracker, state),
-                imported: false,
-            };
-        }
-        Ok(Some(path)) => path,
-    };
-    reset_companion_tracker(tracker, Some(path.clone()));
-
-    let sample = match read_companion_file_sample(&path) {
-        Ok(None) => {
-            tracker.candidate = None;
-            tracker.attempted = None;
-            tracker.last_error = None;
-            return CompanionPollOutcome {
-                status: companion_status(tracker, CompanionImportState::Missing),
-                imported: false,
-            };
-        }
-        Err(error) => {
-            tracker.last_error = Some(error);
-            return CompanionPollOutcome {
-                status: companion_status(tracker, CompanionImportState::Error),
-                imported: false,
-            };
-        }
-        Ok(Some(sample)) => sample,
-    };
-
-    if tracker.candidate.as_ref() != Some(&sample) {
-        tracker.candidate = Some(sample);
-        tracker.last_error = None;
-        return CompanionPollOutcome {
-            status: companion_status(tracker, CompanionImportState::Stabilizing),
-            imported: false,
-        };
-    }
-    if tracker.attempted.as_ref() == Some(&sample) {
-        let state = if tracker.last_error.is_some() {
-            CompanionImportState::Error
-        } else {
-            CompanionImportState::UpToDate
-        };
-        return CompanionPollOutcome {
-            status: companion_status(tracker, state),
-            imported: false,
-        };
-    }
-
-    let result = fs::read_to_string(&sample.path)
-        .map_err(compact_companion_error)
-        .and_then(|raw| importer(&raw));
-    tracker.attempted = Some(sample);
-    match result {
-        Ok(()) => {
-            tracker.last_imported_at = Some(Utc::now());
-            tracker.last_error = None;
-            CompanionPollOutcome {
-                status: companion_status(tracker, CompanionImportState::Imported),
-                imported: true,
-            }
-        }
-        Err(error) => {
-            tracker.last_error = Some(compact_companion_error(error));
-            CompanionPollOutcome {
-                status: companion_status(tracker, CompanionImportState::Error),
-                imported: false,
-            }
-        }
-    }
-}
-
-fn poll_companion_inventory(state: &AppState) -> Result<CompanionPollOutcome, String> {
-    let settings = state
-        .database
-        .lock()
-        .map_err(|_| "database state is unavailable".to_owned())?
-        .get_setting::<AppSettings>(SETTINGS_KEY)
-        .map_err(|error| error.to_string())?
-        .unwrap_or_default();
-    let mut tracker = state
-        .companion_import_tracker
-        .lock()
-        .map_err(|_| "companion import state is unavailable".to_owned())?;
-    Ok(poll_companion_file(&settings, &mut tracker, |raw| {
-        let view = InventoryService::import_companion_json(&state.database, raw, &settings)
-            .map_err(|error| error.to_string())?;
-        tracing::info!(
-            event = "companion_inventory_imported",
-            source_rows = view.metadata.item_count,
-            resolved_rows = view.summary.resolved_rows,
-            attention_rows = view.summary.attention_rows,
-            "stable companion inventory snapshot imported"
-        );
-        Ok(())
-    }))
-}
-
-#[tauri::command(async)]
-#[allow(clippy::needless_pass_by_value)] // Tauri command extractor owns State.
-fn companion_inventory_status(state: State<'_, AppState>) -> Result<CompanionImportStatus, String> {
-    let settings = state
-        .database
-        .lock()
-        .map_err(|_| "database state is unavailable".to_owned())?
-        .get_setting::<AppSettings>(SETTINGS_KEY)
-        .map_err(|error| error.to_string())?
-        .unwrap_or_default();
-    let mut tracker = state
-        .companion_import_tracker
-        .lock()
-        .map_err(|_| "companion import state is unavailable".to_owned())?;
-    let state = match configured_companion_path(&settings) {
-        Ok(None) => {
-            reset_companion_tracker(&mut tracker, None);
-            CompanionImportState::Disabled
-        }
-        Err(_)
-            if settings
-                .inventory_companion_path
-                .as_deref()
-                .is_none_or(|path| path.trim().is_empty()) =>
-        {
-            reset_companion_tracker(&mut tracker, None);
-            CompanionImportState::NeedsPath
-        }
-        Err(error) => {
-            reset_companion_tracker(&mut tracker, None);
-            tracker.last_error = Some(error.into());
-            CompanionImportState::Error
-        }
-        Ok(Some(path)) if tracker.path.as_ref() != Some(&path) => {
-            reset_companion_tracker(&mut tracker, Some(path));
-            CompanionImportState::Stabilizing
-        }
-        Ok(Some(_)) if tracker.last_error.is_some() => CompanionImportState::Error,
-        Ok(Some(_)) if tracker.last_imported_at.is_some() => CompanionImportState::UpToDate,
-        Ok(Some(_)) => CompanionImportState::Stabilizing,
-    };
-    Ok(companion_status(&tracker, state))
-}
-
-#[tauri::command]
-#[allow(clippy::needless_pass_by_value)] // Tauri command extractor owns State and AppHandle.
-async fn check_companion_inventory(
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<CompanionImportStatus, String> {
-    let mut outcome = poll_companion_inventory(&state)?;
-    if outcome.status.state == CompanionImportState::Stabilizing {
-        tokio::time::sleep(COMPANION_MANUAL_STABILITY_DELAY).await;
-        outcome = poll_companion_inventory(&state)?;
-    }
-    if outcome.imported {
-        app.emit("inventory-updated", ())
-            .map_err(|error| error.to_string())?;
-    }
-    Ok(outcome.status)
-}
-
-#[tauri::command(async)]
-#[allow(clippy::needless_pass_by_value)] // Tauri deserializes command values by ownership.
-fn import_inventory_json(
-    raw_json: String,
-    state: State<'_, AppState>,
-) -> Result<InventoryView, String> {
-    let settings = state
-        .database
-        .lock()
-        .map_err(|_| "database state is unavailable".to_owned())?
-        .get_setting::<AppSettings>(SETTINGS_KEY)
-        .map_err(|error| error.to_string())?
-        .unwrap_or_default();
-    let view = localize_inventory_images(
-        InventoryService::import_json(&state.database, &raw_json, &settings)
-            .map_err(|error| error.to_string())?,
-    );
-    tracing::info!(
-        event = "inventory_import_finished",
-        source_rows = view.metadata.item_count,
-        resolved_rows = view.summary.resolved_rows,
-        attention_rows = view.summary.attention_rows,
-        "local inventory import finished"
-    );
-    Ok(view)
 }
 
 #[tauri::command]
@@ -2024,18 +1690,9 @@ fn component_image_file_name(remote_url: &str) -> Option<&str> {
 
 fn component_image_protocol_url(remote_url: &str) -> Option<String> {
     let file_name = component_image_file_name(remote_url)?;
-    #[cfg(any(target_os = "windows", target_os = "android"))]
-    {
-        Some(format!(
-            "http://{COMPONENT_IMAGE_PROTOCOL}.localhost/{file_name}"
-        ))
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "android")))]
-    {
-        Some(format!(
-            "{COMPONENT_IMAGE_PROTOCOL}://localhost/{file_name}"
-        ))
-    }
+    Some(format!(
+        "http://{COMPONENT_IMAGE_PROTOCOL}.localhost/{file_name}"
+    ))
 }
 
 fn localize_component_image_url(image_url: &mut Option<String>) {
@@ -2589,14 +2246,8 @@ fn load_settings(state: State<'_, AppState>) -> Result<AppSettings, String> {
 
 #[tauri::command(async)]
 #[allow(clippy::needless_pass_by_value)] // Tauri deserializes the command body by value.
-fn save_settings(mut settings: AppSettings, state: State<'_, AppState>) -> Result<(), String> {
+fn save_settings(settings: AppSettings, state: State<'_, AppState>) -> Result<(), String> {
     validate_app_settings(&settings).map_err(str::to_owned)?;
-    configured_companion_path(&settings).map_err(str::to_owned)?;
-    settings.inventory_companion_path = settings
-        .inventory_companion_path
-        .take()
-        .map(|path| path.trim().to_owned())
-        .filter(|path| !path.is_empty());
     let database = state
         .database
         .lock()
@@ -2643,34 +2294,6 @@ fn spawn_history_bootstrap(app_handle: AppHandle) {
                 error = %error,
                 "background history bootstrap failed without blocking startup"
             ),
-        }
-    });
-}
-
-fn spawn_companion_poller(app_handle: AppHandle) {
-    tauri::async_runtime::spawn(async move {
-        let mut interval = tokio::time::interval(COMPANION_POLL_INTERVAL);
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        loop {
-            interval.tick().await;
-            let state = app_handle.state::<AppState>();
-            match poll_companion_inventory(&state) {
-                Ok(outcome) if outcome.imported => {
-                    if let Err(error) = app_handle.emit("inventory-updated", ()) {
-                        tracing::warn!(
-                            event = "companion_inventory_event_failed",
-                            error = %error,
-                            "companion inventory imported but UI event failed"
-                        );
-                    }
-                }
-                Ok(_) => {}
-                Err(error) => tracing::warn!(
-                    event = "companion_inventory_poll_failed",
-                    error = %error,
-                    "companion inventory poll failed without replacing LKG"
-                ),
-            }
         }
     });
 }
@@ -3233,7 +2856,6 @@ pub fn run() {
                 resource_converter_service,
                 account_service,
                 read_only_inventory_scanner: Arc::new(ReadOnlyInventoryScanner::new()),
-                companion_import_tracker: Mutex::new(CompanionImportTracker::default()),
                 reward_scan_in_flight: AtomicBool::new(false),
                 reward_realtime_active: AtomicBool::new(false),
                 reward_relic_paths: Mutex::new(HashSet::new()),
@@ -3244,7 +2866,6 @@ pub fn run() {
             });
 
             spawn_history_bootstrap(app.handle().clone());
-            spawn_companion_poller(app.handle().clone());
             spawn_market_refresh_scheduler(app.handle().clone());
             spawn_reward_log_watcher(app.handle().clone());
             spawn_reward_realtime_watcher(app.handle().clone());
@@ -3277,10 +2898,7 @@ pub fn run() {
             live_price_current_variant,
             market_history,
             bootstrap_history,
-            import_inventory_json,
             scan_read_only_inventory,
-            companion_inventory_status,
-            check_companion_inventory,
             load_inventory,
             set_inventory_keep_copies,
             sell_now,
@@ -3295,32 +2913,13 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::Cell;
-
-    fn companion_test_settings(path: &Path) -> AppSettings {
-        AppSettings {
-            inventory_companion_enabled: true,
-            inventory_companion_path: Some(path.display().to_string()),
-            ..AppSettings::default()
-        }
-    }
-
-    fn temporary_companion_file(name: &str) -> PathBuf {
-        let suffix = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock is valid")
-            .as_nanos();
-        std::env::temp_dir().join(format!("platscope-{name}-{suffix}.json"))
-    }
 
     #[test]
-    fn old_settings_default_to_disabled_companion_import() {
+    fn old_settings_receive_current_overlay_defaults() {
         let settings: AppSettings = serde_json::from_str(
             r#"{"language":"russian","platform":"pc","crossplay":true,"bulk_refresh_hours":4,"live_quote_ttl_seconds":90,"keep_inventory_copies":1}"#,
         )
         .expect("old settings remain compatible");
-        assert!(!settings.inventory_companion_enabled);
-        assert!(settings.inventory_companion_path.is_none());
         assert_eq!(settings.reward_overlay_scale_percent, 100);
         assert_eq!(settings.reward_overlay_offset_x_percent, 0);
         assert_eq!(settings.reward_overlay_offset_y_percent, 0);
@@ -3367,67 +2966,6 @@ mod tests {
             };
             assert!(validate_app_settings(&settings).is_err());
         }
-    }
-
-    #[test]
-    fn companion_path_must_be_absolute_when_enabled() {
-        let settings = companion_test_settings(Path::new("relative/inventory.json"));
-        assert!(configured_companion_path(&settings).is_err());
-    }
-
-    #[test]
-    fn companion_poll_waits_for_stability_and_imports_once() {
-        let path = temporary_companion_file("stable");
-        fs::write(&path, r#"{"complete":true}"#).expect("fixture is written");
-        let settings = companion_test_settings(&path);
-        let mut tracker = CompanionImportTracker::default();
-        let imports = Cell::new(0_u32);
-
-        let first = poll_companion_file(&settings, &mut tracker, |_| {
-            imports.set(imports.get() + 1);
-            Ok(())
-        });
-        assert_eq!(first.status.state, CompanionImportState::Stabilizing);
-        assert_eq!(imports.get(), 0);
-
-        let second = poll_companion_file(&settings, &mut tracker, |_| {
-            imports.set(imports.get() + 1);
-            Ok(())
-        });
-        assert_eq!(second.status.state, CompanionImportState::Imported);
-        assert!(second.imported);
-        assert_eq!(imports.get(), 1);
-
-        let third = poll_companion_file(&settings, &mut tracker, |_| {
-            imports.set(imports.get() + 1);
-            Ok(())
-        });
-        assert_eq!(third.status.state, CompanionImportState::UpToDate);
-        assert_eq!(imports.get(), 1);
-        fs::remove_file(path).expect("fixture is removed");
-    }
-
-    #[test]
-    fn failed_companion_sample_is_not_retried_until_it_changes() {
-        let path = temporary_companion_file("invalid");
-        fs::write(&path, "invalid").expect("fixture is written");
-        let settings = companion_test_settings(&path);
-        let mut tracker = CompanionImportTracker::default();
-        let attempts = Cell::new(0_u32);
-
-        let _ = poll_companion_file(&settings, &mut tracker, |_| Ok(()));
-        let failed = poll_companion_file(&settings, &mut tracker, |_| {
-            attempts.set(attempts.get() + 1);
-            Err("schema drift".into())
-        });
-        assert_eq!(failed.status.state, CompanionImportState::Error);
-        let repeated = poll_companion_file(&settings, &mut tracker, |_| {
-            attempts.set(attempts.get() + 1);
-            Err("must not retry".into())
-        });
-        assert_eq!(repeated.status.state, CompanionImportState::Error);
-        assert_eq!(attempts.get(), 1);
-        fs::remove_file(path).expect("fixture is removed");
     }
 
     #[test]

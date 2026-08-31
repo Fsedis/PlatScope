@@ -340,13 +340,6 @@ export async function installMarketBrowserMock(): Promise<void> {
       appSettings = { ...next };
       return null;
     }
-    if (command === "companion_inventory_status" || command === "check_companion_inventory") {
-      return {
-        state: appSettings.inventory_companion_enabled ? "missing" : "disabled",
-        lastImportedAt: null,
-        lastError: null,
-      };
-    }
     if (command === "foundation_status") {
       return {
         appName: "PlatScope",
@@ -776,33 +769,6 @@ export async function installMarketBrowserMock(): Promise<void> {
         buyOrderCount: 4,
         warning: null,
       } satisfies LiveSellNowResult;
-    }
-    if (command === "import_inventory_json") {
-      const rawJson = String((args as { rawJson?: string })?.rawJson ?? "");
-      if (rawJson.includes('"Inventory"') || rawJson.includes('"ItemType"')) {
-        inventory = {
-          ...inventory,
-          metadata: {
-            ...inventory.metadata,
-            source: "helper_import",
-            observedAt: new Date().toISOString(),
-            itemCount: inventory.items.length,
-            checksumSha256: "helper-demo",
-          },
-          summary: {
-            ...inventory.summary,
-            sellableQuantity: 0,
-            attentionRows: inventory.items.length,
-          },
-          items: inventory.items.map((item) => ({
-            ...item,
-            tradeableQuantity: 0,
-            unknownQuantity: item.ownedQuantity,
-            sellableQuantity: 0,
-          })),
-        };
-      }
-      return localizeInventoryView(inventory);
     }
     if (command === "load_inventory") {
       return localizeInventoryView(inventory);

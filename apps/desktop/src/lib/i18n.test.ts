@@ -17,8 +17,6 @@ describe("i18n contract", () => {
   it("keeps conservative settings defaults and explicit number locales", () => {
     expect(DEFAULT_APP_SETTINGS.language).toBe("russian");
     expect(DEFAULT_APP_SETTINGS.platform).toBe("pc");
-    expect(DEFAULT_APP_SETTINGS.inventory_companion_enabled).toBe(false);
-    expect(DEFAULT_APP_SETTINGS.inventory_companion_path).toBeNull();
     expect(localeCode("ru")).toBe("ru-RU");
     expect(localeCode("en")).toBe("en-US");
   });

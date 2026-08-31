@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Read-only Warframe session scanner and bounded inventory fetch"
+description = "Windows read-only Warframe session scanner and bounded inventory fetch"
 
 [dependencies]
 anyhow = "1"
@@ -17,10 +17,6 @@ serde_json.workspace = true
 sysinfo = { version = "0.32", default-features = false, features = ["system"] }
 zeroize.workspace = true
 
-[target.'cfg(unix)'.dependencies]
-libc = "0.2"
-
-[target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = [
     "Win32_Foundation",
     "Win32_System_Diagnostics_Debug",
@@ -31,7 +27,7 @@ windows = { version = "0.58", features = [
 [dev-dependencies]
 platscope-inventory = { path = "../platscope-inventory" }
 
-# This boundary is the sole workspace exception to `unsafe_code = forbid`:
+# This Windows boundary is the sole workspace exception to `unsafe_code = forbid`:
 # Windows process-memory APIs require FFI calls. The rest of PlatScope remains safe Rust.
 [lints.rust]
 unsafe_code = "allow"

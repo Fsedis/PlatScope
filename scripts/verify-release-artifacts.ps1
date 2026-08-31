@@ -117,50 +117,9 @@ function Test-ChecksumManifest {
     return $true
 }
 
-function Test-CompanionManifest {
-    param(
-        [Parameter(Mandatory)]
-        [string]$ManifestPath,
-
-        [Parameter(Mandatory)]
-        [string]$IndexPath
-    )
-
-    try {
-        $manifest = Get-Content -LiteralPath $ManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
-        $permissions = @($manifest.permissions | Sort-Object)
-        $gameIds = @($manifest.data.game_targeting.game_ids)
-        $valid =
-            $manifest.manifest_version -eq 1 -and
-            $manifest.type -eq "WebApp" -and
-            ($permissions -join ',') -eq "FileSystem,GameInfo" -and
-            $manifest.data.game_targeting.type -eq "dedicated" -and
-            $gameIds.Count -eq 1 -and
-            $gameIds[0] -eq 8954 -and
-            $manifest.data.windows.desktop.desktop_only -eq $true -and
-            $manifest.data.windows.desktop.show_in_taskbar -eq $true
-        if (-not $valid) {
-            Add-PreflightResult -Check "companion_manifest" -Status "FAIL" -Evidence "Manifest нарушает минимальную permission/window boundary"
-            return $false
-        }
-        $index = Get-Content -LiteralPath $IndexPath -Raw -Encoding UTF8
-        if ($index -notmatch "connect-src 'none'") {
-            Add-PreflightResult -Check "companion_manifest" -Status "FAIL" -Evidence "CSP не блокирует outbound connections"
-            return $false
-        }
-        Add-PreflightResult -Check "companion_manifest" -Status "PASS" -Evidence "WebApp, Warframe 8954, GameInfo/FileSystem, visible desktop window, connect-src none"
-        return $true
-    }
-    catch {
-        Add-PreflightResult -Check "companion_manifest" -Status "FAIL" -Evidence "Manifest не разобран: $($_.Exception.Message)"
-        return $false
-    }
-}
-
 $desktopExe = Join-Path $resolvedWorkspace "target/release/platscope.exe"
 $nsisDirectory = Join-Path $resolvedWorkspace "target/release/bundle/nsis"
 $nsisChecksums = Join-Path $nsisDirectory "SHA256SUMS.txt"
-$linuxDirectory = Join-Path $resolvedWorkspace "target/release/bundle/appimage"
 
 $null = Test-RequiredFile -Check "desktop_executable" -Path $desktopExe
 $installerCandidates = @(if (Test-Path -LiteralPath $nsisDirectory -PathType Container) {
@@ -203,46 +162,6 @@ if ($installerExists) {
         }
         else {
             Add-PreflightResult -Check "windows_authenticode" -Status "PASS" -Evidence "Valid signer и timestamp certificates"
-        }
-    }
-}
-
-$appImages = @(if (Test-Path -LiteralPath $linuxDirectory -PathType Container) {
-    Get-ChildItem -LiteralPath $linuxDirectory -Filter "*.AppImage" -File
-})
-if ($appImages.Count -eq 0) {
-    $linuxStatus = if ($Mode -eq "Trusted") { "FAIL" } else { "WARN" }
-    Add-PreflightResult -Check "linux_appimage" -Status $linuxStatus -Evidence "AppImage отсутствует; Linux build не доказан"
-}
-elseif ($appImages.Count -ne 1) {
-    Add-PreflightResult -Check "linux_appimage" -Status "FAIL" -Evidence "Ожидался один AppImage, найдено $($appImages.Count)"
-}
-else {
-    Add-PreflightResult -Check "linux_appimage" -Status "PASS" -Evidence "$($appImages[0].Name), $($appImages[0].Length) bytes"
-    $linuxChecksums = Join-Path $linuxDirectory "SHA256SUMS.txt"
-    $null = Test-ChecksumManifest -Check "linux_checksums" -Directory $linuxDirectory -ManifestPath $linuxChecksums
-
-    if ($Mode -eq "Trusted") {
-        $signaturePath = "$($appImages[0].FullName).sig"
-        $keyringPath = Join-Path $linuxDirectory "release-signing-keyring.gpg"
-        $gpgv = Get-Command "gpgv" -ErrorAction SilentlyContinue
-        if (-not (Test-Path -LiteralPath $signaturePath -PathType Leaf)) {
-            Add-PreflightResult -Check "linux_detached_signature" -Status "FAIL" -Evidence "Detached signature отсутствует: $signaturePath"
-        }
-        elseif (-not (Test-Path -LiteralPath $keyringPath -PathType Leaf)) {
-            Add-PreflightResult -Check "linux_detached_signature" -Status "FAIL" -Evidence "Approved public keyring отсутствует: $keyringPath"
-        }
-        elseif ($null -eq $gpgv) {
-            Add-PreflightResult -Check "linux_detached_signature" -Status "FAIL" -Evidence "gpgv недоступен"
-        }
-        else {
-            & $gpgv.Source --keyring $keyringPath $signaturePath $appImages[0].FullName 2>&1 | Out-Null
-            if ($LASTEXITCODE -eq 0) {
-                Add-PreflightResult -Check "linux_detached_signature" -Status "PASS" -Evidence "gpgv подтвердил detached signature"
-            }
-            else {
-                Add-PreflightResult -Check "linux_detached_signature" -Status "FAIL" -Evidence "gpgv отклонил detached signature"
-            }
         }
     }
 }

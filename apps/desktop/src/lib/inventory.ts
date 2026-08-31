@@ -8,21 +8,6 @@ export type InventorySource =
   | "test_fixture"
   | "read_only_scan";
 
-export type CompanionImportState =
-  | "disabled"
-  | "needs_path"
-  | "missing"
-  | "stabilizing"
-  | "up_to_date"
-  | "imported"
-  | "error";
-
-export interface CompanionImportStatus {
-  state: CompanionImportState;
-  lastImportedAt: string | null;
-  lastError: string | null;
-}
-
 export type InventoryResolution =
   | "resolved"
   | "unknown_item"
@@ -200,12 +185,14 @@ export function resolutionLabel(resolution: InventoryResolution, locale: UiLocal
 
 export function inventorySourceLabel(source: InventorySource, locale: UiLocale = "ru"): string {
   switch (source) {
+    // Legacy-значения остаются отображаемыми для старых локальных снимков.
+    // Текущий интерфейс новые снимки этих типов не создаёт.
     case "platscope_json":
       return "PlatScope JSON";
     case "helper_import":
       return locale === "en" ? "Imported file" : "Импортированный файл";
     case "overwolf_companion":
-      return "Overwolf companion";
+      return locale === "en" ? "Legacy Overwolf import" : "Старый импорт Overwolf";
     case "test_fixture":
       return locale === "en" ? "test data" : "тестовые данные";
     case "read_only_scan":

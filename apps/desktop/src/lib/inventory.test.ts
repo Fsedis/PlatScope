@@ -100,8 +100,8 @@ describe("inventory presentation", () => {
     );
   });
 
-  it("labels the explicit Overwolf companion source in both locales", () => {
-    expect(inventorySourceLabel("overwolf_companion", "ru")).toBe("Overwolf companion");
-    expect(inventorySourceLabel("overwolf_companion", "en")).toBe("Overwolf companion");
+  it("labels the legacy Overwolf source without exposing English text in Russian UI", () => {
+    expect(inventorySourceLabel("overwolf_companion", "ru")).toBe("Старый импорт Overwolf");
+    expect(inventorySourceLabel("overwolf_companion", "en")).toBe("Legacy Overwolf import");
   });
 });

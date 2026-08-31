@@ -486,6 +486,8 @@ pub enum Tradeability {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InventorySource {
+    // Значения ниже сохранены только для чтения старых снимков из локальной БД.
+    // Новые снимки создаются исключительно встроенным read-only scanner.
     PlatscopeJson,
     HelperImport,
     OverwolfCompanion,

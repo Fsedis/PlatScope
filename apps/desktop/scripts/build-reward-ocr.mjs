@@ -3,13 +3,14 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 const desktopDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const resourcesDirectory = path.join(desktopDirectory, "src-tauri", "resources");
 
 if (process.platform !== "win32") {
   console.log("Reward OCR is Windows-only; skipping its bundle on this platform.");
   process.exit(0);
 }
 
-const outputDirectory = path.join(desktopDirectory, "src-tauri", "resources", "reward-ocr");
+const outputDirectory = path.join(resourcesDirectory, "reward-ocr");
 const project = path.join(desktopDirectory, "..", "reward-ocr", "PlatScope.RewardOcr.csproj");
 const publish = spawnSync(
   "dotnet",

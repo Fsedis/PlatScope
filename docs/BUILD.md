@@ -1,4 +1,38 @@
-# Сборка и CI
+# Сборка и проверки
+
+## Поддерживаемая цель
+
+Текущий desktop-релиз — только Windows x64, NSIS. OCR и read-only scanner входят в Windows-пакет. Ресурсы и установщики для других платформ не поддерживаются.
+
+## Требования
+
+- Rust не ниже версии из `Cargo.toml`;
+- Node.js и pnpm версии, совместимой с корневым `package.json`;
+- .NET 8 SDK для self-contained OCR;
+- Windows build tools, необходимые Rust и Tauri.
+
+Зависимости устанавливаются один раз:
+
+```text
+pnpm install --frozen-lockfile
+```
+
+## Быстрый запуск
+
+```text
+START_PLATSCOPE_DEV.bat
+```
+
+Bat-файл проверяет основные зависимости, освобождает только занятый dev-порт PlatScope и запускает `cargo tauri dev`. Полный NSIS при этом не собирается.
+
+Ручной эквивалент полного desktop-запуска:
+
+```text
+cargo tauri dev --config apps/desktop/src-tauri/tauri.conf.json
+```
+
+Tauri сам запускает frontend через `beforeDevCommand`. Для изолированной проверки
+интерфейса в браузере можно отдельно выполнить `pnpm --dir apps/desktop dev`.
 
 ## Локальный quality gate
 
@@ -6,56 +40,51 @@
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
-pnpm check
-pnpm test
-pnpm build
+pnpm --dir apps/desktop check
+pnpm --dir apps/desktop test
+pnpm --dir apps/desktop build
+```
+
+`pnpm build` публикует OCR, выполняет русский OCR self-test и собирает Svelte. Rust build script синхронизирует актуальные third-party notices при любом Cargo/Tauri build.
+
+Перед выпуском и только по отдельной явной команде владельца дополнительно
+проверяется release-конфигурация без упаковки установщика:
+
+```text
 cargo tauri build --no-bundle --config apps/desktop/src-tauri/tauri.conf.json
 ```
 
-Корневые `pnpm check`, `pnpm test` и `pnpm build` проверяют Tauri desktop. Версия pnpm закреплена в корневом `package.json`, зависимости frontend — в `pnpm-lock.yaml`, Rust — в `Cargo.lock`.
+## Генерируемые каталоги
 
-Общий локальный preflight:
+В Git не добавляются:
 
-```text
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/verify-release-artifacts.ps1 -Mode Qa
-```
+- `target`;
+- `node_modules`;
+- `dist`, `bin`, `obj` и coverage;
+- `apps/desktop/src-tauri/resources/reward-ocr`;
+- сгенерированная bundle-копия `THIRD_PARTY_NOTICES.md`;
+- локальные БД, логи и signing secrets.
 
-`Qa` требует canonical executable, единственный NSIS и совпадающий desktop checksum. `NotSigned` и отсутствующий AppImage выводятся как `WARN`, а не скрываются. `Trusted` использует те же проверки fail-closed и дополнительно требует `Valid` Authenticode с timestamp, AppImage, checksum и проверяемую detached signature; на текущих QA artifacts он обязан завершаться ошибкой.
+`apps/desktop/src-tauri/resources/reward-ocr/README.txt` остаётся единственным placeholder: он сохраняет ресурсный путь в чистом clone до первой OCR-сборки.
 
-Локальная упаковка Windows:
+## Упаковка
+
+Релизная упаковка запускается только по отдельной явной команде владельца:
 
 ```text
 cargo tauri build --bundles nsis --config apps/desktop/src-tauri/tauri.conf.json
 ```
 
-Результат: канонический executable `target/release/platscope.exe`, installer `target/release/bundle/nsis/PlatScope_<version>_x64-setup.exe` и updater-подпись `.sig`, если заданы `TAURI_SIGNING_PRIVATE_KEY` и `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. Имя Rust package остаётся `platscope-desktop`, а явный binary target называется `platscope`. Authenticode status пока ожидаемо равен `NotSigned`, даже если пакет имеет отдельную подпись Tauri.
+Результат находится в `target/release/bundle/nsis`. Подпись updater создаётся только при наличии локальных `TAURI_SIGNING_PRIVATE_KEY` и `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
 
-## GitHub Actions
+Проверка готовых локальных файлов:
 
-Workflow `.github/workflows/quality.yml` запускается для push, pull request и вручную. Матрица содержит `windows-latest` и `ubuntu-22.04`; оба job выполняют одинаковые formatter/lint/test/frontend gates и явно собирают release binary `platscope` из package `platscope-desktop`.
+```text
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/verify-release-artifacts.ps1 -Mode Qa
+```
 
-Workflow имеет только `contents: read`, не публикует release, не загружает secrets и отменяет устаревший прогон той же ветки. Production network smoke-test остаётся `ignored`, поэтому CI детерминирован и не зависит от доступности upstream providers.
+Подробный порядок публикации описан в `RELEASE_SIGNING.md`.
 
-Отдельный ручной workflow `.github/workflows/package.yml` создаёт три workflow artifacts без GitHub Release и без write permission:
+## GitHub
 
-- Windows x64 — NSIS installer;
-- Linux x86_64 — AppImage;
-
-Workflow использует официальный `tauri-apps/tauri-action`, а относительный `projectPath` указывает на `apps/desktop`, где Tauri видит `src-tauri/tauri.conf.json` и выполняет закреплённый frontend build. После упаковки отдельный OS-specific шаг создаёт `SHA256SUMS.txt`; installer/AppImage и manifest загружаются одним QA artifact. Checksum подтверждает целостность относительно ожидаемого значения, но не заменяет подпись издателя.
-
-Windows packaging job после создания checksum запускает `verify-release-artifacts.ps1 -Mode Qa`. Companion job загружает уже проверенный `dist` вместе с собственным `SHA256SUMS.txt`. Это остаётся artifact-level проверкой и не заменяет protected tag/environment, identity издателя или повторную проверку после публичной публикации.
-
-Публичный workflow `.github/workflows/release.yml` запускается тегом `v<version>`, собирает Windows NSIS с защищёнными signing secrets и публикует GitHub Release, `.sig`, `latest.json` и `SHA256SUMS.txt`. Политика хранения ключей и различие между подписью updater и Authenticode описаны в [Подпись и публичный релиз](RELEASE_SIGNING.md).
-
-## Linux prerequisites
-
-Ubuntu job устанавливает WebKitGTK 4.1, Ayatana AppIndicator, librsvg, OpenSSL, xdo, build tools и утилиты упаковки из системного репозитория. Набор основан на официальных требованиях Tauri 2:
-
-- <https://v2.tauri.app/start/prerequisites/>;
-- <https://v2.tauri.app/distribute/pipelines/github/>.
-
-`ubuntu-22.04` выбран как явная базовая система вместо плавающего `ubuntu-latest`: это делает минимальную glibc/WebKitGTK границу сборки более предсказуемой.
-
-## Граница проверки
-
-При успешном прогоне quality CI доказывает, что source tree компилируется и тестируется на Windows/Linux. Публичный релизный канал сейчас выпускает Windows NSIS; Linux AppImage остаётся QA artifact до отдельной проверки OCR-поведения и механизма подписи. `0.1.21` — первая версия со встроенным updater, поэтому её нужно установить вручную поверх `0.1.20`; дальнейшие версии доступны из интерфейса PlatScope.
+GitHub используется как хранилище исходников и уже проверенных локальных релизных файлов. GitHub Actions в проекте отсутствуют: сборка, OCR, тесты, подпись, checksum и контрольная загрузка выполняются на рабочей машине.

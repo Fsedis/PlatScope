@@ -1,149 +1,60 @@
-# Pricing Engine
+# Цена, тренд и очерёдность
 
-## Состояние реализации
+## Разделение показателей
 
-Этап 3 реализован в `crates/platscope-pricing`. Движок является чистой функцией и не читает сеть или SQLite. `PricingService` в application layer загружает из текущего LKG только записи точного platform/rank/subtype/stars варианта и передаёт их движку. Цена PC никогда не используется как fallback для другого platform key.
+PlatScope не объединяет разные вопросы в одно число:
 
-Пороговые константы:
+- **рекомендуемая цена** — ориентир для размещения точного варианта;
+- **продажи в день** — фактическая ликвидность;
+- **тренд цены за 90 дней** — направление и величина изменения цены;
+- **момент продажи** — `продавать`, `подождать` либо `нет рекомендации`;
+- **очерёдность** — относительный порядок, с каких предметов начать проверку.
 
-```text
-MIN_TRUSTED_CLOSED_VOLUME = 3
-THIN_MARKET_VOLUME = 5
-FRESH_DAYS = 2
-AGING_DAYS = 7
-```
+По продажам и росту цены доступны отдельные сортировки. Очерёдность не является прогнозом платины в день.
 
-Golden fixtures находятся в `fixtures/pricing/golden_scenarios.json`. Они фиксируют normal liquid market, isolated troll ask, реальный кластерный обвал, thin fantasy ask, sell-only fallback и relic sell-only. Дополнительные unit tests проверяют exact rank/refinement, offline/mismatched live book, рост рынка, fallback provider и stale source.
+## Входные сигналы
 
-IPC contracts `price_current_variant` и `live_price_current_variant` доступны desktop shell. Market Browser использует тот же движок через `MarketBrowserService`, а `LivePricingService` повторно рассчитывает рекомендацию с точным `LiveOrderBook`: frontend получает готовые числа и структурированные причины, не дублируя формулы.
+Pricing Engine получает только нормализованные записи точного `MarketVariantKey`:
 
-## Цель
+- медиану и объём закрытых сделок;
+- buy/sell-медианы bulk-снимка;
+- актуальный live-стакан, если пользователь запросил его;
+- возраст источника и признак fallback;
+- kind предмета и доступное количество.
 
-Pricing Engine превращает нормализованные market signals в объяснимую оценку. Он не знает источник JSON и не выполняет network/SQLite операции.
-
-Вход:
-
-```text
-NormalizedMarketSnapshot
-LiveOrderBook?
-PriceHistory?
-MarketVariantKey
-```
-
-Выход:
-
-```text
-fair_price?
-list_price?
-quick_sell?
-lowest_ask?
-depth_three?
-depth_price? # low5
-confidence
-freshness
-explanation[]
-```
+Сеть и SQLite находятся за пределами чистого расчёта. UI получает готовые значения и структурированные причины и не повторяет формулы.
 
 ## Базовые правила
 
-1. `closed` — сигнал состоявшихся сделок и основной baseline.
-2. Trustworthy closed volume начинается с тестируемой константы `3`, но будет калиброваться на fixtures.
-3. Для обычного item при trusted closed и sell median допустим консервативный baseline `min(closed_median, sell_median)`.
-4. Для relic sell median не становится fair price: bulk listings и refinement distortions делают его слабым сигналом.
-5. Точная platform/rank/subtype/stars комбинация обязательна. Соседний tier или PC-рынок не подставляются молча.
-6. Нет сигнала — `None`, confidence `Unknown`.
+1. Закрытые сделки являются основным подтверждением цены.
+2. Для обычного предмета при достаточном объёме используется консервативный baseline между closed и sell-медианой.
+3. Один аномальный ask не становится ценой. Движок проверяет согласованный кластер и глубину.
+4. Для реликвии sell-only сигнал не выдаётся за fair price.
+5. Rank, subtype, refinement, stars и platform должны совпасть точно.
+6. При недостатке данных результат остаётся пустым, а не заменяется нулём или выдуманной ценой.
+
+Внутренняя оценка качества данных используется как ограничитель цены и очерёдности, но не выводится отдельным запутывающим столбцом.
 
 ## Live book
 
-Перед расчётом исключаются:
+Из текущего стакана исключаются невидимые, offline, несовпадающие и некорректные ордера. Рассчитываются lowest ask, top buy и quantity-weighted глубина. **Быстрая продажа** существует только при валидной заявке на покупку для точного варианта; исторический buy signal так не называется.
 
-- invisible orders;
-- неподходящая side;
-- неподходящий platform/crossplay context;
-- offline users для обещания «сейчас»;
-- несовпадающий rank/subtype/charges/stars;
-- некорректные quantity/perTrade/price.
+## Тренд 90 дней
 
-Рассчитываются `lowest_ask`, `low3`, `low5`, `top_buy`, количество orders и суммарная доступная depth quantity. `low3` и `low5` — отдельные quantity-weighted средние цены до первых трёх и пяти доступных sell units; если units меньше целевого окна, среднее строится только по фактически доступной глубине и не выдаётся за полный стакан.
+История строится по дневным медианам закрытых сделок. Алгоритм сравнивает устойчивые раннюю и последнюю части окна, учитывает объём и требует минимальное покрытие. Низкообъёмный единичный скачок не создаёт тренд.
 
-## Credible lowest ask
+Момент продажи учитывает одновременно направление, положение текущей цены внутри диапазона и подтверждение live-рынком:
 
-Единичный минимум не равен цене. Начальная эвристика-кандидат:
+- цена растёт и ещё не у локального максимума — чаще подождать;
+- цена снижается, но остаётся выше нижней части диапазона — чаще продавать;
+- покрытия недостаточно — нет рекомендации.
 
-```text
-если lowest < fair / 3
-и следующий кластер согласован около fair,
-lowest помечается isolated outlier
-```
+## Количество и очерёдность
 
-Но кластер `[10, 11, 11, 12, 12]` при старом fair `40` означает вероятный сдвиг рынка. Решение принимает cluster-level функция, а не последовательное удаление всех «слишком низких» значений.
+Количество не умножается на цену без ограничений. Приоритет использует приблизительную способность рынка поглотить объём, ликвидность, качество цены и момент продажи. Номинальная стоимость показывается отдельно и не гарантирует продажу всего стека по одной цене.
 
-На thin market одиночный ask выше baseline не повышает fair price. List price ограничивается диапазоном baseline и получает Low confidence.
+## Riven
 
-## Quick Sell
+Обычный Pricing Engine не оценивает уникальный Riven roll. Для него приложение показывает текущие ордера и общую disposition оружия, но не создаёт ложную «справедливую цену» из несопоставимых модов.
 
-Quick Sell — лучший валидный live buy order для точного варианта с учётом доступной quantity. Bulk buy median без live book отображается как исторический buy signal, но не называется гарантированной немедленной продажей.
-
-## Riven safety boundary
-
-`MarketItemKind::Riven` не проходит обычный item pricing path. Даже при наличии bulk closed median или live orders результат содержит `fair/list/quick/lowest/depth = null`, `confidence = Unknown` и reason `riven_pricing_unsupported`. Это намеренный отказ от ложной точности уникального roll. Weapon disposition и общий multiplier читаются из отдельного WFCD metadata-модуля и показываются как контекст оружия; они не превращаются в «точную цену» конкретного roll.
-
-## Confidence
-
-Confidence считается отдельно от freshness:
-
-- `High`: свежий bulk, достаточный closed volume, exact variant, live cluster согласован;
-- `Medium`: trusted closed data, но мало live depth или snapshot стареет;
-- `Low`: только asks, thin market, provider fallback или конфликт signals;
-- `Unknown`: недостаточно данных или variant mismatch.
-
-Каждое понижение confidence добавляет machine-readable snake_case reason и локализуемое объяснение.
-
-## Freshness
-
-Freshness использует `source_date`, а не время скачивания. Категории и пороги остаются настройками доменного сервиса; UI всегда показывает абсолютную дату/возраст.
-
-## Sell Priority
-
-Это ranking score, не обещание дохода. Количество учитывается через приблизительную absorption capacity рынка:
-
-```text
-sellable_quantity
-credible clearing price
-closed/live liquidity
-confidence penalty
-timing signal
-```
-
-Нельзя ранжировать `200 × price`, если рынок поглощает единицы. Nominal Value вычисляется отдельно и снабжается предупреждением.
-
-## Объяснение
-
-`PriceExplanation` хранит использованные signals и причины исключений. Пример:
-
-```text
-fair основан на 46 closed trades
-live low5: 37–42p
-ask 1p исключён как isolated outlier
-source date: 2026-08-26
-confidence: High
-```
-
-UI не реконструирует объяснение из числа — получает готовую структурированную модель.
-
-## Обязательные тесты перед production code
-
-- normal liquid market;
-- troll ask `1p`;
-- fantasy ask `3000p`;
-- реальный кластерный обвал;
-- thin market;
-- no closed/sell/buy orders;
-- exact rank и только max-rank data;
-- relic intact/radiant;
-- stale fallback snapshot;
-- numeric strings и invalid non-finite values;
-- disagreement bulk/live;
-- quantity/perTrade depth.
-
-Пороговые константы не живут в UI и проверяются boundary tests.
+Golden scenarios в `fixtures/pricing/golden_scenarios.json` фиксируют жидкий рынок, troll ask, реальный сдвиг кластера, thin market, sell-only fallback и отсутствие данных.

@@ -11,8 +11,6 @@ export interface AppSettings {
   bulk_refresh_hours: number;
   live_quote_ttl_seconds: number;
   keep_inventory_copies: number;
-  inventory_companion_enabled: boolean;
-  inventory_companion_path: string | null;
   reward_overlay_scale_percent: number;
   reward_overlay_offset_x_percent: number;
   reward_overlay_offset_y_percent: number;
@@ -25,8 +23,6 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   bulk_refresh_hours: 4,
   live_quote_ttl_seconds: 90,
   keep_inventory_copies: 1,
-  inventory_companion_enabled: false,
-  inventory_companion_path: null,
   reward_overlay_scale_percent: 100,
   reward_overlay_offset_x_percent: 0,
   reward_overlay_offset_y_percent: 0,

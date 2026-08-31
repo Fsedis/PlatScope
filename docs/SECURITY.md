@@ -2,82 +2,56 @@
 
 ## Границы доверия
 
-Недоверенные входы: HTTP responses, cache files, imports, SQLite из старой версии, game process memory и локальные логи. Все проходят size limits, parsing и semantic validation до попадания в доменную модель.
+Недоверенными считаются все HTTP-ответы, JSON от Digital Extremes, строки `EE.log`, OCR-текст и ввод пользователя. До использования они проходят размерные ограничения, typed parsing и semantic validation.
 
-## Запрещённые действия
+## Warframe
 
-- запись в память Warframe;
-- DLL/code injection и hooks;
-- обход anti-cheat;
-- remote code execution или загрузка исполняемого кода из provider;
-- plaintext tokens/nonces;
-- автоматическое размещение/изменение orders без явного действия пользователя;
-- отправка inventory на сервер PlatScope;
-- скрытая telemetry.
+Read-only scanner открывает процесс только для запроса информации и чтения памяти. Запрещены и не реализованы:
 
-## Network
+- запись в память;
+- hooks, injection и подмена DLL;
+- эмуляция ввода и автоматизация действий в игре;
+- изменение `EE.log`, `EE.cfg` или других файлов Warframe.
 
-- HTTPS only;
-- redirect policy не разрешает downgrade;
-- response body limit 32 MiB;
-- connect/request timeouts;
-- централизованный rate limiter и bounded retries;
-- identifiable User-Agent;
-- downloaded JSON остаётся данными и никогда не исполняется;
-- checksum фиксируется для диагностики, но не заменяет schema validation.
+`accountId`, `nonce` и прочая session info существуют только внутри Rust scanner, используются для ограниченных HTTPS-запросов, обнуляются после выполнения и не возвращаются в WebView. Raw memory и raw inventory не сохраняются.
 
-## Локальные данные
+Метод чтения процесса не имеет официальной гарантии Digital Extremes. Приложение не скрывает этот риск и запускает scan только по явной команде пользователя.
 
-Database: `platscope.db` в системной data directory `PlatScope`. Запись snapshot выполняется через transaction и атомарную promotion. Temporary files создаются в той же filesystem, получают ограниченные права и удаляются после обработки.
+## Warframe Market
 
-Подтверждённые торговые события из `EE.log` хранятся локально: время, имя партнёра, переданные/полученные предметы, платина и статус сверки. Raw log, строки вне торгового диалога и игровые идентификаторы в базу не попадают. Журнал не отправляется внешним сервисам.
+Токен аккаунта хранится через Windows Credential Manager. В SQLite и логах его нет. Любая операция записи использует двухступенчатую схему:
 
-WFM token хранится только через OS keychain/credential manager. Если secure storage недоступен, интеграция остаётся выключенной; fallback в plaintext запрещён. Email и password не сохраняются, password очищается после одноразового sign-in. SQLite содержит только несекретный device ID.
+1. UI показывает точный предмет, вариант, цену и количество;
+2. пользователь подтверждает действие;
+3. Rust boundary повторно проверяет confirmation и допустимые диапазоны;
+4. только затем отправляется create/update/delete.
 
-## WFM account
+Ошибка или событие `EE.log` не могут самостоятельно изменить ордер.
 
-- account integration выключена до явного подключения;
-- auth/orders client отделён от public market providers;
-- legacy v1 sign-in используется только как опубликованный WFM переходный путь до публичного OAuth; first-party auth не имитируется;
-- `AccountToken` не сериализуется, zeroize-ится и redacted в `Debug`;
-- account body limit — 2 MiB, timeouts — 5/15 секунд, запросы сериализованы с интервалом 350 ms;
-- create/update/delete отклоняются backend-сервисом без отдельного `confirmed: true`;
-- обнаружение успешной сделки никогда само не меняет ордер; точное безопасное совпадение только предлагает изменение, а ранги/subtype/charges/звёзды и несколько совпадений всегда требуют ручной сверки;
-- disconnect всегда удаляет local credential, даже если remote sign-out недоступен.
+## Сеть и данные
 
-## Inventory acquisition
+- Разрешены только HTTPS-источники, перечисленные в `DATA_SOURCES.md`.
+- Ответы имеют лимиты размера, timeout и bounded retry.
+- Provider schema drift не меняет исполняемый код и не уничтожает LKG.
+- Инвентарь, снимки OCR и диагностические данные не отправляются внешним провайдерам.
+- Telemetry отсутствует.
 
-Production build включает явное пользовательское read-only сканирование по MIT-реализации TennoWorth. Windows boundary запрашивает только query/read права и не использует write/injection; Linux boundary читает `/proc`. Найденные `accountId`/`nonce` применяются только для одного HTTPS-запроса inventory endpoint Digital Extremes, не возвращаются в WebView, не сохраняются и не логируются. Raw response проходит bounds/validation и не хранится после нормализации. Digital Extremes не гарантирует ban-safety сторонних memory readers, что прямо указано в UI.
+## Tauri и WebView
 
-## Logging
+IPC-команды принимают типизированные аргументы и повторно проверяют диапазоны. CSP ограничивает network и изображения известными протоколами. Локальный protocol компонентов валидирует имя файла, размер и content type до записи кэша.
 
-Structured logs используют allowlist полей. Запрещены request auth headers, nonce, raw inventory, memory fragments, full account IDs и WFM token. Ошибки upstream сохраняют status, provider, endpoint class, latency и redacted message.
+Frontend не получает прямой доступ к файловой системе, SQLite, Credential Manager или реквизитам Warframe.
 
-Экран диагностики использует тот же allowlist: provider timestamps/status/latency/failure count и агрегаты локального покрытия. Credentials, account IDs, nonce и raw payload отсутствуют в IPC DTO. Открытие экрана не запускает сетевой health-check.
+## OCR
 
-## Packaging и подпись
+OCR работает отдельным процессом с JSON stdin/stdout. Захватывается только клиентская область окна Warframe. Временный кадр остаётся в памяти процесса, не сохраняется и не передаётся в сеть. Каталог кандидатов содержит только русские имена текущего локального LKG.
 
-Ручной CI packaging создаёт workflow artifacts с read-only repository permission. Теговый release workflow получает отдельный Tauri updater key только через GitHub Secrets, публикует подписанный update artifact, `latest.json` и SHA-256. Приватный ключ не доступен frontend, обычным quality jobs и pull request из forks. Authenticode-сертификата пока нет, поэтому Windows может показывать SmartScreen; подпись updater не выдаётся за подпись подтверждённого Windows-издателя. Полная политика: [Подпись и публичный релиз](RELEASE_SIGNING.md).
+## Логи и диагностика
 
-Уровень локального логирования можно переопределить только через `PLATSCOPE_LOG`; глобальная переменная `RUST_LOG` других Rust-приложений не меняет диагностическую полноту PlatScope.
+Структурированные логи не должны содержать токены, account ID, nonce, raw inventory, authorization headers и локальные пользовательские пути. Диагностический экспорт использует явный allowlist и создаётся локально; пользователь сам решает, отправлять ли файл.
 
-## Tauri boundary
+## Обновления и выпуск
 
-- минимальный capability allowlist;
-- нет произвольного shell execution из frontend;
-- commands принимают валидируемые DTO;
-- filesystem access скрыт за Rust services;
-- CSP и navigation ограничены локальным приложением и явно разрешёнными ссылками;
-- внешние ссылки открываются только после пользовательского действия.
+Встроенный updater принимает только пакет с корректной подписью Tauri. Закрытый ключ и пароль существуют только в локальном защищённом хранилище разработчика. В Git и GitHub загружаются публичный ключ и готовые артефакты, но не signing secrets.
 
-## Dependency и supply chain
-
-- lockfiles коммитятся;
-- зависимости минимальны и проверяются audit-инструментами;
-- GPL/proprietary reference code не переносится;
-- updater проверяет встроенную подпись Tauri, требует подтверждения установки и не блокирует ручное восстановление;
-- provider schema changes не могут автоматически менять исполняемый код.
-
-## Diagnostic export
-
-Экспорт создаётся локально и включает версии, health, redacted errors, schema/count/checksum metadata. Пользователь видит файл до отправки. Secrets и raw inventory исключены.
+SHA-256 подтверждает целостность скачанного установщика, но не заменяет подпись издателя. Пока отсутствует коммерческий Authenticode-сертификат, SmartScreen может показывать «Неизвестный издатель».
