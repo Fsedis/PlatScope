@@ -796,7 +796,8 @@ td {
   padding: 0.75rem;
 }
 
-.market-detail {
+.market-detail,
+.sell-detail {
   max-height: calc(100dvh - 2rem);
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -1951,17 +1952,6 @@ td,
   }
 }
 
-@media (max-width: 92rem) {
-  .sell-now-layout {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .sell-detail {
-    position: static;
-    min-height: 0;
-  }
-}
-
 @media (max-width: 78rem) {
   .sell-toolbar {
     grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1969,15 +1959,6 @@ td,
 
   .sell-toolbar .search-field {
     grid-column: span 2;
-  }
-
-  .sell-now-layout {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .sell-detail {
-    position: static;
-    min-height: 0;
   }
 }
 
@@ -1998,6 +1979,8 @@ td,
   .sell-detail {
     position: static;
     min-height: 0;
+    max-height: none;
+    overflow: visible;
   }
 
   .sell-table th:nth-child(5),

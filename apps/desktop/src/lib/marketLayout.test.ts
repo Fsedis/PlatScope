@@ -15,9 +15,15 @@ describe("компоновка рынка", () => {
     expect(css).toMatch(/\.market-toolbar\s*\{[^}]*align-items:\s*start/s);
   });
 
-  it("прокручивает правую карточку независимо и отключает это в одну колонку", () => {
+  it("прокручивает правую карточку рынка и инвентаря независимо", () => {
     expect(css).toMatch(
-      /\.market-detail\s*\{[^}]*max-height:\s*calc\(100dvh - 2rem\)[^}]*overflow-y:\s*auto/s,
+      /\.market-detail,\s*\.sell-detail\s*\{[^}]*max-height:\s*calc\(100dvh - 2rem\)[^}]*overflow-y:\s*auto/s,
+    );
+  });
+
+  it("возвращает карточки в общий поток в одноколоночном режиме", () => {
+    expect(css).toMatch(
+      /@media \(max-width: 65rem\)\s*\{[\s\S]*?\.sell-detail\s*\{[^}]*max-height:\s*none[^}]*overflow:\s*visible/s,
     );
     expect(css).toMatch(/\.market-detail\s*\{[^}]*max-height:\s*none[^}]*overflow:\s*visible/s);
   });
