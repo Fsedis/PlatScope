@@ -92,6 +92,31 @@ export interface TradeMatchPlan {
   unsafe: TradeItem[];
 }
 
+export function filterTradeShiftRows(
+  rows: readonly TradeShiftRow[],
+  query: string,
+): TradeShiftRow[] {
+  const terms = normalizeOrderSearch(query).split(" ").filter(Boolean);
+  if (!terms.length) return [...rows];
+  return rows.filter((row) => {
+    const haystack = normalizeOrderSearch([
+      row.item?.displayName,
+      row.item?.displayNameEn,
+      row.item?.slug,
+    ].filter(Boolean).join(" "));
+    return terms.every((term) => haystack.includes(term));
+  });
+}
+
+function normalizeOrderSearch(value: string): string {
+  return value
+    .normalize("NFKC")
+    .toLocaleLowerCase("ru")
+    .replaceAll("ё", "е")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
 export function orderVariantKey(
   order: AccountOrder,
   item: AccountOrderItem | undefined,
@@ -196,7 +221,7 @@ export function planTradeReconciliation(
       return result;
     }
     const [{ order, item, soldQuantity }] = completeSetCandidates;
-    if (soldQuantity > order.quantity || !isSafeOrderMatch(order, soldQuantity, event)) {
+    if (soldQuantity > order.quantity || !isSafeOrderMatch(order, soldQuantity, event, null)) {
       result.unsafe.push(...soldItems);
       return result;
     }
@@ -213,7 +238,9 @@ export function planTradeReconciliation(
     const candidates = account.orders.filter((order) => {
       if (order.type !== "sell" || !order.itemId) return false;
       const item = account.orderItems?.[order.itemId];
-      return item && itemMatchesTradeName(item, sold.name);
+      return item
+        && itemMatchesTradeName(item, sold.name)
+        && orderMatchesKnownTradeRank(order, sold.name);
     });
     if (candidates.length !== 1) {
       result.unmatched.push(sold);
@@ -225,7 +252,7 @@ export function planTradeReconciliation(
       continue;
     }
     const orderItem = order.itemId ? account.orderItems?.[order.itemId] : undefined;
-    if (!isSafeOrderMatch(order, sold.quantity, event)) {
+    if (!isSafeOrderMatch(order, sold.quantity, event, sold)) {
       result.unsafe.push(sold);
       continue;
     }
@@ -277,14 +304,27 @@ function itemMatchesTradeName(item: AccountOrderItem, tradeName: string): boolea
     .some((name) => normalizeTradeName(name) === normalized);
 }
 
+function orderMatchesKnownTradeRank(order: AccountOrder, tradeName: string): boolean {
+  const rank = tradeRank(tradeName);
+  return rank === null || (
+    order.rank === rank
+    && (order.subtype === null || order.subtype === "regular")
+  );
+}
+
 function isSafeOrderMatch(
   order: AccountOrder,
   soldQuantity: number,
   event: TradeEvent,
+  sold: TradeItem | null,
 ): boolean {
-  return order.rank === null
+  const soldRank = sold ? tradeRank(sold.name) : null;
+  const subtypeMatches = soldRank === null
+    ? order.subtype === null
+    : order.subtype === null || order.subtype === "regular";
+  return order.rank === soldRank
     && order.charges === null
-    && order.subtype === null
+    && subtypeMatches
     && order.amberStars === null
     && order.cyanStars === null
     && new Date(order.updatedAt).getTime() <= new Date(event.occurredAt).getTime()
@@ -299,7 +339,7 @@ function aggregateTradeItems(items: readonly TradeItem[]): TradeItem[] {
   const aggregated = new Map<string, TradeItem>();
   for (const item of items) {
     if (!Number.isInteger(item.quantity) || item.quantity <= 0) continue;
-    const identity = normalizeTradeName(item.name);
+    const identity = `${normalizeTradeName(item.name)}|${tradeRank(item.name) ?? ""}`;
     const existing = aggregated.get(identity);
     if (existing) existing.quantity += item.quantity;
     else aggregated.set(identity, { name: item.name, quantity: item.quantity });
@@ -321,7 +361,7 @@ function normalizeMarketPlatform(platform: string): string {
 }
 
 export function normalizeTradeName(value: string): string {
-  return value
+  return stripTradeRankSuffix(value).name
     .normalize("NFKC")
     .toLocaleLowerCase("ru-RU")
     .replace(/ё/g, "е")
@@ -331,6 +371,21 @@ export function normalizeTradeName(value: string): string {
     .replace(/\s*:\s*/g, ":")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function tradeRank(value: string): number | null {
+  return stripTradeRankSuffix(value).rank;
+}
+
+function stripTradeRankSuffix(value: string): { name: string; rank: number | null } {
+  const normalized = value.normalize("NFKC");
+  const match = normalized.match(/\s*\([^()]*?(?:ранг|rank)\s+(\d+)\)\s*$/iu);
+  if (!match || match.index === undefined) return { name: normalized, rank: null };
+  const rank = Number.parseInt(match[1], 10);
+  if (!Number.isSafeInteger(rank) || rank < 0 || rank > 255) {
+    return { name: normalized, rank: null };
+  }
+  return { name: normalized.slice(0, match.index), rank };
 }
 
 function sameInventoryVariant(

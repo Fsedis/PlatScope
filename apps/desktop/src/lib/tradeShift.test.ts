@@ -5,6 +5,7 @@ import type { InventoryView } from "./inventory";
 import type { PriceRecommendation } from "./market";
 import {
   buildTradeShiftRows,
+  filterTradeShiftRows,
   pendingSaleEvents,
   normalizeTradeName,
   planTradeReconciliation,
@@ -54,6 +55,15 @@ function recommendation(): PriceRecommendation {
 }
 
 describe("торговая смена", () => {
+  it("ищет ордера по русскому и английскому названию", () => {
+    const rows = buildTradeShiftRows(account, inventory, new Map());
+
+    expect(filterTradeShiftRows(rows, "Прайм Поток")).toHaveLength(1);
+    expect(filterTradeShiftRows(rows, "primed flow")).toHaveLength(1);
+    expect(filterTradeShiftRows(rows, "поток prime")).toHaveLength(1);
+    expect(filterTradeShiftRows(rows, "Рино")).toHaveLength(0);
+  });
+
   it("ставит расхождение количества выше проверки цены", () => {
     const quote = recommendation();
     const rows = buildTradeShiftRows(account, inventory, new Map([[recommendationIdentity(quote.key), quote]]), new Date("2026-08-29T12:00:00Z"));
@@ -183,6 +193,64 @@ describe("торговая смена", () => {
     expect(plan.unmatched).toEqual([]);
     expect(plan.unsafe).toEqual([]);
     expect(plan.actions[0]).toMatchObject({ kind: "update", soldQuantity: 2 });
+  });
+
+  it("сопоставляет мод по русской подписи точного ранга из журнала игры", () => {
+    const rankedAccount: AccountView = {
+      ...account,
+      orders: [
+        {
+          ...order,
+          id: "transient-fortitude-rank-0",
+          itemId: "transient-fortitude",
+          platinum: 10,
+          quantity: 1,
+          rank: 0,
+          subtype: "regular",
+        },
+        {
+          ...order,
+          id: "transient-fortitude-rank-5",
+          itemId: "transient-fortitude",
+          platinum: 40,
+          quantity: 1,
+          rank: 5,
+          subtype: "regular",
+        },
+      ],
+      orderItems: {
+        "transient-fortitude": {
+          slug: "transient_fortitude",
+          displayName: "Кратковременное усиление",
+          displayNameEn: "Transient Fortitude",
+          imageUrl: null,
+          itemKind: "standard",
+        },
+      },
+    };
+    const event: TradeEvent = {
+      id: 19,
+      occurredAt: "2026-09-01T14:38:01Z",
+      partner: "rebo2808",
+      platinumGiven: 0,
+      platinumReceived: 10,
+      givenItems: [{ name: "Кратковременное усиление (РЕДКИЙ РАНГ 0)", quantity: 1 }],
+      receivedItems: [],
+      status: "pending",
+      matchedOrderId: null,
+      reconciliationJson: null,
+    };
+
+    const plan = planTradeReconciliation(event, rankedAccount);
+
+    expect(plan.unmatched).toEqual([]);
+    expect(plan.unsafe).toEqual([]);
+    expect(plan.actions).toEqual([expect.objectContaining({
+      kind: "delete",
+      itemName: "Кратковременное усиление",
+      soldQuantity: 1,
+      before: expect.objectContaining({ id: "transient-fortitude-rank-0" }),
+    })]);
   });
 
   it("сопоставляет четыре русских чертежа с одним проданным полным комплектом", () => {

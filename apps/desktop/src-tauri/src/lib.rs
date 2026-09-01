@@ -1322,7 +1322,8 @@ fn plan_automatic_trade_reconciliation(
             return None;
         }
         let (order, item, sold_quantity) = complete_set_candidates[0];
-        if sold_quantity > order.quantity || !is_safe_trade_order(order, sold_quantity, event) {
+        if sold_quantity > order.quantity || !is_safe_trade_order(order, sold_quantity, event, None)
+        {
             return None;
         }
         return Some(vec![AutomaticTradeAction {
@@ -1347,7 +1348,9 @@ fn plan_automatic_trade_reconciliation(
                     .item_id
                     .as_ref()
                     .and_then(|item_id| account.order_items.get(item_id))?;
-                item_matches_trade_name(item, &sold.name).then_some((order, item))
+                (item_matches_trade_name(item, &sold.name)
+                    && order_matches_known_trade_rank(order, &sold.name))
+                .then_some((order, item))
             })
             .collect::<Vec<_>>();
         if candidates.len() != 1 {
@@ -1356,7 +1359,7 @@ fn plan_automatic_trade_reconciliation(
         let (order, item) = candidates[0];
         if !used_order_ids.insert(order.id.clone())
             || sold.quantity > order.quantity
-            || !is_safe_trade_order(order, sold.quantity, event)
+            || !is_safe_trade_order(order, sold.quantity, event, Some(&sold))
         {
             return None;
         }
@@ -1374,10 +1377,15 @@ fn aggregate_trade_items(items: &[TradeItem]) -> Vec<TradeItem> {
     let mut positions = HashMap::<String, usize>::new();
     let mut aggregated = Vec::<TradeItem>::new();
     for item in items.iter().filter(|item| item.quantity > 0) {
-        let identity = normalize_trade_name(&item.name);
-        if identity.is_empty() {
+        let normalized_name = normalize_trade_name(&item.name);
+        if normalized_name.is_empty() {
             continue;
         }
+        let identity = format!(
+            "{}|{}",
+            normalized_name,
+            trade_rank(&item.name).map_or_else(String::new, |rank| rank.to_string())
+        );
         if let Some(position) = positions.get(&identity).copied() {
             aggregated[position].quantity =
                 aggregated[position].quantity.saturating_add(item.quantity);
@@ -1439,10 +1447,34 @@ fn item_matches_trade_name(item: &AccountOrderItemView, trade_name: &str) -> boo
         .any(|candidate| normalize_trade_name(candidate) == normalized)
 }
 
-fn is_safe_trade_order(order: &AccountOrder, sold_quantity: u32, event: &TradeEvent) -> bool {
-    order.rank.is_none()
+fn order_matches_known_trade_rank(order: &AccountOrder, trade_name: &str) -> bool {
+    trade_rank(trade_name).is_none_or(|rank| {
+        order.rank == Some(rank)
+            && order
+                .subtype
+                .as_deref()
+                .is_none_or(|subtype| subtype == "regular")
+    })
+}
+
+fn is_safe_trade_order(
+    order: &AccountOrder,
+    sold_quantity: u32,
+    event: &TradeEvent,
+    sold: Option<&TradeItem>,
+) -> bool {
+    let sold_rank = sold.and_then(|item| trade_rank(&item.name));
+    let subtype_matches = if sold_rank.is_some() {
+        order
+            .subtype
+            .as_deref()
+            .is_none_or(|subtype| subtype == "regular")
+    } else {
+        order.subtype.is_none()
+    };
+    order.rank == sold_rank
         && order.charges.is_none()
-        && order.subtype.is_none()
+        && subtype_matches
         && order.amber_stars.is_none()
         && order.cyan_stars.is_none()
         && order.updated_at <= event.occurred_at
@@ -1455,6 +1487,7 @@ fn is_safe_trade_order(order: &AccountOrder, sold_quantity: u32, event: &TradeEv
 }
 
 fn normalize_trade_name(value: &str) -> String {
+    let (value, _) = strip_trade_rank_suffix(value);
     let mut value = value
         .trim()
         .to_lowercase()
@@ -1478,6 +1511,37 @@ fn normalize_trade_name(value: &str) -> String {
         .join(" ")
         .replace(" :", ":")
         .replace(": ", ":")
+}
+
+fn trade_rank(value: &str) -> Option<u16> {
+    strip_trade_rank_suffix(value).1
+}
+
+fn strip_trade_rank_suffix(value: &str) -> (&str, Option<u16>) {
+    let value = value.trim();
+    let Some(open_index) = value.rfind('(') else {
+        return (value, None);
+    };
+    let Some(descriptor) = value[open_index + 1..].strip_suffix(')') else {
+        return (value, None);
+    };
+    let words = descriptor.split_whitespace().collect::<Vec<_>>();
+    let Some(rank_index) = words
+        .iter()
+        .position(|word| word.eq_ignore_ascii_case("rank") || word.to_lowercase() == "ранг")
+    else {
+        return (value, None);
+    };
+    let Some(rank) = words
+        .get(rank_index + 1)
+        .and_then(|rank| rank.parse::<u16>().ok())
+    else {
+        return (value, None);
+    };
+    if rank_index + 2 != words.len() {
+        return (value, None);
+    }
+    (value[..open_index].trim_end(), Some(rank))
 }
 
 async fn reconcile_trade_event(app_handle: &AppHandle, event: TradeEvent) -> Result<bool, String> {
@@ -4531,6 +4595,49 @@ mod tests {
 
         let actions = plan_automatic_trade_reconciliation(&event, &account)
             .expect("sale matches exactly one order");
+
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].kind, AutomaticTradeActionKind::Close);
+        assert_eq!(actions[0].before.id, order.id);
+        assert_eq!(actions[0].sold_quantity, 1);
+    }
+
+    #[test]
+    fn automatic_trade_plan_matches_ranked_mod_label_from_russian_game_log() {
+        let occurred_at = Utc::now();
+        let mut order = automatic_trade_order("transient-fortitude", 1, occurred_at);
+        order.platinum = 10;
+        order.rank = Some(0);
+        order.subtype = Some("regular".into());
+        let mut wrong_rank = order.clone();
+        wrong_rank.id = "order-transient-fortitude-rank-5".into();
+        wrong_rank.rank = Some(5);
+        let account = AccountView {
+            connected: true,
+            profile: None,
+            orders: vec![order.clone(), wrong_rank],
+            order_items: HashMap::from([(
+                "transient-fortitude".into(),
+                AccountOrderItemView {
+                    slug: "transient_fortitude".into(),
+                    display_name: "Кратковременное усиление".into(),
+                    display_name_en: "Transient Fortitude".into(),
+                    image_url: None,
+                    item_kind: MarketItemKind::Standard,
+                    set_components: Vec::new(),
+                },
+            )]),
+        };
+        let event = automatic_trade_event(
+            vec![TradeItem {
+                name: "Кратковременное усиление (РЕДКИЙ РАНГ 0)".into(),
+                quantity: 1,
+            }],
+            occurred_at,
+        );
+
+        let actions = plan_automatic_trade_reconciliation(&event, &account)
+            .expect("точный ранг мода сопоставляется с ордером");
 
         assert_eq!(actions.len(), 1);
         assert_eq!(actions[0].kind, AutomaticTradeActionKind::Close);

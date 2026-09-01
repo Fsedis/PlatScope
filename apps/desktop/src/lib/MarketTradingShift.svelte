@@ -15,6 +15,7 @@
   import { formatPlatinum, type LivePricingResult, type PriceRecommendation } from "./market";
   import {
     buildTradeShiftRows,
+    filterTradeShiftRows,
     isSaleTrade,
     normalizeTradeName,
     pendingSaleEvents,
@@ -60,11 +61,12 @@
   let editError = "";
   let manualReviewOpen = false;
   let orderToRemove: AccountOrder | null = null;
+  let orderQuery = "";
 
   $: rows = account
     ? buildTradeShiftRows(account, inventory, recommendations)
     : [];
-  $: visibleRows = rows;
+  $: visibleRows = filterTradeShiftRows(rows, orderQuery);
   $: actionableRows = rows.filter((row) => row.needsAction && rowChange(row) !== null);
   $: selectedRows = actionableRows.filter((row) => selectedIds.has(row.order.id));
   $: pendingEvents = pendingSaleEvents(events);
@@ -422,8 +424,22 @@
   }
 
   async function restoreTradeEvent(event: TradeEvent): Promise<void> {
-    await invoke<boolean>("trade_event_restore", { id: event.id });
-    await loadEvents();
+    if (applying) return;
+    applying = true;
+    errorMessage = "";
+    try {
+      await invoke<boolean>("trade_event_restore", { id: event.id });
+      const completed = await invoke<boolean>("trade_event_retry", { id: event.id });
+      actionMessage = completed
+        ? "Продажа учтена в Warframe Market."
+        : "Ордер всё ещё нельзя определить однозначно.";
+    } catch (error) {
+      errorMessage = accountActionErrorMessage(String(error));
+    } finally {
+      applying = false;
+      await reloadAccount();
+      await loadEvents();
+    }
   }
 
   async function reloadAccount(): Promise<void> {
@@ -679,8 +695,12 @@
       <header class="orders-toolbar">
         <div>
           <h3 id="orders-heading">Ордера на продажу</h3>
-          <span>{visibleRows.length} всего</span>
+          <span id="orders-result-count">{orderQuery.trim() ? `${visibleRows.length} из ${rows.length}` : `${rows.length} всего`}</span>
         </div>
+        <label class="order-search" for="order-search">
+          <span>Поиск ордера</span>
+          <input id="order-search" type="search" bind:value={orderQuery} maxlength="80" autocomplete="off" spellcheck="false" placeholder="Например, Рино Прайм или Rhino Prime" aria-describedby="orders-result-count" disabled={!rows.length} />
+        </label>
         <div class="orders-toolbar__actions">
           <button class="compact" type="button" disabled={!selectedRows.length || applying} onclick={() => (reviewOpen = true)}>Посмотреть изменения ({selectedRows.length})</button>
         </div>
@@ -732,6 +752,8 @@
             </tbody>
           </table>
         </div>
+      {:else if rows.length}
+        <div class="sales-empty sales-empty--action"><div><strong>По запросу ничего не найдено</strong><span>Проверьте русское или английское название предмета.</span></div><button class="secondary compact" type="button" onclick={() => (orderQuery = "")}>Очистить поиск</button></div>
       {:else}
         <div class="sales-empty sales-empty--action"><div><strong>Нет ордеров на продажу</strong><span>Найдите предмет, проверьте цену и выставьте его из раздела «Мои предметы».</span></div><button class="secondary compact" type="button" onclick={onBrowseMarket}>Найти предмет</button></div>
       {/if}
@@ -872,12 +894,17 @@
   .verification-note { display: flex; align-items: center; justify-content: space-between; gap: .6rem; border: 1px solid color-mix(in oklch, var(--gold), var(--border) 55%); border-radius: .5rem; padding: .45rem .6rem; background: var(--accent-soft); color: var(--accent-strong); font-size: .7rem; font-weight: 650; }
   .priority-panel, .orders-panel { border: 1px solid var(--border); border-radius: .6rem; background: var(--surface-1); box-shadow: var(--shadow-sm); overflow: clip; }
   .priority-panel { border-color: color-mix(in oklch, var(--gold), var(--border) 55%); }
-  .section-heading, .orders-toolbar { display: flex; align-items: center; justify-content: space-between; gap: .75rem; padding: .55rem .7rem; background: var(--surface-2); }
+  .section-heading, .orders-toolbar { gap: .75rem; padding: .55rem .7rem; background: var(--surface-2); }
+  .section-heading { display: flex; align-items: center; justify-content: space-between; }
+  .orders-toolbar { display: grid; grid-template-columns: minmax(9rem, .35fr) minmax(15rem, 1fr) auto; align-items: end; }
   .section-heading h3, .orders-toolbar h3 { margin: 0; font-size: .9rem; }
   .section-kicker { margin: 0 0 .05rem; color: var(--accent-strong); font-size: .61rem; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; }
   .count-badge { min-width: 1.55rem; border-radius: 999px; padding: .16rem .42rem; background: var(--accent); color: var(--surface-1); font-size: .68rem; font-weight: 800; text-align: center; }
   .section-hint { margin: 0; border-block-start: 1px solid var(--border); padding: .45rem .7rem; color: var(--text-muted); font-size: .7rem; }
   .orders-toolbar > div:first-child span { color: var(--text-muted); font-size: .68rem; }
+  .order-search { display: grid; gap: .18rem; min-width: 0; color: var(--text-muted); font-size: .66rem; font-weight: 700; }
+  .order-search input { min-width: 0; min-height: 1.8rem; width: 100%; border: 1px solid var(--border); border-radius: .45rem; padding: .28rem .5rem; background: var(--surface-1); color: var(--text); font-size: .75rem; }
+  .orders-toolbar__actions { justify-content: flex-end; }
   .compact-check { display: inline-flex; align-items: center; gap: .35rem; min-height: 1.8rem; font-size: .72rem; font-weight: 650; }
   .compact-check input, .shift-table input { width: 1rem; height: 1rem; accent-color: var(--accent); }
   .shift-table-wrap { max-height: 26rem; overflow: auto; border-top: 1px solid var(--border); }
@@ -943,7 +970,7 @@
   .trade-history .trade-events { max-height: 16rem; overflow: auto; }
   .history-empty { margin: 0; border-top: 1px solid var(--border); padding: .7rem; color: var(--text-muted); font-size: .72rem; }
   @media (max-width: 60rem) { .secondary-sections { grid-template-columns: minmax(0, 1fr); } }
-  @media (max-width: 50rem) { .sales-header, .account-panel, .orders-toolbar, .sales-empty--action, .verification-note { align-items: stretch; flex-direction: column; } .sales-summary, .order-editor__fields, .connect-fields { grid-template-columns: minmax(0, 1fr); } .sales-summary div { border-inline-end: 0; border-block-end: 1px solid var(--border); } .sales-summary div:last-child { border-block-end: 0; } .shift-table-wrap { max-height: none; } .trade-events article { align-items: flex-start; flex-direction: column; } }
+  @media (max-width: 50rem) { .sales-header, .account-panel, .sales-empty--action, .verification-note { align-items: stretch; flex-direction: column; } .sales-summary, .order-editor__fields, .connect-fields, .orders-toolbar { grid-template-columns: minmax(0, 1fr); } .orders-toolbar__actions { justify-content: flex-start; } .sales-summary div { border-inline-end: 0; border-block-end: 1px solid var(--border); } .sales-summary div:last-child { border-block-end: 0; } .shift-table-wrap { max-height: none; } .trade-events article { align-items: flex-start; flex-direction: column; } }
   @media (max-width: 46rem) {
     .shift-table, .shift-table tbody { display: block; }
     .shift-table colgroup, .shift-table thead { display: none; }
