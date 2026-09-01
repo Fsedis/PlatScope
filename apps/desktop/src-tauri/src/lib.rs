@@ -15,14 +15,14 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use chrono::{DateTime, Utc};
 use platscope_core::{
     AccountOrder, AccountOrderItemView, AccountOrderType, AccountService, AccountSetComponentView,
-    AccountView, AppSettings, CreateListingInput, DEFAULT_MARKET_SEARCH_LIMIT,
-    GameMetadataRefreshOutcome, GameMetadataService, HistoryBootstrapOutcome, HistoryService,
-    InsightsService, InsightsView, InventoryService, InventoryView, LivePricingResult,
-    LivePricingService, LiveSellNowResult, LoggingGuard, MarketBrowserService, MarketDataService,
-    MarketHistoryView, MarketRefreshOutcome, MarketSearchResult, MarketSearchRow,
-    PriceRecommendation, PricingService, ResourceConverterService, ResourceConverterView,
-    SETTINGS_KEY, SellNowService, SellNowView, SetComponentInsight, UpdateListingInput,
-    enrich_account_view, init_logging,
+    AccountView, AppSettings, BountyHunterService, BountyHunterView, CreateListingInput,
+    DEFAULT_MARKET_SEARCH_LIMIT, GameMetadataRefreshOutcome, GameMetadataService,
+    HistoryBootstrapOutcome, HistoryService, InsightsService, InsightsView, InventoryService,
+    InventoryView, LivePricingResult, LivePricingService, LiveSellNowResult, LoggingGuard,
+    MarketBrowserService, MarketDataService, MarketHistoryView, MarketRefreshOutcome,
+    MarketSearchResult, MarketSearchRow, PriceRecommendation, PricingService,
+    ResourceConverterService, ResourceConverterView, SETTINGS_KEY, SellNowService, SellNowView,
+    SetComponentInsight, UpdateListingInput, enrich_account_view, init_logging,
 };
 use platscope_domain::{
     GameMetadataSnapshot, InventoryResolution, MarketItemKind, MarketVariantKey, PriceConfidence,
@@ -49,6 +49,7 @@ struct AppState {
     history_service: HistoryService,
     game_metadata_service: GameMetadataService,
     resource_converter_service: ResourceConverterService,
+    bounty_hunter_service: BountyHunterService,
     account_service: AccountService,
     trade_reconciliation_lock: tokio::sync::Mutex<()>,
     read_only_inventory_scanner: Arc<ReadOnlyInventoryScanner>,
@@ -637,6 +638,26 @@ async fn resource_converter(
         .view(&state.database, &settings)
         .await
         .map(|view| view.map(localize_resource_converter_images))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // Tauri command extractor owns State.
+async fn bounty_hunter(
+    force_refresh: bool,
+    state: State<'_, AppState>,
+) -> Result<Option<BountyHunterView>, String> {
+    let settings = state
+        .database
+        .lock()
+        .map_err(|_| "database state is unavailable".to_owned())?
+        .get_setting::<AppSettings>(SETTINGS_KEY)
+        .map_err(|error| error.to_string())?
+        .unwrap_or_default();
+    state
+        .bounty_hunter_service
+        .view(&state.database, &settings, force_refresh)
+        .await
         .map_err(|error| error.to_string())
 }
 
@@ -3757,7 +3778,6 @@ pub fn run() {
             let live_pricing_service = LivePricingService::production()?;
             let history_service = HistoryService::production()?;
             let game_metadata_service = GameMetadataService::production()?;
-            let resource_converter_service = ResourceConverterService::production()?;
             let account_device_id =
                 if let Some(value) = database.get_setting::<String>(ACCOUNT_DEVICE_ID_KEY)? {
                     value
@@ -3782,7 +3802,8 @@ pub fn run() {
                 live_pricing_service,
                 history_service,
                 game_metadata_service,
-                resource_converter_service,
+                resource_converter_service: ResourceConverterService::production()?,
+                bounty_hunter_service: BountyHunterService::production()?,
                 account_service,
                 trade_reconciliation_lock: tokio::sync::Mutex::new(()),
                 read_only_inventory_scanner: Arc::new(ReadOnlyInventoryScanner::new()),
@@ -3810,6 +3831,7 @@ pub fn run() {
             refresh_game_metadata,
             insights,
             resource_converter,
+            bounty_hunter,
             open_market_items,
             account_status,
             account_connect,

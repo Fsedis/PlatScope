@@ -31,10 +31,10 @@ use platscope_inventory::{
 pub use platscope_pricing::PriceRecommendation;
 use platscope_pricing::{PricingContext, recommend};
 use platscope_providers::{
-    BulkMarketProvider, DailyMarketState, FrameForgeMirrorProvider, GameMetadataProvider,
-    HistoricalMarketProvider, LiveMarketProvider, MARKET_PRICE_SCHEMA_VERSION, MetadataProvider,
-    ProviderError, ProviderErrorCode, RelicsRunProvider, WarframeMarketProvider,
-    WarframeWorldstateProvider, WfcdMetadataProvider,
+    BountyJob, BountyRewardDrop, BountyState, BulkMarketProvider, DailyMarketState,
+    FrameForgeMirrorProvider, GameMetadataProvider, HistoricalMarketProvider, LiveMarketProvider,
+    MARKET_PRICE_SCHEMA_VERSION, MetadataProvider, ProviderError, ProviderErrorCode,
+    RelicsRunProvider, WarframeMarketProvider, WarframeWorldstateProvider, WfcdMetadataProvider,
 };
 use platscope_selling::{SellPriorityInput, SellPriorityScore, calculate_priority, nominal_value};
 use platscope_storage::{Database, HistoryCoverage, MarketSnapshotSummary};
@@ -160,6 +160,11 @@ pub struct InsightsService;
 pub struct ResourceConverterService {
     provider: WarframeWorldstateProvider,
     cache: tokio::sync::Mutex<Option<(Instant, DailyMarketState)>>,
+}
+
+pub struct BountyHunterService {
+    provider: WarframeWorldstateProvider,
+    cache: tokio::sync::Mutex<Option<(Instant, BountyState)>>,
 }
 
 pub struct AccountService {
@@ -384,6 +389,52 @@ pub struct ResourceConverterView {
     pub routes: Vec<ResourceConversionRoute>,
     pub arcanes: ArcaneConversionSummary,
     pub unavailable_sources: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BountyRewardView {
+    pub display_name: String,
+    pub image_url: Option<String>,
+    pub slug: Option<String>,
+    pub rarity: String,
+    pub expected_quantity: f64,
+    pub chance_percent: f64,
+    pub unit_price: Option<f64>,
+    pub expected_platinum: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BountyJobView {
+    pub id: String,
+    pub title: String,
+    pub min_level: u16,
+    pub max_level: u16,
+    pub min_mastery_rank: u8,
+    pub stage_count: usize,
+    pub total_standing: u64,
+    pub time_bound: Option<String>,
+    pub expected_platinum: f64,
+    pub priced_reward_count: usize,
+    pub rewards: Vec<BountyRewardView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BountyRegionView {
+    pub key: String,
+    pub display_name: String,
+    pub expiry: chrono::DateTime<Utc>,
+    pub jobs: Vec<BountyJobView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BountyHunterView {
+    pub fetched_at: chrono::DateTime<Utc>,
+    pub market_source_date: Option<NaiveDate>,
+    pub regions: Vec<BountyRegionView>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1430,6 +1481,449 @@ impl ResourceConverterService {
         *cache = Some((Instant::now(), state.clone()));
         Ok(state)
     }
+}
+
+impl BountyHunterService {
+    /// Создаёт сервис активных заказов с коротким кэшем Worldstate.
+    ///
+    /// # Errors
+    ///
+    /// Возвращает [`CoreError`], если HTTP-провайдер не удалось инициализировать.
+    pub fn production() -> Result<Self, CoreError> {
+        Ok(Self {
+            provider: WarframeWorldstateProvider::production()?,
+            cache: tokio::sync::Mutex::new(None),
+        })
+    }
+
+    /// Сопоставляет награды активных заказов с русским каталогом и рыночными ценами.
+    ///
+    /// # Errors
+    ///
+    /// Возвращает [`CoreError`] при ошибке Worldstate или чтения локальной базы.
+    pub async fn view(
+        &self,
+        database: &Mutex<Database>,
+        settings: &AppSettings,
+        force_refresh: bool,
+    ) -> Result<Option<BountyHunterView>, CoreError> {
+        let (catalog, market_source_date) = {
+            let database = lock_database(database)?;
+            let Some(catalog) = database.load_current_catalog()? else {
+                return Ok(None);
+            };
+            let market_source_date = database
+                .current_market_snapshot()?
+                .map(|snapshot| snapshot.source_date);
+            (catalog, market_source_date)
+        };
+        let state = self.bounty_state(force_refresh).await?;
+        build_bounty_hunter_view(database, settings, &catalog, &state, market_source_date).map(Some)
+    }
+
+    async fn bounty_state(&self, force_refresh: bool) -> Result<BountyState, CoreError> {
+        let mut cache = self.cache.lock().await;
+        if !force_refresh
+            && let Some((stored_at, state)) = cache.as_ref()
+            && stored_at.elapsed() <= RESOURCE_WORLDSTATE_CACHE_TTL
+        {
+            return Ok(state.clone());
+        }
+        let state = self.provider.fetch_bounties().await?;
+        *cache = Some((Instant::now(), state.clone()));
+        Ok(state)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct AggregatedBountyReward {
+    source_name: String,
+    rarity: String,
+    expected_quantity: f64,
+    chance_percent: f64,
+}
+
+fn build_bounty_hunter_view(
+    database: &Mutex<Database>,
+    settings: &AppSettings,
+    catalog: &ItemCatalog,
+    state: &BountyState,
+    market_source_date: Option<NaiveDate>,
+) -> Result<BountyHunterView, CoreError> {
+    let catalog_by_name: HashMap<String, &CatalogItem> = catalog
+        .items
+        .iter()
+        .map(|item| (normalize_bounty_name(&item.display_name_en), item))
+        .collect();
+    let mut regions = state
+        .missions
+        .iter()
+        .map(|mission| {
+            let mut jobs = mission
+                .jobs
+                .iter()
+                .map(|job| build_bounty_job_view(database, settings, job, &catalog_by_name))
+                .collect::<Result<Vec<_>, CoreError>>()?;
+            jobs.sort_by(|left, right| {
+                right
+                    .expected_platinum
+                    .total_cmp(&left.expected_platinum)
+                    .then_with(|| left.min_level.cmp(&right.min_level))
+            });
+            Ok(BountyRegionView {
+                key: bounty_region_key(&mission.syndicate_key).to_owned(),
+                display_name: bounty_region_name(&mission.syndicate_key).to_owned(),
+                expiry: mission.expiry,
+                jobs,
+            })
+        })
+        .collect::<Result<Vec<_>, CoreError>>()?;
+    regions.sort_by(|left, right| {
+        let left_best = left.jobs.first().map_or(0.0, |job| job.expected_platinum);
+        let right_best = right.jobs.first().map_or(0.0, |job| job.expected_platinum);
+        right_best.total_cmp(&left_best)
+    });
+    Ok(BountyHunterView {
+        fetched_at: state.fetched_at,
+        market_source_date,
+        regions,
+    })
+}
+
+fn build_bounty_job_view(
+    database: &Mutex<Database>,
+    settings: &AppSettings,
+    job: &BountyJob,
+    catalog_by_name: &HashMap<String, &CatalogItem>,
+) -> Result<BountyJobView, CoreError> {
+    let mut rewards = aggregate_bounty_rewards(&job.reward_pool_drops, job.standing_stages.len())
+        .into_iter()
+        .map(|reward| {
+            let catalog_item = catalog_by_name
+                .get(&normalize_bounty_name(&reward.source_name))
+                .copied();
+            let recommendation = catalog_item
+                .map(|item| bounty_market_key(item, settings.platform))
+                .transpose()?
+                .map(|key| {
+                    PricingService::price_current_variant(database, &key, MarketItemKind::Standard)
+                })
+                .transpose()?
+                .flatten();
+            let (unit_price, expected_price_factor) =
+                recommendation.map_or((None, 0.0), |recommendation| {
+                    matches!(
+                        recommendation.freshness,
+                        PriceFreshness::Fresh | PriceFreshness::Aging
+                    )
+                    .then(|| recommendation.list_price.or(recommendation.fair_price))
+                    .flatten()
+                    .filter(|price| price.is_finite() && *price > 0.0)
+                    .map_or((None, 0.0), |price| {
+                        let factor = match recommendation.confidence {
+                            PriceConfidence::High | PriceConfidence::Medium => 1.0,
+                            PriceConfidence::Low => LOW_CONFIDENCE_ARCANE_PRICE_FACTOR,
+                            PriceConfidence::Unknown => 0.0,
+                        };
+                        (Some(price), factor)
+                    })
+                });
+            let expected_platinum = unit_price
+                .filter(|_| expected_price_factor > 0.0)
+                .map(|price| price * reward.expected_quantity * expected_price_factor);
+            Ok(BountyRewardView {
+                display_name: catalog_item.map_or_else(
+                    || localized_bounty_reward_name(&reward.source_name),
+                    |item| catalog_name(item, settings.language),
+                ),
+                image_url: catalog_item
+                    .and_then(|item| catalog_item_image(item, settings.language)),
+                slug: catalog_item.map(|item| item.slug.clone()),
+                rarity: localized_bounty_rarity(&reward.rarity).to_owned(),
+                expected_quantity: reward.expected_quantity,
+                chance_percent: reward.chance_percent,
+                unit_price,
+                expected_platinum,
+            })
+        })
+        .collect::<Result<Vec<_>, CoreError>>()?;
+    rewards.sort_by(|left, right| {
+        right
+            .expected_platinum
+            .unwrap_or_default()
+            .total_cmp(&left.expected_platinum.unwrap_or_default())
+            .then_with(|| right.chance_percent.total_cmp(&left.chance_percent))
+            .then_with(|| left.display_name.cmp(&right.display_name))
+    });
+    let priced_reward_count = rewards
+        .iter()
+        .filter(|reward| reward.unit_price.is_some())
+        .count();
+    let expected_platinum = rewards
+        .iter()
+        .filter_map(|reward| reward.expected_platinum)
+        .sum();
+    let min_level = job.enemy_levels.first().copied().unwrap_or_default();
+    let max_level = job.enemy_levels.get(1).copied().unwrap_or(min_level);
+    Ok(BountyJobView {
+        id: bounty_job_view_id(job),
+        title: localized_bounty_title(&job.kind).to_owned(),
+        min_level,
+        max_level,
+        min_mastery_rank: job.min_mr,
+        stage_count: job.standing_stages.len(),
+        total_standing: job
+            .standing_stages
+            .iter()
+            .fold(0_u64, |sum, value| sum.saturating_add(u64::from(*value))),
+        time_bound: job
+            .time_bound
+            .as_deref()
+            .map(localized_time_bound)
+            .map(str::to_owned),
+        expected_platinum,
+        priced_reward_count,
+        rewards,
+    })
+}
+
+fn aggregate_bounty_rewards(
+    drops: &[BountyRewardDrop],
+    stage_count: usize,
+) -> Vec<AggregatedBountyReward> {
+    #[derive(Default)]
+    struct Accumulator {
+        source_name: String,
+        rarity: String,
+        expected_quantity: f64,
+        miss_probability: f64,
+    }
+
+    let mut aggregated = HashMap::<String, Accumulator>::new();
+    for stage in bounty_reward_rolls(drops, stage_count) {
+        let mut stage_chances = HashMap::<String, f64>::new();
+        for drop in stage {
+            let key = normalize_bounty_name(&drop.item);
+            let probability = (drop.chance / 100.0).clamp(0.0, 1.0);
+            let row = aggregated
+                .entry(key.clone())
+                .or_insert_with(|| Accumulator {
+                    source_name: drop.item.clone(),
+                    rarity: drop.rarity.clone(),
+                    expected_quantity: 0.0,
+                    miss_probability: 1.0,
+                });
+            if !row.rarity.eq_ignore_ascii_case(&drop.rarity) {
+                "Mixed".clone_into(&mut row.rarity);
+            }
+            row.expected_quantity += probability * f64::from(drop.count);
+            *stage_chances.entry(key).or_default() += probability;
+        }
+        for (key, chance) in stage_chances {
+            if let Some(row) = aggregated.get_mut(&key) {
+                row.miss_probability *= 1.0 - chance.clamp(0.0, 1.0);
+            }
+        }
+    }
+    aggregated
+        .into_values()
+        .map(|row| AggregatedBountyReward {
+            source_name: row.source_name,
+            rarity: row.rarity,
+            expected_quantity: row.expected_quantity,
+            chance_percent: 100.0 * (1.0 - row.miss_probability),
+        })
+        .collect()
+}
+
+fn bounty_reward_stages(drops: &[BountyRewardDrop]) -> Vec<Vec<&BountyRewardDrop>> {
+    let mut stages = Vec::new();
+    let mut stage = Vec::new();
+    let mut chance_sum = 0.0;
+    for drop in drops {
+        stage.push(drop);
+        chance_sum += drop.chance;
+        // Published percentages are rounded and normally total just under/over 100.
+        // Do not split a pool at 99%: some vault tables still have a final 1% row.
+        if chance_sum >= 99.9 {
+            stages.push(std::mem::take(&mut stage));
+            chance_sum = 0.0;
+        }
+    }
+    if !stage.is_empty() {
+        stages.push(stage);
+    }
+    stages
+}
+
+fn bounty_reward_rolls(
+    drops: &[BountyRewardDrop],
+    stage_count: usize,
+) -> Vec<Vec<&BountyRewardDrop>> {
+    let stages = bounty_reward_stages(drops);
+    if stages.len() != 4 || !(3..=5).contains(&stage_count) {
+        return stages;
+    }
+
+    // The public drop table exposes four pools: stage 1; stage 2 plus stage 3 of
+    // four/five-stage bounties; stage 4 of five; and the final stage.
+    let stage_indices: &[usize] = match stage_count {
+        3 => &[0, 1, 3],
+        4 => &[0, 1, 1, 3],
+        5 => &[0, 1, 1, 2, 3],
+        _ => unreachable!("stage count was checked above"),
+    };
+    stage_indices
+        .iter()
+        .filter_map(|index| stages.get(*index).cloned())
+        .collect()
+}
+
+fn bounty_market_key(
+    item: &CatalogItem,
+    platform: Platform,
+) -> Result<MarketVariantKey, CoreError> {
+    let rank = item.max_rank.map(|_| 0);
+    let subtype = item
+        .subtypes
+        .iter()
+        .find(|subtype| subtype.eq_ignore_ascii_case("regular"))
+        .cloned();
+    MarketVariantKey::new(item.slug.clone(), platform, rank, subtype)
+        .map_err(|error| CoreError::MetadataData(format!("invalid bounty market key: {error}")))
+}
+
+fn bounty_job_view_id(job: &BountyJob) -> String {
+    format!("{}|{}", job.id, job.unique_name)
+}
+
+fn normalize_bounty_name(value: &str) -> String {
+    value
+        .trim()
+        .replace('’', "'")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+fn bounty_region_key(value: &str) -> &str {
+    match value {
+        "Ostrons" => "cetus",
+        "Solaris United" => "fortuna",
+        "Entrati" => "necralisk",
+        _ => "other",
+    }
+}
+
+fn bounty_region_name(value: &str) -> &str {
+    match value {
+        "Ostrons" => "Цетус",
+        "Solaris United" => "Фортуна",
+        "Entrati" => "Некралиск",
+        _ => "Другой регион",
+    }
+}
+
+fn localized_bounty_rarity(value: &str) -> &str {
+    match value.to_ascii_lowercase().as_str() {
+        "common" => "Обычная",
+        "uncommon" => "Необычная",
+        "rare" => "Редкая",
+        "mixed" => "Меняется по этапам",
+        _ => "Награда",
+    }
+}
+
+fn localized_time_bound(value: &str) -> &str {
+    match value.to_ascii_lowercase().as_str() {
+        "day" => "Только днём",
+        "night" => "Только ночью",
+        _ => "Ограничен по времени",
+    }
+}
+
+fn localized_bounty_title(value: &str) -> &str {
+    match value {
+        "Anomaly Retrieval" => "Поиск аномалий",
+        "Anomaly Retrieval (Endless)" => "Поиск аномалий — бесконечный",
+        "Assassinate the Commander" => "Устранить командира",
+        "Brute Force" => "Грубая сила",
+        "Capture the Grineer Commander" => "Захватить командира Гринир",
+        "Core Samples" => "Образцы ядра",
+        "Courier Ambush" => "Засада на курьера",
+        "Find the Hidden Artifact" => "Найти скрытый артефакт",
+        "For Science!" => "Ради науки",
+        "Isolation Vault Chamber A" => "Изоляционное хранилище A",
+        "Isolation Vault Chamber B" => "Изоляционное хранилище B",
+        "Isolation Vault Chamber C" => "Изоляционное хранилище C",
+        "Master's Voice (Narmer)" => "Голос хозяина — Нармер",
+        "Picket Duty" => "Дозор",
+        "Proof of Life" => "Доказательство жизни",
+        "Protect the Innocent" => "Защитить невиновных",
+        "Reclaim the Stolen Artifact" => "Вернуть украденный артефакт",
+        "Rise and Fall (Narmer)" => "Взлёт и падение — Нармер",
+        "Sabotage Bounty" => "Диверсия",
+        "Salvage" => "Сбор припасов",
+        "Served Cold" => "Холодная подача",
+        "Trash Their Traps" => "Уничтожить ловушки",
+        "Weaken the Grineer Foothold" => "Ослабить позиции Гринир",
+        _ => "Заказ синдиката",
+    }
+}
+
+fn localized_bounty_reward_name(value: &str) -> String {
+    if let Some(amount) = value.strip_suffix(" Credits Cache") {
+        return format!("{amount} кредитов");
+    }
+    if let Some(amount) = value.strip_suffix(" Endo") {
+        return format!("{amount} эндо");
+    }
+    match value {
+        "Advances Debt-Bond" => "Долговое обязательство «Аванс»",
+        "Aya" => "Айя",
+        "Breath Of The Eidolon" => "Дыхание Эйдолона",
+        "Caliban Systems Blueprint" => "Калибан: система (чертёж)",
+        "Cetus Wisp" => "Цетусский огонёк",
+        "Circuits" => "Схемы",
+        "Control Module" => "Модуль контроля",
+        "Familial Debt-Bond" => "Семейное долговое обязательство",
+        "Fass Residue" => "Останки Фэсс",
+        "Fieldron" => "Филдрон",
+        "Ganglion" => "Ганглий",
+        "Gara Chassis Blueprint" => "Гара: каркас (чертёж)",
+        "Gara Neuroptics Blueprint" => "Гара: нейрооптика (чертёж)",
+        "Gara Systems Blueprint" => "Гара: система (чертёж)",
+        "Garuda Chassis Blueprint" => "Гаруда: каркас (чертёж)",
+        "Garuda Neuroptics Blueprint" => "Гаруда: нейрооптика (чертёж)",
+        "Garuda Systems Blueprint" => "Гаруда: система (чертёж)",
+        "Iradite" => "Ирадит",
+        "Kuva" => "Кува",
+        "Medical Debt-Bond" => "Медицинское долговое обязательство",
+        "Morphics" => "Морфиды",
+        "Mytocardia Spore" => "Споры митокардии",
+        "Narmer Isoplast" => "Изопласт Нармера",
+        "Neurodes" => "Нейроды",
+        "Orokin Animus Matrix" => "Матрица анимуса Орокин",
+        "Orokin Ballistics Matrix" => "Баллистическая матрица Орокин",
+        "Orokin Cell" => "Элемент питания Орокин",
+        "Orokin Orientation Matrix" => "Ориентационная матрица Орокин",
+        "Oxium" => "Оксиум",
+        "Quassus Blueprint" => "Квассус (чертёж)",
+        "Revenant Chassis Blueprint" => "Ревенант: каркас (чертёж)",
+        "Revenant Neuroptics Blueprint" => "Ревенант: нейрооптика (чертёж)",
+        "Revenant Systems Blueprint" => "Ревенант: система (чертёж)",
+        "Scintillant" => "Сцинтиллянт",
+        "Shelter Debt-Bond" => "Долговое обязательство «Убежище»",
+        "Tepa Nodule" => "Узелок тэпа",
+        "Training Debt-Bond" => "Долговое обязательство «Обучение»",
+        "Verdilac Blueprint" => "Вердилак (чертёж)",
+        "Xaku Chassis Blueprint" => "Заку: каркас (чертёж)",
+        "Xaku Neuroptics Blueprint" => "Заку: нейрооптика (чертёж)",
+        "Xaku Systems Blueprint" => "Заку: система (чертёж)",
+        _ => value,
+    }
+    .to_owned()
 }
 
 fn build_resource_converter_view(
@@ -5057,6 +5551,133 @@ mod tests {
         assert_eq!(
             (0..=5).map(arcane_rank_copy_count).collect::<Vec<_>>(),
             vec![1, 3, 6, 10, 15, 21]
+        );
+    }
+
+    #[test]
+    fn bounty_rewards_combine_stage_chances_without_adding_probabilities() {
+        let drops = vec![
+            BountyRewardDrop {
+                item: "Tradeable Mod".into(),
+                rarity: "Uncommon".into(),
+                chance: 20.0,
+                count: 1,
+            },
+            BountyRewardDrop {
+                item: "Credits".into(),
+                rarity: "Common".into(),
+                chance: 80.0,
+                count: 1,
+            },
+            BountyRewardDrop {
+                item: "Tradeable Mod".into(),
+                rarity: "Rare".into(),
+                chance: 50.0,
+                count: 1,
+            },
+            BountyRewardDrop {
+                item: "Endo".into(),
+                rarity: "Common".into(),
+                chance: 50.0,
+                count: 1,
+            },
+        ];
+
+        let rewards = aggregate_bounty_rewards(&drops, 2);
+        let reward = rewards
+            .iter()
+            .find(|reward| reward.source_name == "Tradeable Mod")
+            .expect("reward is aggregated");
+
+        assert!((reward.expected_quantity - 0.7).abs() < f64::EPSILON);
+        assert!((reward.chance_percent - 60.0).abs() < f64::EPSILON);
+        assert_eq!(reward.rarity, "Mixed");
+    }
+
+    #[test]
+    fn three_stage_bounty_skips_the_stage_four_of_five_pool() {
+        let drops = ["Stage 1", "Middle", "Stage 4 of 5", "Final"]
+            .into_iter()
+            .map(|item| BountyRewardDrop {
+                item: item.into(),
+                rarity: "Common".into(),
+                chance: 100.0,
+                count: 1,
+            })
+            .collect::<Vec<_>>();
+
+        let rewards = aggregate_bounty_rewards(&drops, 3);
+
+        assert_eq!(rewards.len(), 3);
+        assert!(
+            rewards
+                .iter()
+                .all(|reward| reward.source_name != "Stage 4 of 5")
+        );
+    }
+
+    #[test]
+    fn five_stage_bounty_rolls_the_shared_middle_pool_twice() {
+        let drops = ["Stage 1", "Middle", "Stage 4 of 5", "Final"]
+            .into_iter()
+            .map(|item| BountyRewardDrop {
+                item: item.into(),
+                rarity: "Common".into(),
+                chance: 100.0,
+                count: 1,
+            })
+            .collect::<Vec<_>>();
+
+        let rewards = aggregate_bounty_rewards(&drops, 5);
+        let middle = rewards
+            .iter()
+            .find(|reward| reward.source_name == "Middle")
+            .expect("middle reward is aggregated");
+
+        assert!((middle.expected_quantity - 2.0).abs() < f64::EPSILON);
+        assert!((middle.chance_percent - 100.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn bounty_pool_keeps_the_last_one_percent_reward_in_the_same_roll() {
+        let drops = vec![
+            BountyRewardDrop {
+                item: "Common reward".into(),
+                rarity: "Common".into(),
+                chance: 99.0,
+                count: 1,
+            },
+            BountyRewardDrop {
+                item: "Rare reward".into(),
+                rarity: "Rare".into(),
+                chance: 1.0,
+                count: 1,
+            },
+        ];
+
+        let stages = bounty_reward_stages(&drops);
+
+        assert_eq!(stages.len(), 1);
+        assert_eq!(stages[0].len(), 2);
+    }
+
+    #[test]
+    fn bounty_view_ids_distinguish_jobs_with_the_same_worldstate_id() {
+        let make_job = |unique_name: &str| BountyJob {
+            id: "duplicate-id".into(),
+            expiry: Utc::now(),
+            unique_name: unique_name.into(),
+            reward_pool_drops: Vec::new(),
+            kind: "Test".into(),
+            enemy_levels: vec![10, 20],
+            standing_stages: vec![100],
+            min_mr: 0,
+            time_bound: None,
+        };
+
+        assert_ne!(
+            bounty_job_view_id(&make_job("/Lotus/Rewards/Regular")),
+            bounty_job_view_id(&make_job("/Lotus/Rewards/Narmer"))
         );
     }
 

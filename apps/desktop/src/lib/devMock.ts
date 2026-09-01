@@ -27,6 +27,7 @@ import type {
 import type { LiveSellNowResult, SellNowRow, SellNowView } from "./sellNow";
 import type { RelicRewardScanView } from "./relicRewards";
 import type { ResourceConverterView } from "./resourceConverter";
+import type { BountyHunterView } from "./bountyHunter";
 import {
   isSaleTrade,
   planTradeReconciliation,
@@ -748,6 +749,9 @@ export async function installMarketBrowserMock(): Promise<void> {
     if (command === "resource_converter") {
       return makeResourceConverterView();
     }
+    if (command === "bounty_hunter") {
+      return makeBountyHunterView();
+    }
     if (command === "open_market_items") {
       const slugs = (args as { slugs?: unknown } | undefined)?.slugs;
       return Array.isArray(slugs) ? slugs.length : 0;
@@ -979,6 +983,95 @@ function makeResourceConverterView(): ResourceConverterView {
         },
       ],
     },
+  };
+}
+
+function makeBountyHunterView(): BountyHunterView {
+  return {
+    fetchedAt: "2026-09-02T11:40:00Z",
+    marketSourceDate: "2026-09-01",
+    regions: [
+      {
+        key: "cetus",
+        displayName: "Цетус",
+        expiry: "2026-09-02T14:00:00Z",
+        jobs: [
+          {
+            id: "cetus-tier-five",
+            title: "Ослабить позиции Гринир",
+            minLevel: 40,
+            maxLevel: 60,
+            minMasteryRank: 0,
+            stageCount: 5,
+            totalStanding: 7420,
+            expectedPlatinum: 4.8,
+            pricedRewardCount: 3,
+            rewards: [
+              {
+                displayName: "Редкий мод",
+                imageUrl: rows[6]?.imageUrl ?? null,
+                slug: "primed_flow",
+                rarity: "Редкая",
+                expectedQuantity: 0.12,
+                chancePercent: 11.8,
+                unitPrice: 28,
+                expectedPlatinum: 3.3,
+              },
+              {
+                displayName: "Айя",
+                imageUrl: null,
+                slug: null,
+                rarity: "Редкая",
+                expectedQuantity: 0.25,
+                chancePercent: 23.4,
+                unitPrice: null,
+                expectedPlatinum: null,
+              },
+              {
+                displayName: "400 эндо",
+                imageUrl: null,
+                slug: null,
+                rarity: "Необычная",
+                expectedQuantity: 0.5,
+                chancePercent: 50,
+                unitPrice: null,
+                expectedPlatinum: null,
+              },
+            ],
+          },
+        ],
+      },
+      {
+        key: "fortuna",
+        displayName: "Фортуна",
+        expiry: "2026-09-02T14:00:00Z",
+        jobs: [
+          {
+            id: "fortuna-tier-four",
+            title: "Засада на курьера",
+            minLevel: 30,
+            maxLevel: 50,
+            minMasteryRank: 0,
+            stageCount: 5,
+            totalStanding: 6250,
+            expectedPlatinum: 2.6,
+            pricedRewardCount: 2,
+            rewards: [
+              {
+                displayName: "Синт Рефлекс",
+                imageUrl: null,
+                slug: "synth_reflex",
+                rarity: "Необычная",
+                expectedQuantity: 0.2,
+                chancePercent: 18.5,
+                unitPrice: 10,
+                expectedPlatinum: 2,
+              },
+            ],
+          },
+        ],
+      },
+    ],
   };
 }
 

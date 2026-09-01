@@ -57,6 +57,54 @@ pub struct DailyMarketState {
     pub unavailable_sources: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BountyRewardDrop {
+    pub item: String,
+    pub rarity: String,
+    pub chance: f64,
+    #[serde(default = "one")]
+    pub count: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BountyJob {
+    pub id: String,
+    pub expiry: DateTime<Utc>,
+    pub unique_name: String,
+    #[serde(default)]
+    pub reward_pool_drops: Vec<BountyRewardDrop>,
+    #[serde(rename = "type")]
+    pub kind: String,
+    #[serde(default)]
+    pub enemy_levels: Vec<u16>,
+    #[serde(default)]
+    pub standing_stages: Vec<u32>,
+    #[serde(default)]
+    pub min_mr: u8,
+    pub time_bound: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BountyMission {
+    pub id: String,
+    pub activation: DateTime<Utc>,
+    pub expiry: DateTime<Utc>,
+    pub syndicate: String,
+    pub syndicate_key: String,
+    #[serde(default)]
+    pub jobs: Vec<BountyJob>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BountyState {
+    pub fetched_at: DateTime<Utc>,
+    pub missions: Vec<BountyMission>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct VoidTraderTransport {
@@ -81,6 +129,10 @@ struct SteelPathTransport {
     activation: DateTime<Utc>,
     expiry: DateTime<Utc>,
     current_reward: SteelPathReward,
+}
+
+const fn one() -> u32 {
+    1
 }
 
 #[derive(Clone)]
@@ -129,6 +181,36 @@ impl WarframeWorldstateProvider {
             nightwave,
             steel_path,
             unavailable_sources,
+        })
+    }
+
+    /// Загружает открытые заказы вместе с наградами и шансами по этапам.
+    ///
+    /// # Errors
+    ///
+    /// Возвращает [`ProviderError`] при сетевой ошибке или изменении схемы Worldstate.
+    pub async fn fetch_bounties(&self) -> Result<BountyState, ProviderError> {
+        let mut missions: Vec<BountyMission> =
+            self.fetch_json("syndicateMissions?language=en").await?;
+        missions.retain(|mission| !mission.jobs.is_empty());
+        for mission in &mut missions {
+            mission.jobs.retain(|job| {
+                !job.reward_pool_drops.is_empty()
+                    && job.enemy_levels.len() >= 2
+                    && job.reward_pool_drops.iter().all(|drop| {
+                        !drop.item.trim().is_empty()
+                            && drop.item.len() <= 256
+                            && drop.count > 0
+                            && drop.count <= 100_000
+                            && drop.chance.is_finite()
+                            && (0.0..=100.0).contains(&drop.chance)
+                    })
+            });
+        }
+        missions.retain(|mission| !mission.jobs.is_empty());
+        Ok(BountyState {
+            fetched_at: Utc::now(),
+            missions,
         })
     }
 
@@ -194,5 +276,16 @@ mod tests {
         )
         .expect("shape is accepted");
         assert_eq!(parsed.current_reward.cost, 75);
+    }
+
+    #[test]
+    fn bounty_transport_accepts_reward_probabilities() {
+        let missions: Vec<BountyMission> = serde_json::from_str(
+            r#"[{"id":"cetus","activation":"2026-09-01T20:00:00Z","expiry":"2026-09-01T22:00:00Z","syndicate":"Ostrons","syndicateKey":"Ostrons","jobs":[{"id":"tier-a","expiry":"2026-09-01T22:00:00Z","uniqueName":"/Lotus/Test","rewardPoolDrops":[{"item":"Aya","rarity":"Rare","chance":5.88,"count":1}],"type":"Test bounty","enemyLevels":[10,30],"standingStages":[500,500,1000],"minMR":0}]}]"#,
+        )
+        .expect("shape is accepted");
+        assert_eq!(missions[0].jobs[0].reward_pool_drops[0].item, "Aya");
+        assert_eq!(missions[0].jobs[0].reward_pool_drops[0].count, 1);
+        assert_eq!(missions[0].jobs[0].enemy_levels, [10, 30]);
     }
 }

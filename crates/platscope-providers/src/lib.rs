@@ -26,8 +26,8 @@ pub use relics_run::{RelicsRunCatalogProvider, RelicsRunProvider};
 pub use warframe_market::WarframeMarketProvider;
 pub use wfcd_metadata::WfcdMetadataProvider;
 pub use worldstate::{
-    DailyMarketState, NightwaveState, SteelPathReward, SteelPathState, VoidTraderItem,
-    VoidTraderState, WarframeWorldstateProvider,
+    BountyJob, BountyMission, BountyRewardDrop, BountyState, DailyMarketState, NightwaveState,
+    SteelPathReward, SteelPathState, VoidTraderItem, VoidTraderState, WarframeWorldstateProvider,
 };
 
 pub const MAX_BULK_RESPONSE_BYTES: usize = 32 * 1024 * 1024;

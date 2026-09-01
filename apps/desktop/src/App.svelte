@@ -5,6 +5,7 @@
 
   import AppNavIcon from "./lib/AppNavIcon.svelte";
   import AppUpdatePanel from "./lib/AppUpdatePanel.svelte";
+  import BountyHunterScreen from "./lib/BountyHunterScreen.svelte";
   import DiagnosticsScreen from "./lib/DiagnosticsScreen.svelte";
   import EquippedModsScreen from "./lib/EquippedModsScreen.svelte";
   import HistoryChart from "./lib/HistoryChart.svelte";
@@ -63,12 +64,14 @@
       inventory: "Мои предметы",
       equippedMods: "Надетые моды",
       insights: "Возможности",
+      bountyHunter: "Охотник за наградами",
       diagnostics: "Состояние данных",
       settings: "Настройки",
       marketLede: "Мои продажи, актуальность ордеров и поиск цены в одном рабочем месте.",
       inventoryLede: "Торговый инвентарь, момент продажи и ордера Warframe Market в одном месте.",
       equippedModsLede: "На каком предмете и в какой конфигурации стоит каждый мод.",
       insightsLede: "Как выгоднее распорядиться предметами: открыть реликвии, дособрать или продать сет.",
+      bountyHunterLede: "Какой активный заказ принесёт больше платины и какие награды можно продать.",
       diagnosticsLede: "Что загружено, что устарело и где возникла ошибка.",
       settingsLede: "Язык, платформа и обновление данных.",
       searching: "Ищем в сохранённых данных…", shown: (visible: number, total: number) => `${visible} из ${total} вариантов показано`,
@@ -95,12 +98,14 @@
       inventory: "My items",
       equippedMods: "Equipped mods",
       insights: "Opportunities",
+      bountyHunter: "Bounty hunter",
       diagnostics: "Data status",
       settings: "Settings",
       marketLede: "Your sales, order health, and price research in one workspace.",
       inventoryLede: "Market inventory, sell timing, and Warframe Market orders in one place.",
       equippedModsLede: "See the item and configuration using each mod.",
       insightsLede: "Use owned relics, finish profitable sets, or list complete ones.",
+      bountyHunterLede: "Compare active bounties by saleable rewards and expected platinum.",
       diagnosticsLede: "Provider, local cache, and data coverage status without reading terminal logs.",
       settingsLede: "Language, market platform, and data refresh controls.",
       searching: "Searching saved data…", shown: (visible: number, total: number) => `${visible} of ${total} variants shown`,
@@ -137,6 +142,7 @@
     | "inventory"
     | "equipped_mods"
     | "insights"
+    | "bounty_hunter"
     | "diagnostics"
     | "settings";
   type MarketWorkspace = "sales" | "browse";
@@ -379,6 +385,7 @@
       inventory: selectedCopy.inventory,
       equipped_mods: selectedCopy.equippedMods,
       insights: selectedCopy.insights,
+      bounty_hunter: selectedCopy.bountyHunter,
       diagnostics: selectedCopy.diagnostics,
       settings: selectedCopy.settings,
     }[screen];
@@ -390,6 +397,7 @@
       inventory: selectedCopy.inventoryLede,
       equipped_mods: selectedCopy.equippedModsLede,
       insights: selectedCopy.insightsLede,
+      bounty_hunter: selectedCopy.bountyHunterLede,
       diagnostics: selectedCopy.diagnosticsLede,
       settings: selectedCopy.settingsLede,
     }[screen];
@@ -505,6 +513,12 @@
           aria-current={activeScreen === "insights" ? "page" : undefined}
           onclick={() => navigateTo("insights")}
         ><AppNavIcon screen="insights" /><span>{shell.insights}</span></button>
+        <button
+          type="button"
+          class:active={activeScreen === "bounty_hunter"}
+          aria-current={activeScreen === "bounty_hunter" ? "page" : undefined}
+          onclick={() => navigateTo("bounty_hunter")}
+        ><AppNavIcon screen="bounty_hunter" /><span>{shell.bountyHunter}</span></button>
         <button
           type="button"
           class:active={activeScreen === "diagnostics"}
@@ -869,6 +883,8 @@
       onOpenSettings={() => navigateTo("settings")}
       onOpenMarketSales={openMarketSales}
     />
+  {:else if activeScreen === "bounty_hunter"}
+    <BountyHunterScreen onOpenSettings={() => navigateTo("settings")} />
   {:else if activeScreen === "diagnostics"}
     <DiagnosticsScreen />
   {:else if activeScreen === "settings"}
