@@ -40,6 +40,7 @@
     filterAndSortSellNowRows,
     priorityReasonMessages,
     resolveSellNowSelection,
+    sellNowRowDomKey,
     sellPriorityRanks,
     sellNowRowIdentity,
     type LiveSellNowResult,
@@ -637,7 +638,7 @@
                 </tr>
               </thead>
               <tbody>
-                {#each visibleRows as row (sellNowRowIdentity(row))}
+                {#each visibleRows as row, rowIndex (sellNowRowDomKey(row, rowIndex))}
                   <tr class:selected={selectedRow && sellNowRowIdentity(row) === sellNowRowIdentity(selectedRow)}>
                     <td data-label={c.item}>
                       <button class="item-button" type="button" onclick={() => selectRow(row)}>

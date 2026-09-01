@@ -140,6 +140,14 @@ export function sellNowRowIdentity(row: SellNowRow): string {
     : row.inventory.canonicalGameId;
 }
 
+/**
+ * Возвращает уникальный ключ строки для DOM даже тогда, когда снимок содержит
+ * несколько неразрешённых предметов с одинаковым игровым идентификатором.
+ */
+export function sellNowRowDomKey(row: SellNowRow, position: number): string {
+  return `${sellNowRowIdentity(row)}::${position}`;
+}
+
 export function resolveSellNowSelection(
   visibleRows: SellNowRow[],
   selectedIdentity: string,

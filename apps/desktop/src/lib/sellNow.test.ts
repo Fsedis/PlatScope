@@ -6,6 +6,7 @@ import {
   filterAndSortSellNowRows,
   priorityReasonMessages,
   resolveSellNowSelection,
+  sellNowRowDomKey,
   sellPriorityRanks,
   sellNowRowIdentity,
   type SellNowFilters,
@@ -276,6 +277,18 @@ describe("sell now presentation", () => {
     });
 
     expect(resolveSellNowSelection(visibleMods, sellNowRowIdentity(relic))).toBe(mod);
+  });
+
+  it("keeps DOM keys unique for unresolved duplicate inventory rows", () => {
+    const first = row("veiled_melee_riven_mod", 0, 0, "neutral");
+    const second = row("veiled_melee_riven_mod", 0, 0, "neutral");
+    first.inventory.key = null;
+    second.inventory.key = null;
+    first.inventory.canonicalGameId = "/Lotus/Upgrades/Mods/Randomized/PlayerMeleeWeaponRandomModRare";
+    second.inventory.canonicalGameId = first.inventory.canonicalGameId;
+
+    expect(sellNowRowIdentity(first)).toBe(sellNowRowIdentity(second));
+    expect(sellNowRowDomKey(first, 0)).not.toBe(sellNowRowDomKey(second, 1));
   });
 
   it("identity preserves exact rank", () => {
