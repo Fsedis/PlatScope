@@ -649,8 +649,8 @@ async fn bounty_hunter(
 ) -> Result<Option<BountyHunterView>, String> {
     let settings = state
         .database
-        .lock()
-        .map_err(|_| "database state is unavailable".to_owned())?
+        .try_lock()
+        .map_err(|_| "market data is being updated; retry shortly".to_owned())?
         .get_setting::<AppSettings>(SETTINGS_KEY)
         .map_err(|error| error.to_string())?
         .unwrap_or_default();

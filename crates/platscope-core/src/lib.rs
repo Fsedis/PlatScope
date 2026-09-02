@@ -579,7 +579,16 @@ impl PricingService {
         key: &MarketVariantKey,
         item_kind: MarketItemKind,
     ) -> Result<Option<PriceRecommendation>, CoreError> {
-        Self::price_current_variant_with_live(database, key, item_kind, None, None)
+        let database = lock_database(database)?;
+        Self::price_current_variant_in_database(&database, key, item_kind)
+    }
+
+    fn price_current_variant_in_database(
+        database: &Database,
+        key: &MarketVariantKey,
+        item_kind: MarketItemKind,
+    ) -> Result<Option<PriceRecommendation>, CoreError> {
+        Self::price_current_variant_with_live_in_database(database, key, item_kind, None, None)
     }
 
     fn price_current_variant_with_live(
@@ -590,10 +599,26 @@ impl PricingService {
         available_quantity: Option<u32>,
     ) -> Result<Option<PriceRecommendation>, CoreError> {
         let database = lock_database(database)?;
+        Self::price_current_variant_with_live_in_database(
+            &database,
+            key,
+            item_kind,
+            live_order_book,
+            available_quantity,
+        )
+    }
+
+    fn price_current_variant_with_live_in_database(
+        database: &Database,
+        key: &MarketVariantKey,
+        item_kind: MarketItemKind,
+        live_order_book: Option<&LiveOrderBook>,
+        available_quantity: Option<u32>,
+    ) -> Result<Option<PriceRecommendation>, CoreError> {
         let Some(snapshot) = database.current_market_snapshot()? else {
             return Ok(None);
         };
-        let records = current_market_records_with_regular_fallback(&database, key)?;
+        let records = current_market_records_with_regular_fallback(database, key)?;
         Ok(Some(recommend(PricingContext {
             key,
             item_kind,
@@ -823,7 +848,7 @@ fn build_live_result(
 }
 
 fn active_live_order(order: &LiveOrder) -> bool {
-    order.user_status != UserStatus::Offline
+    order.user_status == UserStatus::InGame
         && order.platinum > 0
         && order.quantity > 0
         && order.per_trade > 0
@@ -841,16 +866,8 @@ fn bounded_live_orders(active_orders: &[&LiveOrder]) -> Vec<LiveOrderView> {
         .copied()
         .filter(|order| order.side == LiveOrderSide::Buy)
         .collect();
-    sells.sort_by(|left, right| {
-        compare_order_unit_price(left, right).then_with(|| {
-            user_status_order(left.user_status).cmp(&user_status_order(right.user_status))
-        })
-    });
-    buys.sort_by(|left, right| {
-        compare_order_unit_price(right, left).then_with(|| {
-            user_status_order(left.user_status).cmp(&user_status_order(right.user_status))
-        })
-    });
+    sells.sort_by(|left, right| compare_order_unit_price(left, right));
+    buys.sort_by(|left, right| compare_order_unit_price(right, left));
     sells
         .into_iter()
         .take(ORDERS_PER_SIDE)
@@ -869,14 +886,6 @@ fn compare_order_unit_price(left: &LiveOrder, right: &LiveOrder) -> std::cmp::Or
     // Compare price / per_trade without floating-point rounding.
     (u64::from(left.platinum) * u64::from(right.per_trade))
         .cmp(&(u64::from(right.platinum) * u64::from(left.per_trade)))
-}
-
-const fn user_status_order(status: UserStatus) -> u8 {
-    match status {
-        UserStatus::InGame => 0,
-        UserStatus::Online => 1,
-        UserStatus::Offline => 2,
-    }
 }
 
 pub const DEFAULT_MARKET_SEARCH_LIMIT: usize = 60;
@@ -1373,6 +1382,7 @@ fn void_trace_balance(inventory: &InventoryView) -> Option<u32> {
 }
 
 const RESOURCE_WORLDSTATE_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
+const BOUNTY_WORLDSTATE_TIMEOUT: Duration = Duration::from_secs(15);
 const VOSFOR_PACK_COST: f64 = 200.0;
 const CONVERTER_PRICE_MARGIN: f64 = 0.10;
 const MIN_ARCANE_PACK_PRICE_COVERAGE: f64 = 100.0;
@@ -1507,18 +1517,18 @@ impl BountyHunterService {
         settings: &AppSettings,
         force_refresh: bool,
     ) -> Result<Option<BountyHunterView>, CoreError> {
-        let (catalog, market_source_date) = {
-            let database = lock_database(database)?;
-            let Some(catalog) = database.load_current_catalog()? else {
-                return Ok(None);
-            };
-            let market_source_date = database
-                .current_market_snapshot()?
-                .map(|snapshot| snapshot.source_date);
-            (catalog, market_source_date)
-        };
         let state = self.bounty_state(force_refresh).await?;
-        build_bounty_hunter_view(database, settings, &catalog, &state, market_source_date).map(Some)
+        let database = database.try_lock().map_err(|_| {
+            CoreError::DatabaseState("market data is being updated; retry shortly".into())
+        })?;
+        let Some(catalog) = database.load_current_catalog()? else {
+            return Ok(None);
+        };
+        let market_source_date = database
+            .current_market_snapshot()?
+            .map(|snapshot| snapshot.source_date);
+        build_bounty_hunter_view(&database, settings, &catalog, &state, market_source_date)
+            .map(Some)
     }
 
     async fn bounty_state(&self, force_refresh: bool) -> Result<BountyState, CoreError> {
@@ -1529,7 +1539,15 @@ impl BountyHunterService {
         {
             return Ok(state.clone());
         }
-        let state = self.provider.fetch_bounties().await?;
+        let state = tokio::time::timeout(BOUNTY_WORLDSTATE_TIMEOUT, self.provider.fetch_bounties())
+            .await
+            .map_err(|_| {
+                ProviderError::new(
+                    ProviderErrorCode::Timeout,
+                    "bounty worldstate request exceeded 15 seconds",
+                    true,
+                )
+            })??;
         *cache = Some((Instant::now(), state.clone()));
         Ok(state)
     }
@@ -1544,7 +1562,7 @@ struct AggregatedBountyReward {
 }
 
 fn build_bounty_hunter_view(
-    database: &Mutex<Database>,
+    database: &Database,
     settings: &AppSettings,
     catalog: &ItemCatalog,
     state: &BountyState,
@@ -1591,7 +1609,7 @@ fn build_bounty_hunter_view(
 }
 
 fn build_bounty_job_view(
-    database: &Mutex<Database>,
+    database: &Database,
     settings: &AppSettings,
     job: &BountyJob,
     catalog_by_name: &HashMap<String, &CatalogItem>,
@@ -1606,7 +1624,11 @@ fn build_bounty_job_view(
                 .map(|item| bounty_market_key(item, settings.platform))
                 .transpose()?
                 .map(|key| {
-                    PricingService::price_current_variant(database, &key, MarketItemKind::Standard)
+                    PricingService::price_current_variant_in_database(
+                        database,
+                        &key,
+                        MarketItemKind::Standard,
+                    )
                 })
                 .transpose()?
                 .flatten();
@@ -6378,7 +6400,7 @@ mod tests {
                 platinum: price,
                 quantity: 2,
                 per_trade: 1,
-                user_status: UserStatus::Online,
+                user_status: UserStatus::InGame,
             });
         }
         for price in [20, 26, 21, 25, 22, 24, 23] {
@@ -6397,11 +6419,24 @@ mod tests {
             per_trade: 1,
             user_status: UserStatus::Offline,
         });
+        orders.push(LiveOrder {
+            side: LiveOrderSide::Sell,
+            platinum: 2,
+            quantity: 1,
+            per_trade: 1,
+            user_status: UserStatus::Online,
+        });
         let active: Vec<_> = orders
             .iter()
             .filter(|order| active_live_order(order))
             .collect();
 
+        assert_eq!(active.len(), 14);
+        assert!(
+            active
+                .iter()
+                .all(|order| order.user_status == UserStatus::InGame)
+        );
         let visible = bounded_live_orders(&active);
         assert_eq!(visible.len(), 10);
         assert_eq!(
@@ -6426,14 +6461,14 @@ mod tests {
             platinum: 18,
             quantity: 6,
             per_trade: 3,
-            user_status: UserStatus::Online,
+            user_status: UserStatus::InGame,
         };
         let expensive_single = LiveOrder {
             side: LiveOrderSide::Sell,
             platinum: 7,
             quantity: 1,
             per_trade: 1,
-            user_status: UserStatus::Online,
+            user_status: UserStatus::InGame,
         };
         let mixed = [&expensive_single, &cheap_lot];
         let sorted = bounded_live_orders(&mixed);

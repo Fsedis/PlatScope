@@ -36,6 +36,35 @@ export interface BountyHunterView {
   regions: BountyRegionView[];
 }
 
+export const BOUNTY_AUTO_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
+export const BOUNTY_AUTO_RETRY_DELAY_MS = 30 * 1000;
+
+function validTimestamp(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const timestamp = new Date(value).getTime();
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+export function bountyRotationAt(view: BountyHunterView | null): number | null {
+  if (!view) return null;
+  const expiries = view.regions
+    .map((region) => validTimestamp(region.expiry))
+    .filter((value): value is number => value !== null);
+  return expiries.length > 0 ? Math.min(...expiries) : null;
+}
+
+export function bountyAutomaticRefreshAt(view: BountyHunterView | null): number | null {
+  if (!view) return null;
+  const fetchedAt = validTimestamp(view.fetchedAt);
+  const periodicRefreshAt = fetchedAt === null
+    ? null
+    : fetchedAt + BOUNTY_AUTO_REFRESH_INTERVAL_MS;
+  const rotationAt = bountyRotationAt(view);
+  if (periodicRefreshAt === null) return rotationAt;
+  if (rotationAt === null) return periodicRefreshAt;
+  return Math.min(periodicRefreshAt, rotationAt);
+}
+
 export function visibleBountyRegions(
   view: BountyHunterView | null,
   region: string,

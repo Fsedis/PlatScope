@@ -79,13 +79,12 @@ export interface SetLiveSellOrder {
 
 /**
  * Оставляет только исполнимые ордера продажи и переводит цену лота в цену одного сета.
- * Результат ограничен пятью самыми дешёвыми актуальными предложениями.
+ * Результат ограничен пятью самыми дешёвыми предложениями от игроков в игре.
  */
 export function setLiveSellOrders(orders: readonly LiveOrderView[]): SetLiveSellOrder[] {
-  const statusPriority: Record<LiveUserStatus, number> = { in_game: 0, online: 1, offline: 2 };
   return orders
     .flatMap((order): SetLiveSellOrder[] => {
-      if (order.side !== "sell" || order.userStatus === "offline" || order.platinum <= 0
+      if (order.side !== "sell" || order.userStatus !== "in_game" || order.platinum <= 0
         || order.quantity <= 0 || order.perTrade <= 0) return [];
       const quantity = order.quantity - order.quantity % order.perTrade;
       if (quantity <= 0) return [];
@@ -97,7 +96,6 @@ export function setLiveSellOrders(orders: readonly LiveOrderView[]): SetLiveSell
       }];
     })
     .sort((left, right) => left.pricePerSet - right.pricePerSet
-      || statusPriority[left.userStatus] - statusPriority[right.userStatus]
       || right.quantity - left.quantity)
     .slice(0, 5);
 }

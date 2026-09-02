@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  BOUNTY_AUTO_REFRESH_INTERVAL_MS,
   bestBountyJob,
+  bountyAutomaticRefreshAt,
+  bountyRotationAt,
   visibleBountyRegions,
   type BountyHunterView,
 } from "./bountyHunter";
@@ -52,5 +55,33 @@ describe("bounty hunter view helpers", () => {
 
   it("selects the highest expected platinum job", () => {
     expect(bestBountyJob(view)?.id).toBe("priced");
+  });
+
+  it("uses the nearest region rotation for the live countdown", () => {
+    const withDifferentRotations: BountyHunterView = {
+      ...view,
+      regions: [
+        view.regions[0]!,
+        { ...view.regions[0]!, key: "fortuna", expiry: "2026-09-02T11:30:00Z" },
+      ],
+    };
+
+    expect(bountyRotationAt(withDifferentRotations)).toBe(
+      new Date("2026-09-02T11:30:00Z").getTime(),
+    );
+  });
+
+  it("refreshes automatically every five minutes or at rotation, whichever comes first", () => {
+    expect(bountyAutomaticRefreshAt(view)).toBe(
+      new Date(view.fetchedAt).getTime() + BOUNTY_AUTO_REFRESH_INTERVAL_MS,
+    );
+
+    const soonRotation: BountyHunterView = {
+      ...view,
+      fetchedAt: "2026-09-02T11:59:30Z",
+    };
+    expect(bountyAutomaticRefreshAt(soonRotation)).toBe(
+      new Date("2026-09-02T12:00:00Z").getTime(),
+    );
   });
 });

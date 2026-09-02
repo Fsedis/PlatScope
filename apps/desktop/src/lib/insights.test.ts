@@ -253,12 +253,12 @@ function ducatRow(slug: string, sellableQuantity: number): DucatInsightRow {
 describe("insights presentation", () => {
   it("uses the five cheapest executable sell orders for a live set price", () => {
     const orders: LiveOrderView[] = [
-      { side: "sell", platinum: 25, quantity: 1, perTrade: 1, userStatus: "online" },
+      { side: "sell", platinum: 25, quantity: 1, perTrade: 1, userStatus: "in_game" },
       { side: "sell", platinum: 42, quantity: 4, perTrade: 2, userStatus: "in_game" },
       { side: "sell", platinum: 20, quantity: 1, perTrade: 1, userStatus: "in_game" },
-      { side: "sell", platinum: 22, quantity: 2, perTrade: 1, userStatus: "online" },
-      { side: "sell", platinum: 23, quantity: 1, perTrade: 1, userStatus: "online" },
-      { side: "sell", platinum: 24, quantity: 1, perTrade: 1, userStatus: "online" },
+      { side: "sell", platinum: 22, quantity: 2, perTrade: 1, userStatus: "in_game" },
+      { side: "sell", platinum: 23, quantity: 1, perTrade: 1, userStatus: "in_game" },
+      { side: "sell", platinum: 24, quantity: 1, perTrade: 1, userStatus: "in_game" },
       { side: "sell", platinum: 1, quantity: 1, perTrade: 1, userStatus: "offline" },
       { side: "buy", platinum: 30, quantity: 1, perTrade: 1, userStatus: "in_game" },
       { side: "sell", platinum: 10, quantity: 1, perTrade: 2, userStatus: "in_game" },
@@ -274,6 +274,7 @@ describe("insights presentation", () => {
   it("does not invent a live set price without an active sell order", () => {
     expect(setLiveMinimumPrice([
       { side: "buy", platinum: 30, quantity: 1, perTrade: 1, userStatus: "in_game" },
+      { side: "sell", platinum: 19, quantity: 1, perTrade: 1, userStatus: "online" },
       { side: "sell", platinum: 20, quantity: 1, perTrade: 1, userStatus: "offline" },
     ])).toBeNull();
   });

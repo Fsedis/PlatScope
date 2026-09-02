@@ -650,7 +650,7 @@ export async function installMarketBrowserMock(): Promise<void> {
           depthThree: fair === null ? 31 : fair + 2.5,
           depthPrice: fair === null ? 32 : fair + 3,
           liveSellOrderCount: 5,
-          liveBuyOrderCount: 4,
+          liveBuyOrderCount: 1,
           confidence: fair === null ? "low" : scoped.recommendation.confidence,
           reasons: [
             ...scoped.recommendation.reasons.filter(
@@ -665,13 +665,13 @@ export async function installMarketBrowserMock(): Promise<void> {
         fetchedAt: "2026-08-27T06:45:00Z",
         quoteState: "network",
         sellOrderCount: 5,
-        buyOrderCount: 4,
+        buyOrderCount: 1,
         orders: [
           { side: "sell", platinum: fair === null ? 30 : fair + 2, quantity: 3, perTrade: 1, userStatus: "in_game" },
-          { side: "sell", platinum: fair === null ? 32 : fair + 3, quantity: 5, perTrade: 1, userStatus: "online" },
+          { side: "sell", platinum: fair === null ? 32 : fair + 3, quantity: 5, perTrade: 1, userStatus: "in_game" },
           { side: "sell", platinum: fair === null ? 33 : fair + 4, quantity: 1, perTrade: 1, userStatus: "in_game" },
-          { side: "sell", platinum: fair === null ? 34 : fair + 5, quantity: 2, perTrade: 1, userStatus: "online" },
-          { side: "sell", platinum: fair === null ? 35 : fair + 6, quantity: 4, perTrade: 1, userStatus: "online" },
+          { side: "sell", platinum: fair === null ? 34 : fair + 5, quantity: 2, perTrade: 1, userStatus: "in_game" },
+          { side: "sell", platinum: fair === null ? 35 : fair + 6, quantity: 4, perTrade: 1, userStatus: "in_game" },
           { side: "buy", platinum: fair === null ? 18 : Math.max(1, fair - 10), quantity: 2, perTrade: 1, userStatus: "in_game" },
         ],
         warning: null,
@@ -779,8 +779,8 @@ export async function installMarketBrowserMock(): Promise<void> {
           lowestAsk: fair === null ? 30 : fair + 2,
           depthThree: fair === null ? 31 : fair + 2.5,
           depthPrice: fair === null ? 32 : fair + 3,
-          liveSellOrderCount: 5,
-          liveBuyOrderCount: 4,
+          liveSellOrderCount: 3,
+          liveBuyOrderCount: 2,
           confidence: fair === null ? "low" : candidate.recommendation.confidence,
           reasons: [
             ...candidate.recommendation.reasons.filter(
@@ -807,14 +807,14 @@ export async function installMarketBrowserMock(): Promise<void> {
         row,
         fetchedAt: "2026-08-27T06:45:00Z",
         quoteState: "network",
-        sellOrderCount: 5,
-        buyOrderCount: 4,
+        sellOrderCount: 3,
+        buyOrderCount: 2,
         orders: [
           { side: "sell", platinum: fair === null ? 30 : fair + 2, quantity: 1, perTrade: 1, userStatus: "in_game" },
-          { side: "sell", platinum: fair === null ? 31 : fair + 3, quantity: 3, perTrade: 1, userStatus: "online" },
+          { side: "sell", platinum: fair === null ? 31 : fair + 3, quantity: 3, perTrade: 1, userStatus: "in_game" },
           { side: "sell", platinum: fair === null ? 32 : fair + 4, quantity: 5, perTrade: 1, userStatus: "in_game" },
           { side: "buy", platinum: fair === null ? 18 : Math.max(1, fair - 9), quantity: 2, perTrade: 1, userStatus: "in_game" },
-          { side: "buy", platinum: fair === null ? 17 : Math.max(1, fair - 10), quantity: 4, perTrade: 1, userStatus: "online" },
+          { side: "buy", platinum: fair === null ? 17 : Math.max(1, fair - 10), quantity: 4, perTrade: 1, userStatus: "in_game" },
         ],
         warning: null,
       } satisfies LiveSellNowResult;
@@ -987,14 +987,16 @@ function makeResourceConverterView(): ResourceConverterView {
 }
 
 function makeBountyHunterView(): BountyHunterView {
+  const fetchedAt = new Date();
+  const expiry = new Date(fetchedAt.getTime() + 90 * 60 * 1000).toISOString();
   return {
-    fetchedAt: "2026-09-02T11:40:00Z",
+    fetchedAt: fetchedAt.toISOString(),
     marketSourceDate: "2026-09-01",
     regions: [
       {
         key: "cetus",
         displayName: "Цетус",
-        expiry: "2026-09-02T14:00:00Z",
+        expiry,
         jobs: [
           {
             id: "cetus-tier-five",
@@ -1044,7 +1046,7 @@ function makeBountyHunterView(): BountyHunterView {
       {
         key: "fortuna",
         displayName: "Фортуна",
-        expiry: "2026-09-02T14:00:00Z",
+        expiry,
         jobs: [
           {
             id: "fortuna-tier-four",

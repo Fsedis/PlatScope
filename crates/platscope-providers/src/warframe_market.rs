@@ -365,17 +365,15 @@ fn normalize_order(order: &RawOrder, key: &MarketVariantKey) -> Option<LiveOrder
         "buy" => LiveOrderSide::Buy,
         _ => return None,
     };
-    let user_status = match order.user.status.as_str() {
-        "ingame" => UserStatus::InGame,
-        "online" => UserStatus::Online,
-        _ => UserStatus::Offline,
-    };
+    if order.user.status != "ingame" {
+        return None;
+    }
     Some(LiveOrder {
         side,
         platinum: order.platinum,
         quantity: order.quantity,
         per_trade: order.per_trade,
-        user_status,
+        user_status: UserStatus::InGame,
     })
 }
 
@@ -440,16 +438,14 @@ mod tests {
     const FIXTURE: &[u8] = include_bytes!("../../../fixtures/providers/wfm_top_orders.json");
 
     #[test]
-    fn top_orders_keep_only_exact_variant() {
+    fn top_orders_keep_only_ingame_exact_variant() {
         let key = MarketVariantKey::new("primed_flow", Platform::Pc, Some(10), None::<String>)
             .expect("valid key");
         let book = normalize_top_orders(FIXTURE, &key).expect("fixture normalizes");
 
-        assert_eq!(book.orders.len(), 2);
+        assert_eq!(book.orders.len(), 1);
         assert_eq!(book.orders[0].side, LiveOrderSide::Sell);
         assert_eq!(book.orders[0].platinum, 30);
-        assert_eq!(book.orders[1].side, LiveOrderSide::Buy);
-        assert_eq!(book.orders[1].platinum, 20);
     }
 
     #[test]
@@ -475,9 +471,9 @@ mod tests {
         let body = br#"{
           "data": {
             "sell": [
-              {"type":"sell","platinum":30,"quantity":1,"perTrade":1,"visible":true,"rank":0,"charges":2,"user":{"status":"online"}},
-              {"type":"sell","platinum":1,"quantity":1,"perTrade":1,"visible":true,"rank":0,"charges":1,"user":{"status":"online"}},
-              {"type":"sell","platinum":2,"quantity":1,"perTrade":1,"visible":true,"rank":0,"user":{"status":"online"}}
+              {"type":"sell","platinum":30,"quantity":1,"perTrade":1,"visible":true,"rank":0,"charges":2,"user":{"status":"ingame"}},
+              {"type":"sell","platinum":1,"quantity":1,"perTrade":1,"visible":true,"rank":0,"charges":1,"user":{"status":"ingame"}},
+              {"type":"sell","platinum":2,"quantity":1,"perTrade":1,"visible":true,"rank":0,"user":{"status":"ingame"}}
             ],
             "buy": []
           },

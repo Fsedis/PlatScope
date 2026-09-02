@@ -3,7 +3,10 @@
   import { onMount } from "svelte";
 
   import {
+    BOUNTY_AUTO_RETRY_DELAY_MS,
     bestBountyJob,
+    bountyAutomaticRefreshAt,
+    bountyRotationAt,
     visibleBountyRegions,
     type BountyHunterView,
     type BountyJobView,
@@ -13,16 +16,22 @@
 
   export let onOpenSettings: () => void;
 
+  const LOAD_DEADLINE_MS = 20_000;
   const locale = useLocale();
   let view: BountyHunterView | null = null;
-  let loading = true;
+  let loading = false;
+  let loadingStartedAt: number | null = null;
   let error = "";
   let region = "all";
   let onlyPriced = true;
   let marketMessage = "";
+  let nowMs = Date.now();
+  let retryAt: number | null = null;
 
   $: regions = visibleBountyRegions(view, region, onlyPriced);
   $: bestJob = bestBountyJob(view);
+  $: rotationAt = bountyRotationAt(view);
+  $: automaticRefreshAt = retryAt ?? bountyAutomaticRefreshAt(view);
   $: pricedJobs = view?.regions
     .flatMap((item) => item.jobs)
     .filter((job) => job.pricedRewardCount > 0).length ?? 0;
@@ -54,14 +63,61 @@
     return `${value} ${noun} можно продать`;
   }
 
-  function expiryLabel(value: string): string {
+  function expiryLabel(value: string, currentTime: number): string {
     const date = new Date(value);
     if (!Number.isFinite(date.getTime())) return "Время ротации неизвестно";
-    if (date.getTime() <= Date.now()) return "Ротация обновляется";
-    return `Доступно до ${date.toLocaleTimeString(localeCode($locale), {
+    if (date.getTime() <= currentTime) return "Получаем новую ротацию";
+    return `Смена через ${countdownLabel(date.getTime(), currentTime)}`;
+  }
+
+  function countdownLabel(target: number | null, currentTime: number): string {
+    if (target === null || !Number.isFinite(target)) return "время неизвестно";
+    const totalSeconds = Math.max(0, Math.ceil((target - currentTime) / 1000));
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    if (hours > 0) {
+      return `${hours} ч ${minutes.toString().padStart(2, "0")} мин ${seconds.toString().padStart(2, "0")} с`;
+    }
+    if (minutes > 0) {
+      return `${minutes} мин ${seconds.toString().padStart(2, "0")} с`;
+    }
+    return `${seconds} с`;
+  }
+
+  function updatedAtLabel(value: string): string {
+    const date = new Date(value);
+    if (!Number.isFinite(date.getTime())) return "Время получения данных неизвестно";
+    return `Данные получены в ${date.toLocaleTimeString(localeCode($locale), {
       hour: "2-digit",
       minute: "2-digit",
+      second: "2-digit",
     })}`;
+  }
+
+  function rotationLabel(target: number | null, currentTime: number): string {
+    if (target === null) return "Время смены заказов неизвестно";
+    if (target <= currentTime) return "Получаем новую ротацию";
+    return `Смена заказов через ${countdownLabel(target, currentTime)}`;
+  }
+
+  function withDeadline<T>(request: Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const timeout = window.setTimeout(
+        () => reject(new Error("bounty request deadline exceeded")),
+        LOAD_DEADLINE_MS,
+      );
+      request.then(
+        (value) => {
+          window.clearTimeout(timeout);
+          resolve(value);
+        },
+        (reason: unknown) => {
+          window.clearTimeout(timeout);
+          reject(reason);
+        },
+      );
+    });
   }
 
   function isBest(job: BountyJobView): boolean {
@@ -69,15 +125,31 @@
   }
 
   async function load(forceRefresh = false): Promise<void> {
+    if (loading) return;
     loading = true;
-    error = "";
+    loadingStartedAt = Date.now();
+    nowMs = loadingStartedAt;
+    if (!view) error = "";
     marketMessage = "";
     try {
-      view = await invoke<BountyHunterView | null>("bounty_hunter", { forceRefresh });
+      const nextView = await withDeadline(
+        invoke<BountyHunterView | null>("bounty_hunter", { forceRefresh }),
+      );
+      view = nextView;
+      error = "";
+      const nextDueAt = bountyAutomaticRefreshAt(nextView);
+      retryAt = nextDueAt !== null && nextDueAt <= Date.now()
+        ? Date.now() + BOUNTY_AUTO_RETRY_DELAY_MS
+        : null;
     } catch {
-      error = "Не удалось получить активные заказы. Проверьте подключение и повторите.";
+      error = view
+        ? "Не удалось обновить заказы. Показываем последние полученные данные."
+        : "Не удалось получить активные заказы. Автоповтор через 30 секунд.";
+      retryAt = Date.now() + BOUNTY_AUTO_RETRY_DELAY_MS;
     } finally {
       loading = false;
+      loadingStartedAt = null;
+      nowMs = Date.now();
     }
   }
 
@@ -92,26 +164,55 @@
     }
   }
 
-  onMount(() => void load());
+  function tick(): void {
+    nowMs = Date.now();
+    if (!loading && automaticRefreshAt !== null && nowMs >= automaticRefreshAt) {
+      retryAt = nowMs + BOUNTY_AUTO_RETRY_DELAY_MS;
+      void load(true);
+    }
+  }
+
+  onMount(() => {
+    const timer = window.setInterval(tick, 1000);
+    const handleVisibility = () => {
+      if (!document.hidden) tick();
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+    void load();
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  });
 </script>
 
 <div class="bounty-screen">
   <div class="live-region" role="status" aria-live="polite">
     {#if loading}
-      Загружаем активные заказы и считаем стоимость наград…
+      Обновляем активные заказы…
     {:else if marketMessage}
       {marketMessage}
     {/if}
   </div>
 
-  {#if error}
+  {#if error && !view}
     <section class="error-block" role="alert">
       <p>{error}</p>
-      <button type="button" onclick={() => load(true)}>Повторить</button>
+      <span>Следующая попытка через {countdownLabel(retryAt, nowMs)}</span>
+      <button type="button" onclick={() => load(true)}>Проверить сейчас</button>
     </section>
   {:else if loading && !view}
-    <section class="bounty-loading" aria-hidden="true">
-      <div></div><div></div><div></div>
+    <section class="bounty-loading" aria-label="Загрузка активных заказов">
+      <div class="bounty-loading__status">
+        <strong>Получаем активные заказы</strong>
+        <span>
+          {loadingStartedAt === null
+            ? "Подключаемся к источнику…"
+            : `Ожидаем ответ · ${Math.floor((nowMs - loadingStartedAt) / 1000)} с`}
+        </span>
+      </div>
+      <div class="bounty-loading__row" aria-hidden="true"></div>
+      <div class="bounty-loading__row" aria-hidden="true"></div>
     </section>
   {:else if !view}
     <section class="empty-panel">
@@ -121,6 +222,15 @@
       <button type="button" onclick={onOpenSettings}>Открыть настройки</button>
     </section>
   {:else}
+    {#if error}
+      <section class="refresh-warning" role="status">
+        <span>{error} Повтор через {countdownLabel(retryAt, nowMs)}.</span>
+        <button type="button" class="secondary" disabled={loading} onclick={() => load(true)}>
+          {loading ? "Обновляем…" : "Проверить сейчас"}
+        </button>
+      </section>
+    {/if}
+
     <section class="bounty-summary" aria-label="Краткий итог">
       <div>
         <small>Активные регионы</small>
@@ -136,9 +246,19 @@
         <span>{bestJob ? `${bestJob.title} · уровни ${bestJob.minLevel}–${bestJob.maxLevel}` : "Нет подтверждённых цен"}</span>
       </div>
       <div class="bounty-summary__action">
-        <small>Цены рынка от {view.marketSourceDate ?? "—"}</small>
+        <small>{updatedAtLabel(view.fetchedAt)}</small>
+        <strong>
+          {loading
+            ? "Обновляем сейчас"
+            : `Автопроверка через ${countdownLabel(automaticRefreshAt, nowMs)}`}
+        </strong>
+        <span>
+          {rotationAt === null
+            ? `Цены рынка от ${view.marketSourceDate ?? "—"}`
+            : rotationLabel(rotationAt, nowMs)}
+        </span>
         <button type="button" class="secondary" disabled={loading} onclick={() => load(true)}>
-          {loading ? "Обновляем…" : "Обновить заказы"}
+          {loading ? "Обновляем…" : "Обновить сейчас"}
         </button>
       </div>
     </section>
@@ -182,7 +302,7 @@
                 <p>Регион</p>
                 <h2 id={`region-${regionView.key}`}>{regionView.displayName}</h2>
               </div>
-              <span>{expiryLabel(regionView.expiry)}</span>
+              <span>{expiryLabel(regionView.expiry, nowMs)}</span>
             </header>
 
             <div class="bounty-jobs">
@@ -304,6 +424,29 @@
 
   .bounty-summary__action {
     justify-items: end;
+  }
+
+  .bounty-summary__action strong {
+    color: var(--text);
+    font-size: 0.82rem;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .refresh-warning {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    border: 1px solid var(--gold);
+    border-radius: 0.65rem;
+    padding: 0.55rem 0.7rem;
+    background: var(--accent-soft);
+    color: var(--text);
+    font-size: 0.78rem;
+  }
+
+  .refresh-warning button {
+    flex: 0 0 auto;
   }
 
   .bounty-toolbar {
@@ -562,7 +705,30 @@
     gap: 0.6rem;
   }
 
-  .bounty-loading div {
+  .bounty-loading__status {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    min-height: 3rem;
+    border: 1px solid var(--border);
+    border-radius: 0.75rem;
+    padding: 0.7rem 0.8rem;
+    background: var(--surface-1);
+    box-shadow: var(--shadow-sm);
+  }
+
+  .bounty-loading__status strong {
+    font-size: 0.88rem;
+  }
+
+  .bounty-loading__status span {
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .bounty-loading__row {
     height: 5rem;
     border-radius: 0.75rem;
     background: var(--surface-2);
@@ -604,6 +770,12 @@
 
     .bounty-summary__action {
       justify-items: start;
+    }
+
+    .refresh-warning,
+    .bounty-loading__status {
+      align-items: flex-start;
+      flex-direction: column;
     }
 
     .bounty-toolbar {

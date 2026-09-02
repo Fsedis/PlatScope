@@ -442,7 +442,7 @@ fn live_stats(
 }
 
 fn executable_order(order: &LiveOrder) -> Option<(f64, u32)> {
-    if order.user_status == UserStatus::Offline
+    if order.user_status != UserStatus::InGame
         || order.platinum == 0
         || order.quantity == 0
         || order.per_trade == 0
@@ -757,7 +757,7 @@ mod tests {
             let mut orders: Vec<LiveOrder> = scenario
                 .asks
                 .iter()
-                .map(|price| order(LiveOrderSide::Sell, *price, UserStatus::Online))
+                .map(|price| order(LiveOrderSide::Sell, *price, UserStatus::InGame))
                 .collect();
             if let Some(price) = scenario.top_buy {
                 orders.push(order(LiveOrderSide::Buy, price, UserStatus::InGame));
@@ -798,9 +798,9 @@ mod tests {
             fetched_at: Utc::now(),
             orders: vec![
                 order(LiveOrderSide::Sell, 39, UserStatus::InGame),
-                order(LiveOrderSide::Sell, 40, UserStatus::Online),
-                order(LiveOrderSide::Sell, 41, UserStatus::Online),
-                order(LiveOrderSide::Sell, 42, UserStatus::Online),
+                order(LiveOrderSide::Sell, 40, UserStatus::InGame),
+                order(LiveOrderSide::Sell, 41, UserStatus::InGame),
+                order(LiveOrderSide::Sell, 42, UserStatus::InGame),
                 order(LiveOrderSide::Buy, 35, UserStatus::InGame),
             ],
         };
@@ -824,9 +824,9 @@ mod tests {
     fn depth_signals_are_quantity_weighted_and_separate() {
         let key = key(None, None);
         let records = vec![record(&key, MarketOrderType::Closed, 15.0, 20.0)];
-        let mut first = order(LiveOrderSide::Sell, 10, UserStatus::Online);
+        let mut first = order(LiveOrderSide::Sell, 10, UserStatus::InGame);
         first.quantity = 2;
-        let mut second = order(LiveOrderSide::Sell, 20, UserStatus::Online);
+        let mut second = order(LiveOrderSide::Sell, 20, UserStatus::InGame);
         second.quantity = 3;
         let book = LiveOrderBook {
             key: key.clone(),
@@ -849,7 +849,7 @@ mod tests {
     fn depth_signal_is_absent_when_the_requested_quantity_is_not_available() {
         let key = key(None, None);
         let records = vec![record(&key, MarketOrderType::Closed, 15.0, 20.0)];
-        let mut only_order = order(LiveOrderSide::Sell, 10, UserStatus::Online);
+        let mut only_order = order(LiveOrderSide::Sell, 10, UserStatus::InGame);
         only_order.quantity = 2;
         let book = LiveOrderBook {
             key: key.clone(),
@@ -879,8 +879,8 @@ mod tests {
             orders: vec![
                 // Цена 4p относится ко всему лоту из 2 шт. Из quantity=3
                 // исполнить можно только 2 единицы.
-                lot_order(LiveOrderSide::Sell, 4, 3, 2, UserStatus::Online),
-                lot_order(LiveOrderSide::Sell, 3, 3, 1, UserStatus::Online),
+                lot_order(LiveOrderSide::Sell, 4, 3, 2, UserStatus::InGame),
+                lot_order(LiveOrderSide::Sell, 3, 3, 1, UserStatus::InGame),
             ],
         };
 
@@ -904,8 +904,8 @@ mod tests {
             key: key.clone(),
             fetched_at: Utc::now(),
             orders: vec![
-                lot_order(LiveOrderSide::Buy, 37, 6, 6, UserStatus::Online),
-                lot_order(LiveOrderSide::Buy, 6, 1, 1, UserStatus::Online),
+                lot_order(LiveOrderSide::Buy, 37, 6, 6, UserStatus::InGame),
+                lot_order(LiveOrderSide::Buy, 6, 1, 1, UserStatus::InGame),
             ],
         };
 
@@ -930,7 +930,7 @@ mod tests {
         let book = LiveOrderBook {
             key: key.clone(),
             fetched_at: Utc::now(),
-            orders: vec![lot_order(LiveOrderSide::Buy, 37, 6, 6, UserStatus::Online)],
+            orders: vec![lot_order(LiveOrderSide::Buy, 37, 6, 6, UserStatus::InGame)],
         };
 
         for available_quantity in [Some(5), None] {
@@ -957,7 +957,7 @@ mod tests {
             key: key.clone(),
             fetched_at: Utc::now(),
             orders: [1, 39, 40, 41, 42]
-                .map(|price| order(LiveOrderSide::Sell, price, UserStatus::Online))
+                .map(|price| order(LiveOrderSide::Sell, price, UserStatus::InGame))
                 .to_vec(),
         };
 
@@ -986,7 +986,7 @@ mod tests {
             key: key.clone(),
             fetched_at: Utc::now(),
             orders: [10, 11, 11, 12, 12]
-                .map(|price| order(LiveOrderSide::Sell, price, UserStatus::Online))
+                .map(|price| order(LiveOrderSide::Sell, price, UserStatus::InGame))
                 .to_vec(),
         };
 
@@ -1014,7 +1014,7 @@ mod tests {
         let book = LiveOrderBook {
             key: key.clone(),
             fetched_at: Utc::now(),
-            orders: vec![order(LiveOrderSide::Sell, 100, UserStatus::Online)],
+            orders: vec![order(LiveOrderSide::Sell, 100, UserStatus::InGame)],
         };
 
         let result = recommend(context(
@@ -1066,7 +1066,7 @@ mod tests {
             key: key.clone(),
             fetched_at: Utc::now(),
             orders: [100, 101, 102]
-                .map(|price| order(LiveOrderSide::Sell, price, UserStatus::Online))
+                .map(|price| order(LiveOrderSide::Sell, price, UserStatus::InGame))
                 .to_vec(),
         };
         let result = recommend(context(
@@ -1132,7 +1132,7 @@ mod tests {
             key: key.clone(),
             fetched_at: Utc::now(),
             orders: [50, 51, 52, 53, 54]
-                .map(|price| order(LiveOrderSide::Sell, price, UserStatus::Online))
+                .map(|price| order(LiveOrderSide::Sell, price, UserStatus::InGame))
                 .to_vec(),
         };
         let result = recommend(context(
@@ -1175,7 +1175,7 @@ mod tests {
         let book = LiveOrderBook {
             key: key.clone(),
             fetched_at: Utc.with_ymd_and_hms(2026, 8, 27, 0, 0, 0).unwrap(),
-            orders: vec![order(LiveOrderSide::Buy, 450, UserStatus::Online)],
+            orders: vec![order(LiveOrderSide::Buy, 450, UserStatus::InGame)],
         };
         let result = recommend(context(&key, &records, Some(&book), MarketItemKind::Riven));
         assert_eq!(result.fair_price, None);
@@ -1228,27 +1228,31 @@ mod tests {
     }
 
     #[test]
-    fn offline_orders_and_mismatched_book_are_ignored() {
+    fn online_offline_orders_and_mismatched_book_are_ignored() {
         let current_key = key(None, None);
         let other = key(Some(1), None);
         let records = vec![record(&current_key, MarketOrderType::Closed, 20.0, 10.0)];
-        let offline_book = LiveOrderBook {
+        let unavailable_book = LiveOrderBook {
             key: current_key.clone(),
             fetched_at: Utc::now(),
-            orders: vec![order(LiveOrderSide::Buy, 18, UserStatus::Offline)],
+            orders: vec![
+                order(LiveOrderSide::Buy, 19, UserStatus::Online),
+                order(LiveOrderSide::Buy, 18, UserStatus::Offline),
+            ],
         };
-        let offline = recommend(context(
+        let unavailable = recommend(context(
             &current_key,
             &records,
-            Some(&offline_book),
+            Some(&unavailable_book),
             MarketItemKind::Standard,
         ));
-        assert_eq!(offline.quick_sell, None);
+        assert_eq!(unavailable.quick_sell, None);
+        assert_eq!(unavailable.lowest_ask, None);
 
         let other_book = LiveOrderBook {
             key: other,
             fetched_at: Utc::now(),
-            orders: vec![order(LiveOrderSide::Buy, 18, UserStatus::Online)],
+            orders: vec![order(LiveOrderSide::Buy, 18, UserStatus::InGame)],
         };
         let mismatched = recommend(context(
             &current_key,
