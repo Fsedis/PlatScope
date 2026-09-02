@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  DEFAULT_INSIGHTS_VIEW,
   DEFAULT_MARKET_VIEW,
   DEFAULT_SELL_NOW_VIEW,
+  loadInsightsViewPreferences,
   loadMarketViewPreferences,
   loadSellNowViewPreferences,
+  saveInsightsViewPreferences,
   saveMarketViewPreferences,
   saveSellNowViewPreferences,
   type ViewPreferenceStorage,
@@ -27,6 +30,7 @@ describe("saved working views", () => {
     const storage = new MemoryStorage();
     expect(loadMarketViewPreferences(storage)).toEqual(DEFAULT_MARKET_VIEW);
     expect(loadSellNowViewPreferences(storage)).toEqual(DEFAULT_SELL_NOW_VIEW);
+    expect(loadInsightsViewPreferences(storage)).toEqual(DEFAULT_INSIGHTS_VIEW);
   });
 
   it("round-trips each screen independently", () => {
@@ -43,6 +47,7 @@ describe("saved working views", () => {
       sortKey: "fair",
       sortDirection: "desc",
     }, storage)).toBe(true);
+    expect(saveInsightsViewPreferences({ mode: "complete_sets" }, storage)).toBe(true);
 
     expect(loadMarketViewPreferences(storage)).toEqual({
       priceFilter: "unpriced",
@@ -51,7 +56,8 @@ describe("saved working views", () => {
     });
     expect(loadSellNowViewPreferences(storage).preset).toBe("sell_now");
     expect(loadSellNowViewPreferences(storage).category).toBe("arcane_enhancement");
-    expect(storage.values.size).toBe(2);
+    expect(loadInsightsViewPreferences(storage)).toEqual({ mode: "complete_sets" });
+    expect(storage.values.size).toBe(3);
   });
 
   it("fails closed for corrupt, stale, and out-of-domain values", () => {
@@ -82,6 +88,37 @@ describe("saved working views", () => {
       sortDirection: "desc",
     }));
     expect(loadMarketViewPreferences(removedConfidenceSort).sortKey).toBe("volume");
+
+    const staleInsights = new MemoryStorage();
+    staleInsights.values.set("platscope.insights-view.v1", JSON.stringify({
+      version: 0,
+      mode: "relics",
+    }));
+    expect(loadInsightsViewPreferences(staleInsights)).toEqual(DEFAULT_INSIGHTS_VIEW);
+
+    const invalidInsights = new MemoryStorage();
+    invalidInsights.values.set("platscope.insights-view.v1", JSON.stringify({
+      version: 1,
+      mode: "anything",
+    }));
+    expect(loadInsightsViewPreferences(invalidInsights)).toEqual(DEFAULT_INSIGHTS_VIEW);
+  });
+
+  it("round-trips every supported insights mode", () => {
+    const storage = new MemoryStorage();
+    const modes = [
+      "overview",
+      "resources",
+      "relics",
+      "complete_sets",
+      "sell_sets",
+      "ducats",
+    ] as const;
+
+    for (const mode of modes) {
+      expect(saveInsightsViewPreferences({ mode }, storage)).toBe(true);
+      expect(loadInsightsViewPreferences(storage)).toEqual({ mode });
+    }
   });
 
   it("does not throw when storage is unavailable", () => {
@@ -91,5 +128,7 @@ describe("saved working views", () => {
     };
     expect(loadMarketViewPreferences(unavailable)).toEqual(DEFAULT_MARKET_VIEW);
     expect(saveMarketViewPreferences(DEFAULT_MARKET_VIEW, unavailable)).toBe(false);
+    expect(loadInsightsViewPreferences(unavailable)).toEqual(DEFAULT_INSIGHTS_VIEW);
+    expect(saveInsightsViewPreferences(DEFAULT_INSIGHTS_VIEW, unavailable)).toBe(false);
   });
 });

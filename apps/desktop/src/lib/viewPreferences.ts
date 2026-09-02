@@ -26,6 +26,18 @@ export interface SellNowViewPreferences {
   sortDirection: SellNowSortDirection;
 }
 
+export type InsightsViewMode =
+  | "overview"
+  | "resources"
+  | "relics"
+  | "complete_sets"
+  | "sell_sets"
+  | "ducats";
+
+export interface InsightsViewPreferences {
+  mode: InsightsViewMode;
+}
+
 export const DEFAULT_MARKET_VIEW: MarketViewPreferences = {
   priceFilter: "all",
   sortKey: "volume",
@@ -40,8 +52,13 @@ export const DEFAULT_SELL_NOW_VIEW: SellNowViewPreferences = {
   sortDirection: "desc",
 };
 
+export const DEFAULT_INSIGHTS_VIEW: InsightsViewPreferences = {
+  mode: "overview",
+};
+
 const MARKET_KEY = "platscope.market-view.v1";
 const SELL_NOW_KEY = "platscope.sell-now-view.v1";
+const INSIGHTS_KEY = "platscope.insights-view.v1";
 
 const priceFilters = ["all", "priced", "unpriced"] as const;
 const marketSortKeys = ["name", "fair", "volume"] as const;
@@ -64,6 +81,14 @@ const sellNowSortKeys = [
   "trend",
 ] as const;
 const equippedFilters = ["all", "free", "equipped"] as const;
+const insightsViewModes = [
+  "overview",
+  "resources",
+  "relics",
+  "complete_sets",
+  "sell_sets",
+  "ducats",
+] as const;
 
 export function loadMarketViewPreferences(
   storage: ViewPreferenceStorage | null = defaultStorage(),
@@ -109,6 +134,22 @@ export function saveSellNowViewPreferences(
   storage: ViewPreferenceStorage | null = defaultStorage(),
 ): boolean {
   return writeRecord(SELL_NOW_KEY, preferences, storage);
+}
+
+export function loadInsightsViewPreferences(
+  storage: ViewPreferenceStorage | null = defaultStorage(),
+): InsightsViewPreferences {
+  const value = readRecord(INSIGHTS_KEY, storage);
+  return {
+    mode: allowed(value?.mode, insightsViewModes, DEFAULT_INSIGHTS_VIEW.mode),
+  };
+}
+
+export function saveInsightsViewPreferences(
+  preferences: InsightsViewPreferences,
+  storage: ViewPreferenceStorage | null = defaultStorage(),
+): boolean {
+  return writeRecord(INSIGHTS_KEY, preferences, storage);
 }
 
 function defaultStorage(): ViewPreferenceStorage | null {

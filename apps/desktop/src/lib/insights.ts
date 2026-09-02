@@ -302,6 +302,8 @@ export interface RelicRankingContext {
   squadSize?: number;
 }
 
+export type RelicOverviewScenario = "solo" | "matching_squad";
+
 const relicRefinements: RelicRefinement[] = ["intact", "exceptional", "flawless", "radiant"];
 const refinementTraceCost: Record<RelicRefinement, number> = {
   intact: 0,
@@ -635,11 +637,82 @@ export function setOpportunity(row: SetInsightRow): SetOpportunity {
     ownedPartsOpportunityValue,
     completionProfit,
     quickToComplete,
-    profitableToComplete: sellableCompleteSets === 0
-      && quickToComplete
+    profitableToComplete: quickToComplete
       && completionProfit !== null
       && completionProfit > 0,
   };
+}
+
+/**
+ * Возвращает только цену, которой безопасно пользоваться в краткой рекомендации.
+ * Устаревшая, неизвестная или слабо подтверждённая оценка не подменяется нулём.
+ */
+export function safeOverviewSetPrice(row: SetInsightRow): number | null {
+  const recommendation = row.setRecommendation;
+  if (!recommendation
+    || (recommendation.confidence !== "high" && recommendation.confidence !== "medium")
+    || (recommendation.freshness !== "fresh" && recommendation.freshness !== "aging")) {
+    return null;
+  }
+  for (const price of [recommendation.listPrice, recommendation.fairPrice]) {
+    if (price !== null && Number.isFinite(price) && price > 0) return price;
+  }
+  return null;
+}
+
+function isRecommendedSetSale(row: SetInsightRow): boolean {
+  return row.comparison.recommendedMode === "set"
+    || row.comparison.recommendedMode === "equivalent";
+}
+
+function compareReadySetRows(left: SetInsightRow, right: SetInsightRow): number {
+  const leftOpportunity = setOpportunity(left);
+  const rightOpportunity = setOpportunity(right);
+  const leftPrice = safeOverviewSetPrice(left);
+  const rightPrice = safeOverviewSetPrice(right);
+  return Number(isRecommendedSetSale(right)) - Number(isRecommendedSetSale(left))
+    || Number(rightPrice !== null) - Number(leftPrice !== null)
+    || nullableOpportunity(rightOpportunity.setPremiumValue)
+      - nullableOpportunity(leftOpportunity.setPremiumValue)
+    || nullableOpportunity(rightPrice) - nullableOpportunity(leftPrice)
+    || rightOpportunity.sellableCompleteSets - leftOpportunity.sellableCompleteSets
+    || left.displayName.localeCompare(right.displayName, "ru-RU");
+}
+
+/**
+ * Выбирает лучший уже собранный комплект для обзорной рекомендации.
+ * Количество копий не увеличивает ценность одной сделки и потому не влияет на выбор.
+ */
+export function selectBestOverviewReadySet(rows: readonly SetInsightRow[]): SetInsightRow | null {
+  return rows
+    .filter((row) => setOpportunity(row).sellableCompleteSets > 0)
+    .filter(isRecommendedSetSale)
+    .filter((row) => safeOverviewSetPrice(row) !== null)
+    .sort(compareReadySetRows)[0] ?? null;
+}
+
+/** Выбирает реликвию только при конечной положительной выгоде выбранного сценария. */
+export function selectBestOverviewRelic(
+  recommendations: readonly RelicOpeningRecommendation[],
+  scenario: RelicOverviewScenario,
+): RelicOpeningRecommendation | null {
+  const value = (recommendation: RelicOpeningRecommendation): number | null => {
+    const candidate = scenario === "solo"
+      ? recommendation.expectedPlatinum
+      : recommendation.squadExpectedPlatinum;
+    return candidate !== null && Number.isFinite(candidate) && candidate > 0 ? candidate : null;
+  };
+  return recommendations.reduce<RelicOpeningRecommendation | null>((best, recommendation) => {
+    const candidateValue = value(recommendation);
+    if (candidateValue === null) return best;
+    if (best === null) return recommendation;
+    const bestValue = value(best);
+    if (bestValue === null || candidateValue > bestValue) return recommendation;
+    if (candidateValue < bestValue) return best;
+    if (recommendation.priorityScore > best.priorityScore) return recommendation;
+    if (recommendation.priorityScore < best.priorityScore) return best;
+    return recommendation.displayName.localeCompare(best.displayName, "ru-RU") < 0 ? recommendation : best;
+  }, null);
 }
 
 export function reservePublishedSetListings(
@@ -696,6 +769,38 @@ export function reservePublishedSetListings(
     comparison: { ...row.comparison, completeSets },
     components,
   };
+}
+
+/**
+ * Синхронизирует доступный для дукатов остаток с торговым остатком компонентов.
+ * `marketSets` должны быть предварительно обработаны `reservePublishedSetListings`.
+ * Для общей детали нескольких комплектов используется минимальный остаток.
+ */
+export function adjustDucatsForMarketReservations(
+  rows: readonly DucatInsightRow[],
+  marketSets: readonly SetInsightRow[],
+): DucatInsightRow[] {
+  const sellableBySlug = new Map<string, number>();
+  for (const set of marketSets) {
+    for (const component of set.components) {
+      const remaining = Number.isFinite(component.sellableQuantity)
+        ? Math.max(0, Math.trunc(component.sellableQuantity))
+        : 0;
+      const known = sellableBySlug.get(component.definition.slug);
+      if (known === undefined || remaining < known) {
+        sellableBySlug.set(component.definition.slug, remaining);
+      }
+    }
+  }
+
+  return rows.map((row) => {
+    const remaining = sellableBySlug.get(row.metadata.slug);
+    if (remaining === undefined) return row;
+    const sellableQuantity = Math.max(0, Math.min(row.sellableQuantity, remaining));
+    return sellableQuantity === row.sellableQuantity
+      ? row
+      : { ...row, sellableQuantity };
+  });
 }
 
 function estimatedBuyPrice(
@@ -897,9 +1002,7 @@ export function filterAndSortOpportunitySets(
           || left.displayName.localeCompare(right.displayName, localeCode(locale));
       }
       if (mode === "ready") {
-        return rightOpportunity.sellableCompleteSets - leftOpportunity.sellableCompleteSets
-          || nullableOpportunity(rightOpportunity.setPremiumValue) - nullableOpportunity(leftOpportunity.setPremiumValue)
-          || left.displayName.localeCompare(right.displayName, localeCode(locale));
+        return compareReadySetRows(left, right);
       }
       return nullableOpportunity(rightOpportunity.completionProfit) - nullableOpportunity(leftOpportunity.completionProfit)
         || leftOpportunity.missingQuantity - rightOpportunity.missingQuantity
@@ -932,9 +1035,7 @@ export function filterAndSortSets(
       const leftOpportunity = setOpportunity(left);
       const rightOpportunity = setOpportunity(right);
       if (mode === "ready") {
-        return rightOpportunity.sellableCompleteSets - leftOpportunity.sellableCompleteSets
-          || nullableOpportunity(rightOpportunity.setPremiumValue) - nullableOpportunity(leftOpportunity.setPremiumValue)
-          || left.displayName.localeCompare(right.displayName, localeCode(locale));
+        return compareReadySetRows(left, right);
       }
       return Number(rightOpportunity.profitableToComplete) - Number(leftOpportunity.profitableToComplete)
         || nullableOpportunity(rightOpportunity.completionProfit) - nullableOpportunity(leftOpportunity.completionProfit)

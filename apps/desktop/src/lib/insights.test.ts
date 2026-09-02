@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  adjustDucatsForMarketReservations,
   coverageLabel,
   filterAndSortOpportunitySets,
   filterAndSortSets,
@@ -9,12 +10,17 @@ import {
   rankRelicsToOpen,
   reservePublishedSetListings,
   refinementLabel,
+  safeOverviewSetPrice,
+  selectBestOverviewReadySet,
+  selectBestOverviewRelic,
   setLiveMinimumPrice,
   setLiveSellOrders,
   setModeLabel,
   setOpportunity,
   setRelicSupport,
+  type DucatInsightRow,
   type RelicInsightRow,
+  type RelicOpeningRecommendation,
   type SetInsightRow,
   vaultLabel,
 } from "./insights";
@@ -140,6 +146,34 @@ function pricedRelicRow(
   };
 }
 
+function openingRecommendation(
+  displayName: string,
+  expectedPlatinum: number | null,
+  squadExpectedPlatinum: number | null,
+  priorityScore = 50,
+): RelicOpeningRecommendation {
+  return {
+    relicSlug: displayName.toLocaleLowerCase().replaceAll(" ", "_"),
+    displayName,
+    totalOwnedQuantity: 1,
+    sourceQuantity: 1,
+    sourceRefinement: "intact",
+    recommendedRefinement: "intact",
+    traceCost: 0,
+    grossExpectedPlatinum: expectedPlatinum,
+    squadGrossExpectedPlatinum: squadExpectedPlatinum,
+    relicOpportunityCost: 1,
+    traceOpportunityCost: 0,
+    expectedPlatinum,
+    squadExpectedPlatinum,
+    pricedChancePercent: 100,
+    completionChancePercent: 0,
+    progressChancePercent: 0,
+    completionTargets: [],
+    priorityScore,
+  };
+}
+
 function setRow(
   name: string,
   missing: number,
@@ -191,6 +225,28 @@ function setRow(
         recommendation: recommendation(`${slug}_b`, 50),
       },
     ],
+  };
+}
+
+function ducatRow(slug: string, sellableQuantity: number): DucatInsightRow {
+  return {
+    metadata: {
+      slug,
+      gameRef: `/Lotus/${slug}`,
+      ducats: 45,
+      vaultStatus: "available",
+    },
+    displayName: slug,
+    ownedQuantity: sellableQuantity,
+    sellableQuantity,
+    recommendation: recommendation(slug, 5),
+    efficiency: {
+      fairPrice: 5,
+      ducats: 45,
+      platinumPerDucat: 5 / 45,
+      credible: true,
+      reasons: [],
+    },
   };
 }
 
@@ -255,6 +311,113 @@ describe("insights presentation", () => {
     expect(opportunity.profitableToComplete).toBe(true);
   });
 
+  it("keeps a profitable next set after an already completed set", () => {
+    const row = setRow("Second Set", 1, 1);
+    const opportunity = setOpportunity(row);
+
+    expect(opportunity.sellableCompleteSets).toBe(1);
+    expect(opportunity.missingQuantity).toBe(1);
+    expect(opportunity.completionCost).toBe(30);
+    expect(opportunity.ownedPartsOpportunityValue).toBe(50);
+    expect(opportunity.completionProfit).toBe(20);
+    expect(opportunity.profitableToComplete).toBe(true);
+    expect(filterAndSortSets([row], "finish")).toEqual([row]);
+    expect(filterAndSortOpportunitySets([row], [], "buy")).toEqual([row]);
+  });
+
+  it("uses only a credible non-stale set price in the overview", () => {
+    const row = setRow("Safe Price", 0, 1, 100);
+    expect(safeOverviewSetPrice(row)).toBe(100);
+
+    row.setRecommendation!.listPrice = null;
+    row.setRecommendation!.fairPrice = 95;
+    expect(safeOverviewSetPrice(row)).toBe(95);
+
+    row.setRecommendation!.confidence = "low";
+    expect(safeOverviewSetPrice(row)).toBeNull();
+    row.setRecommendation!.confidence = "medium";
+    row.setRecommendation!.freshness = "stale";
+    expect(safeOverviewSetPrice(row)).toBeNull();
+    row.setRecommendation!.freshness = "unknown";
+    expect(safeOverviewSetPrice(row)).toBeNull();
+  });
+
+  it("chooses a ready set by one-set price, not by the value of every copy", () => {
+    const expensive = setRow("Expensive Set", 0, 1, 100, 80);
+    const manyCheap = setRow("Many Cheap Sets", 0, 1, 60, 40);
+    const partsAreBetter = setRow("Parts First", 0, 1, 500, 600);
+    const stale = setRow("Stale Set", 0, 1, 900, 100);
+    expensive.comparison.recommendedMode = "set";
+    manyCheap.comparison.recommendedMode = "set";
+    partsAreBetter.comparison.recommendedMode = "parts";
+    stale.comparison.recommendedMode = "set";
+    for (const component of expensive.components) component.sellableQuantity = 1;
+    for (const component of manyCheap.components) component.sellableQuantity = 10;
+    stale.setRecommendation!.freshness = "stale";
+
+    expect(selectBestOverviewReadySet([manyCheap, partsAreBetter, stale, expensive])).toBe(expensive);
+  });
+
+  it("uses set benefit to break an equal per-set price tie", () => {
+    const lowerBenefit = setRow("Lower Benefit", 0, 1, 100, 90);
+    const higherBenefit = setRow("Higher Benefit", 0, 1, 100, 50);
+    lowerBenefit.comparison.recommendedMode = "equivalent";
+    higherBenefit.comparison.recommendedMode = "set";
+
+    expect(selectBestOverviewReadySet([lowerBenefit, higherBenefit])).toBe(higherBenefit);
+  });
+
+  it("ranks a profitable ready set above many copies that are better sold as parts", () => {
+    const profitable = setRow("Profitable Ready Set", 0, 0, 90, 40);
+    const manyUnprofitable = setRow("Many Unprofitable Sets", 0, 0, 20, 80);
+    profitable.comparison.recommendedMode = "set";
+    manyUnprofitable.comparison.recommendedMode = "parts";
+    for (const component of manyUnprofitable.components) component.sellableQuantity = 20;
+
+    expect(filterAndSortOpportunitySets([manyUnprofitable, profitable], [], "ready"))
+      .toEqual([profitable, manyUnprofitable]);
+    expect(filterAndSortSets([manyUnprofitable, profitable], "ready"))
+      .toEqual([profitable, manyUnprofitable]);
+  });
+
+  it("excludes fully reserved sets and keeps an unreserved copy in the overview", () => {
+    const partialSource = setRow("One Set Remains", 0, 1, 100, 70);
+    const fullSource = setRow("Fully Reserved", 0, 0, 90, 60);
+    partialSource.comparison.recommendedMode = "set";
+    fullSource.comparison.recommendedMode = "set";
+    const order = (row: SetInsightRow, quantity: number) => ({
+      itemId: row.itemId ?? null,
+      type: "sell" as const,
+      quantity,
+      visible: true,
+      rank: null,
+      charges: null,
+      subtype: null,
+      amberStars: null,
+      cyanStars: null,
+    });
+    const partiallyReserved = reservePublishedSetListings(partialSource, [order(partialSource, 1)]);
+    const fullyReserved = reservePublishedSetListings(fullSource, [order(fullSource, 1)]);
+
+    expect(setOpportunity(partiallyReserved).sellableCompleteSets).toBe(1);
+    expect(setOpportunity(fullyReserved).sellableCompleteSets).toBe(0);
+    expect(filterAndSortOpportunitySets([fullyReserved, partiallyReserved], [], "ready"))
+      .toEqual([partiallyReserved]);
+    expect(selectBestOverviewReadySet([fullyReserved, partiallyReserved])).toBe(partiallyReserved);
+  });
+
+  it("selects only finite positive relic value for the requested scenario", () => {
+    const soloBest = openingRecommendation("Solo Best", 12, 4, 60);
+    const squadBest = openingRecommendation("Squad Best", 8, 25, 80);
+    const invalid = openingRecommendation("Invalid", Number.POSITIVE_INFINITY, null, 100);
+    const loss = openingRecommendation("Loss", -1, 0, 100);
+
+    expect(selectBestOverviewRelic([invalid, loss, squadBest, soloBest], "solo")).toBe(soloBest);
+    expect(selectBestOverviewRelic([invalid, loss, soloBest, squadBest], "matching_squad")).toBe(squadBest);
+    expect(selectBestOverviewRelic([invalid, loss], "solo")).toBeNull();
+    expect(selectBestOverviewRelic([invalid, loss], "matching_squad")).toBeNull();
+  });
+
   it("uses the conservative three-unit depth when two identical parts are required", () => {
     const row = setRow("Dual Blade Set", 1);
     row.definition.components[0].requiredQuantity = 2;
@@ -289,7 +452,7 @@ describe("insights presentation", () => {
   it("separates profitable completion candidates from ready sets", () => {
     const easy = setRow("Easy Set", 1);
     const harder = setRow("Hard Set", 2);
-    const ready = setRow("Ready Set", 0, 1);
+    const ready = setRow("Ready Set", 0, 1, 70, 80);
     expect(filterAndSortSets([harder, ready, easy], "finish").map((row) => row.displayName))
       .toEqual(["Easy Set", "Hard Set"]);
     expect(filterAndSortSets([easy, ready], "ready")).toEqual([ready]);
@@ -364,6 +527,78 @@ describe("insights presentation", () => {
 
     expect(reserved.components[0].sellableQuantity).toBe(0);
     expect(setOpportunity(reserved).sellableCompleteSets).toBe(0);
+  });
+
+  it("excludes a directly listed part from the ducat sellable quantity", () => {
+    const row = setRow("Ducat Reserved Set", 0);
+    for (const component of row.components) {
+      component.ownedQuantity = 3;
+      component.sellableQuantity = 3;
+    }
+    const reserved = reservePublishedSetListings(row, [{
+      itemId: row.components[0].itemId ?? null,
+      type: "sell",
+      quantity: 2,
+      visible: true,
+      rank: null,
+      charges: null,
+      subtype: null,
+      amberStars: null,
+      cyanStars: null,
+    }]);
+    const listed = ducatRow(row.components[0].definition.slug, 3);
+    const unlisted = ducatRow(row.components[1].definition.slug, 3);
+    const unrelated = ducatRow("unrelated_prime_part", 4);
+
+    const adjusted = adjustDucatsForMarketReservations(
+      [listed, unlisted, unrelated],
+      [reserved],
+    );
+
+    expect(adjusted.map((item) => item.sellableQuantity)).toEqual([1, 3, 4]);
+    expect(listed.sellableQuantity).toBe(3);
+    expect(adjusted[1]).toBe(unlisted);
+    expect(adjusted[2]).toBe(unrelated);
+  });
+
+  it("excludes components reserved by a published complete-set order from ducats", () => {
+    const row = setRow("Published Ducat Set", 0);
+    for (const component of row.components) {
+      component.ownedQuantity = 2;
+      component.sellableQuantity = 2;
+    }
+    const reserved = reservePublishedSetListings(row, [{
+      itemId: row.itemId ?? null,
+      type: "sell",
+      quantity: 1,
+      visible: true,
+      rank: null,
+      charges: null,
+      subtype: null,
+      amberStars: null,
+      cyanStars: null,
+    }]);
+    const ducats = row.components.map((component) =>
+      ducatRow(component.definition.slug, 2));
+
+    expect(adjustDucatsForMarketReservations(ducats, [reserved])
+      .map((item) => item.sellableQuantity)).toEqual([1, 1]);
+  });
+
+  it("uses the smallest remaining quantity for a component shared by sets", () => {
+    const first = setRow("First Shared Set", 0);
+    const second = setRow("Second Shared Set", 0);
+    const sharedSlug = first.components[0].definition.slug;
+    second.components[0].definition.slug = sharedSlug;
+    first.components[0].sellableQuantity = 2;
+    second.components[0].sellableQuantity = 1;
+
+    const [adjusted] = adjustDucatsForMarketReservations(
+      [ducatRow(sharedSlug, 4)],
+      [first, second],
+    );
+
+    expect(adjusted.sellableQuantity).toBe(1);
   });
 
   it("sorts completion candidates by executable profit rather than the headline set premium", () => {
