@@ -307,9 +307,13 @@ function itemMatchesTradeName(item: AccountOrderItem, tradeName: string): boolea
 function orderMatchesKnownTradeRank(order: AccountOrder, tradeName: string): boolean {
   const rank = tradeRank(tradeName);
   return rank === null || (
-    order.rank === rank
+    orderRankMatchesTrade(order.rank, rank)
     && (order.subtype === null || order.subtype === "regular")
   );
+}
+
+function orderRankMatchesTrade(orderRank: number | null, soldRank: number | null): boolean {
+  return orderRank === soldRank || (orderRank === null && soldRank === 0);
 }
 
 function isSafeOrderMatch(
@@ -322,7 +326,7 @@ function isSafeOrderMatch(
   const subtypeMatches = soldRank === null
     ? order.subtype === null
     : order.subtype === null || order.subtype === "regular";
-  return order.rank === soldRank
+  return orderRankMatchesTrade(order.rank, soldRank)
     && order.charges === null
     && subtypeMatches
     && order.amberStars === null

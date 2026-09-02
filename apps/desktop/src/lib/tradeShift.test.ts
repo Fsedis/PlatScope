@@ -253,6 +253,55 @@ describe("торговая смена", () => {
     })]);
   });
 
+  it("считает отсутствующий ранг WFM нулевым для явного РАНГ 0 из журнала", () => {
+    const defaultRank = {
+      ...order,
+      id: "toxic-flight-default-rank",
+      itemId: "toxic-flight",
+      platinum: 3,
+      quantity: 1,
+      rank: null,
+      subtype: null,
+    };
+    const wrongRank = { ...defaultRank, id: "toxic-flight-rank-5", rank: 5 };
+    const toxicFlightAccount: AccountView = {
+      ...account,
+      orders: [defaultRank, wrongRank],
+      orderItems: {
+        "toxic-flight": {
+          slug: "toxic_flight",
+          displayName: "Токсичный Полёт",
+          displayNameEn: "Toxic Flight",
+          imageUrl: null,
+          itemKind: "standard",
+          setComponents: [],
+        },
+      },
+    };
+    const event: TradeEvent = {
+      id: 9,
+      occurredAt: "2026-09-02T11:27:12Z",
+      partner: "Noobpromaster3000",
+      platinumGiven: 0,
+      platinumReceived: 3,
+      givenItems: [{ name: "Токсичный полёт (РЕДКИЙ РАНГ 0)", quantity: 1 }],
+      receivedItems: [],
+      status: "pending",
+      matchedOrderId: null,
+      reconciliationJson: null,
+    };
+
+    const plan = planTradeReconciliation(event, toxicFlightAccount);
+
+    expect(plan.unmatched).toEqual([]);
+    expect(plan.unsafe).toEqual([]);
+    expect(plan.actions).toEqual([expect.objectContaining({
+      itemName: "Токсичный Полёт",
+      soldQuantity: 1,
+      before: expect.objectContaining({ id: "toxic-flight-default-rank" }),
+    })]);
+  });
+
   it("сопоставляет четыре русских чертежа с одним проданным полным комплектом", () => {
     const hildrynOrder = {
       ...order,

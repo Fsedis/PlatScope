@@ -581,6 +581,18 @@
     return plan.actions.length > 0 && plan.unmatched.length === 0 && plan.unsafe.length === 0;
   }
 
+  function eventMatchStatus(event: TradeEvent): string {
+    if (!account) return "Проверяем ордера WFM";
+    const plan = planTradeReconciliation(event, account);
+    if (plan.actions.length > 0 && plan.unmatched.length === 0 && plan.unsafe.length === 0) {
+      return "Точный ордер найден";
+    }
+    if (plan.unsafe.length > 0) {
+      return "Ордер найден, но вариант или количество требуют повторной проверки";
+    }
+    return "Точного ордера нет в текущем списке WFM";
+  }
+
   function summarize(source: TradeShiftRow[]) {
     return {
       total: source.length,
@@ -678,11 +690,10 @@
                 <small>{new Date(event.occurredAt).toLocaleString("ru-RU")}</small>
               </div>
               <div class="trade-event__actions">
-                {#if eventCanApply(event)}
-                  <button class="compact" type="button" disabled={applying} onclick={() => retryTrade(event)}>Повторить синхронизацию</button>
-                {:else}
-                  <span class="manual">Ордер не найден однозначно</span>
-                {/if}
+                <span class="manual">{eventMatchStatus(event)}</span>
+                <button class="compact" type="button" disabled={applying} onclick={() => retryTrade(event)}>
+                  {eventCanApply(event) ? "Учесть продажу" : "Найти ордер снова"}
+                </button>
                 <button class="text-button compact" type="button" onclick={() => ignoreTrade(event)}>Пропустить</button>
               </div>
             </article>

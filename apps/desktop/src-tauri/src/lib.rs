@@ -1470,12 +1470,23 @@ fn item_matches_trade_name(item: &AccountOrderItemView, trade_name: &str) -> boo
 
 fn order_matches_known_trade_rank(order: &AccountOrder, trade_name: &str) -> bool {
     trade_rank(trade_name).is_none_or(|rank| {
-        order.rank == Some(rank)
+        order_rank_matches_trade(order.rank, Some(rank))
             && order
                 .subtype
                 .as_deref()
                 .is_none_or(|subtype| subtype == "regular")
     })
+}
+
+const fn order_rank_matches_trade(order_rank: Option<u16>, sold_rank: Option<u16>) -> bool {
+    match (order_rank, sold_rank) {
+        (Some(order_rank), Some(sold_rank)) => order_rank == sold_rank,
+        // WFM may omit the default rank while EE.log always prints `РАНГ 0`.
+        // This fallback is used only after an exact item-name match and the
+        // caller still requires exactly one candidate order.
+        (None, Some(0) | None) => true,
+        _ => false,
+    }
 }
 
 fn is_safe_trade_order(
@@ -1493,7 +1504,7 @@ fn is_safe_trade_order(
     } else {
         order.subtype.is_none()
     };
-    order.rank == sold_rank
+    order_rank_matches_trade(order.rank, sold_rank)
         && order.charges.is_none()
         && subtype_matches
         && order.amber_stars.is_none()
@@ -1655,14 +1666,41 @@ async fn reconcile_trade_event(app_handle: &AppHandle, event: TradeEvent) -> Res
 
 fn spawn_trade_reconciliation(app_handle: AppHandle, event: TradeEvent) {
     tauri::async_runtime::spawn(async move {
-        if let Err(error) = reconcile_trade_event(&app_handle, event).await {
-            tracing::warn!(
-                event = "wfm_trade_auto_close_failed",
-                error = %error,
-                "confirmed game sale remains pending for automatic retry"
-            );
-            let _ = app_handle.emit("trade-reconciliation-failed", ());
+        const ATTEMPTS: usize = 3;
+        let trade_event_id = event.id;
+        let mut last_error = None;
+        for attempt in 0..ATTEMPTS {
+            match reconcile_trade_event(&app_handle, event.clone()).await {
+                Ok(true) => return,
+                Ok(false) => {}
+                Err(error) => last_error = Some(error),
+            }
+            let still_pending = app_handle
+                .state::<AppState>()
+                .database
+                .lock()
+                .ok()
+                .and_then(|database| database.recent_trade_events(100).ok())
+                .is_some_and(|events| {
+                    events.into_iter().any(|stored| {
+                        stored.id == trade_event_id && stored.status == TradeEventStatus::Pending
+                    })
+                });
+            if !still_pending || attempt + 1 == ATTEMPTS {
+                break;
+            }
+            tokio::time::sleep(Duration::from_secs(2)).await;
         }
+        tracing::warn!(
+            event = "wfm_trade_auto_close_failed",
+            trade_event_id,
+            attempts = ATTEMPTS,
+            error = last_error
+                .as_deref()
+                .unwrap_or("no unique active order match"),
+            "confirmed game sale remains pending after bounded automatic retries"
+        );
+        let _ = app_handle.emit("trade-reconciliation-failed", ());
     });
 }
 
@@ -4664,6 +4702,46 @@ mod tests {
         assert_eq!(actions.len(), 1);
         assert_eq!(actions[0].kind, AutomaticTradeActionKind::Close);
         assert_eq!(actions[0].before.id, order.id);
+        assert_eq!(actions[0].sold_quantity, 1);
+    }
+
+    #[test]
+    fn automatic_trade_plan_treats_missing_wfm_rank_as_explicit_rank_zero() {
+        let occurred_at = Utc::now();
+        let mut default_rank = automatic_trade_order("toxic-flight", 1, occurred_at);
+        default_rank.platinum = 3;
+        let mut wrong_rank = default_rank.clone();
+        wrong_rank.id = "order-toxic-flight-rank-5".into();
+        wrong_rank.rank = Some(5);
+        let account = AccountView {
+            connected: true,
+            profile: None,
+            orders: vec![default_rank.clone(), wrong_rank],
+            order_items: HashMap::from([(
+                "toxic-flight".into(),
+                AccountOrderItemView {
+                    slug: "toxic_flight".into(),
+                    display_name: "Токсичный Полёт".into(),
+                    display_name_en: "Toxic Flight".into(),
+                    image_url: None,
+                    item_kind: MarketItemKind::Standard,
+                    set_components: Vec::new(),
+                },
+            )]),
+        };
+        let event = automatic_trade_event(
+            vec![TradeItem {
+                name: "Токсичный полёт (РЕДКИЙ РАНГ 0)".into(),
+                quantity: 1,
+            }],
+            occurred_at,
+        );
+
+        let actions = plan_automatic_trade_reconciliation(&event, &account)
+            .expect("пустой ранг WFM означает нулевой ранг мода");
+
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].before.id, default_rank.id);
         assert_eq!(actions[0].sold_quantity, 1);
     }
 
