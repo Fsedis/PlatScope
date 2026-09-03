@@ -5,6 +5,7 @@ import {
   bestBountyJob,
   bountyAutomaticRefreshAt,
   bountyRotationAt,
+  rankedBountyJobs,
   visibleBountyRegions,
   type BountyHunterView,
 } from "./bountyHunter";
@@ -27,7 +28,9 @@ const view: BountyHunterView = {
           stageCount: 3,
           totalStanding: 1000,
           expectedPlatinum: 0,
+          marketRewardCount: 0,
           pricedRewardCount: 0,
+          priceCoveragePercent: 0,
           rewards: [],
         },
         {
@@ -39,7 +42,9 @@ const view: BountyHunterView = {
           stageCount: 5,
           totalStanding: 5000,
           expectedPlatinum: 4.2,
+          marketRewardCount: 2,
           pricedRewardCount: 2,
+          priceCoveragePercent: 100,
           rewards: [],
         },
       ],
@@ -71,7 +76,7 @@ describe("bounty hunter view helpers", () => {
     );
   });
 
-  it("refreshes automatically every five minutes or at rotation, whichever comes first", () => {
+  it("refreshes automatically every minute or at rotation, whichever comes first", () => {
     expect(bountyAutomaticRefreshAt(view)).toBe(
       new Date(view.fetchedAt).getTime() + BOUNTY_AUTO_REFRESH_INTERVAL_MS,
     );
@@ -83,5 +88,16 @@ describe("bounty hunter view helpers", () => {
     expect(bountyAutomaticRefreshAt(soonRotation)).toBe(
       new Date("2026-09-02T12:00:00Z").getTime(),
     );
+  });
+
+  it("builds one ranked list and filters it by Russian text", () => {
+    const rows = rankedBountyJobs(view, {
+      region: "all",
+      onlyPriced: true,
+      query: "заказ",
+      sort: "platinum",
+    });
+    expect(rows.map((row) => row.job.id)).toEqual(["priced"]);
+    expect(rows[0]?.regionKey).toBe("cetus");
   });
 });

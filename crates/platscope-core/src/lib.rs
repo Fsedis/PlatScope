@@ -397,6 +397,8 @@ pub struct BountyRewardView {
     pub display_name: String,
     pub image_url: Option<String>,
     pub slug: Option<String>,
+    pub market_key: Option<MarketVariantKey>,
+    pub owned_quantity: Option<u32>,
     pub rarity: String,
     pub expected_quantity: f64,
     pub chance_percent: f64,
@@ -416,7 +418,9 @@ pub struct BountyJobView {
     pub total_standing: u64,
     pub time_bound: Option<String>,
     pub expected_platinum: f64,
+    pub market_reward_count: usize,
     pub priced_reward_count: usize,
+    pub price_coverage_percent: f64,
     pub rewards: Vec<BountyRewardView>,
 }
 
@@ -1573,6 +1577,26 @@ fn build_bounty_hunter_view(
         .iter()
         .map(|item| (normalize_bounty_name(&item.display_name_en), item))
         .collect();
+    let owned_by_slug = database.current_inventory_snapshot()?.map(|snapshot| {
+        snapshot
+            .items
+            .iter()
+            .filter_map(|item| {
+                item.key
+                    .as_ref()
+                    .map(|key| (&key.slug, item.owned_quantity))
+            })
+            .fold(
+                HashMap::<String, u32>::new(),
+                |mut totals, (slug, quantity)| {
+                    totals
+                        .entry(slug.clone())
+                        .and_modify(|total| *total = total.saturating_add(quantity))
+                        .or_insert(quantity);
+                    totals
+                },
+            )
+    });
     let mut regions = state
         .missions
         .iter()
@@ -1580,7 +1604,15 @@ fn build_bounty_hunter_view(
             let mut jobs = mission
                 .jobs
                 .iter()
-                .map(|job| build_bounty_job_view(database, settings, job, &catalog_by_name))
+                .map(|job| {
+                    build_bounty_job_view(
+                        database,
+                        settings,
+                        job,
+                        &catalog_by_name,
+                        owned_by_slug.as_ref(),
+                    )
+                })
                 .collect::<Result<Vec<_>, CoreError>>()?;
             jobs.sort_by(|left, right| {
                 right
@@ -1613,60 +1645,12 @@ fn build_bounty_job_view(
     settings: &AppSettings,
     job: &BountyJob,
     catalog_by_name: &HashMap<String, &CatalogItem>,
+    owned_by_slug: Option<&HashMap<String, u32>>,
 ) -> Result<BountyJobView, CoreError> {
     let mut rewards = aggregate_bounty_rewards(&job.reward_pool_drops, job.standing_stages.len())
         .into_iter()
         .map(|reward| {
-            let catalog_item = catalog_by_name
-                .get(&normalize_bounty_name(&reward.source_name))
-                .copied();
-            let recommendation = catalog_item
-                .map(|item| bounty_market_key(item, settings.platform))
-                .transpose()?
-                .map(|key| {
-                    PricingService::price_current_variant_in_database(
-                        database,
-                        &key,
-                        MarketItemKind::Standard,
-                    )
-                })
-                .transpose()?
-                .flatten();
-            let (unit_price, expected_price_factor) =
-                recommendation.map_or((None, 0.0), |recommendation| {
-                    matches!(
-                        recommendation.freshness,
-                        PriceFreshness::Fresh | PriceFreshness::Aging
-                    )
-                    .then(|| recommendation.list_price.or(recommendation.fair_price))
-                    .flatten()
-                    .filter(|price| price.is_finite() && *price > 0.0)
-                    .map_or((None, 0.0), |price| {
-                        let factor = match recommendation.confidence {
-                            PriceConfidence::High | PriceConfidence::Medium => 1.0,
-                            PriceConfidence::Low => LOW_CONFIDENCE_ARCANE_PRICE_FACTOR,
-                            PriceConfidence::Unknown => 0.0,
-                        };
-                        (Some(price), factor)
-                    })
-                });
-            let expected_platinum = unit_price
-                .filter(|_| expected_price_factor > 0.0)
-                .map(|price| price * reward.expected_quantity * expected_price_factor);
-            Ok(BountyRewardView {
-                display_name: catalog_item.map_or_else(
-                    || localized_bounty_reward_name(&reward.source_name),
-                    |item| catalog_name(item, settings.language),
-                ),
-                image_url: catalog_item
-                    .and_then(|item| catalog_item_image(item, settings.language)),
-                slug: catalog_item.map(|item| item.slug.clone()),
-                rarity: localized_bounty_rarity(&reward.rarity).to_owned(),
-                expected_quantity: reward.expected_quantity,
-                chance_percent: reward.chance_percent,
-                unit_price,
-                expected_platinum,
-            })
+            build_bounty_reward_view(database, settings, &reward, catalog_by_name, owned_by_slug)
         })
         .collect::<Result<Vec<_>, CoreError>>()?;
     rewards.sort_by(|left, right| {
@@ -1677,10 +1661,8 @@ fn build_bounty_job_view(
             .then_with(|| right.chance_percent.total_cmp(&left.chance_percent))
             .then_with(|| left.display_name.cmp(&right.display_name))
     });
-    let priced_reward_count = rewards
-        .iter()
-        .filter(|reward| reward.unit_price.is_some())
-        .count();
+    let (market_reward_count, priced_reward_count, price_coverage_percent) =
+        bounty_reward_price_coverage(&rewards);
     let expected_platinum = rewards
         .iter()
         .filter_map(|reward| reward.expected_platinum)
@@ -1689,7 +1671,7 @@ fn build_bounty_job_view(
     let max_level = job.enemy_levels.get(1).copied().unwrap_or(min_level);
     Ok(BountyJobView {
         id: bounty_job_view_id(job),
-        title: localized_bounty_title(&job.kind).to_owned(),
+        title: localized_bounty_title(job),
         min_level,
         max_level,
         min_mastery_rank: job.min_mr,
@@ -1704,9 +1686,100 @@ fn build_bounty_job_view(
             .map(localized_time_bound)
             .map(str::to_owned),
         expected_platinum,
+        market_reward_count,
         priced_reward_count,
+        price_coverage_percent,
         rewards,
     })
+}
+
+fn build_bounty_reward_view(
+    database: &Database,
+    settings: &AppSettings,
+    reward: &AggregatedBountyReward,
+    catalog_by_name: &HashMap<String, &CatalogItem>,
+    owned_by_slug: Option<&HashMap<String, u32>>,
+) -> Result<BountyRewardView, CoreError> {
+    let catalog_item = catalog_by_name
+        .get(&normalize_bounty_name(&reward.source_name))
+        .copied();
+    let market_key = catalog_item
+        .map(|item| bounty_market_key(item, settings.platform))
+        .transpose()?;
+    let recommendation = market_key
+        .as_ref()
+        .map(|key| {
+            PricingService::price_current_variant_in_database(
+                database,
+                key,
+                MarketItemKind::Standard,
+            )
+        })
+        .transpose()?
+        .flatten();
+    let (unit_price, expected_price_factor) =
+        recommendation.map_or((None, 0.0), |recommendation| {
+            matches!(
+                recommendation.freshness,
+                PriceFreshness::Fresh | PriceFreshness::Aging
+            )
+            .then(|| recommendation.list_price.or(recommendation.fair_price))
+            .flatten()
+            .filter(|price| price.is_finite() && *price > 0.0)
+            .map_or((None, 0.0), |price| {
+                let factor = match recommendation.confidence {
+                    PriceConfidence::High | PriceConfidence::Medium => 1.0,
+                    PriceConfidence::Low => LOW_CONFIDENCE_ARCANE_PRICE_FACTOR,
+                    PriceConfidence::Unknown => 0.0,
+                };
+                (Some(price), factor)
+            })
+        });
+    let expected_platinum = unit_price
+        .filter(|_| expected_price_factor > 0.0)
+        .map(|price| price * reward.expected_quantity * expected_price_factor);
+    Ok(BountyRewardView {
+        display_name: catalog_item.map_or_else(
+            || localized_bounty_reward_name(&reward.source_name),
+            |item| catalog_name(item, settings.language),
+        ),
+        image_url: catalog_item.and_then(|item| catalog_item_image(item, settings.language)),
+        slug: catalog_item.map(|item| item.slug.clone()),
+        market_key,
+        owned_quantity: owned_by_slug.map(|inventory| {
+            catalog_item
+                .and_then(|item| inventory.get(&item.slug).copied())
+                .unwrap_or_default()
+        }),
+        rarity: localized_bounty_rarity(&reward.rarity).to_owned(),
+        expected_quantity: reward.expected_quantity,
+        chance_percent: reward.chance_percent,
+        unit_price,
+        expected_platinum,
+    })
+}
+
+fn bounty_reward_price_coverage(rewards: &[BountyRewardView]) -> (usize, usize, f64) {
+    let priced_reward_count = rewards
+        .iter()
+        .filter(|reward| reward.unit_price.is_some())
+        .count();
+    let market_reward_count = rewards
+        .iter()
+        .filter(|reward| reward.market_key.is_some())
+        .count();
+    let price_coverage_percent = match (
+        u32::try_from(priced_reward_count),
+        u32::try_from(market_reward_count),
+    ) {
+        (_, Ok(0) | Err(_)) | (Err(_), _) => 0.0,
+        (Ok(priced), Ok(market)) => 100.0 * f64::from(priced) / f64::from(market),
+    };
+    (
+        market_reward_count,
+        priced_reward_count,
+        price_coverage_percent,
+    )
 }
 
 fn aggregate_bounty_rewards(
@@ -1865,33 +1938,79 @@ fn localized_time_bound(value: &str) -> &str {
     }
 }
 
-fn localized_bounty_title(value: &str) -> &str {
-    match value {
-        "Anomaly Retrieval" => "Поиск аномалий",
-        "Anomaly Retrieval (Endless)" => "Поиск аномалий — бесконечный",
-        "Assassinate the Commander" => "Устранить командира",
-        "Brute Force" => "Грубая сила",
-        "Capture the Grineer Commander" => "Захватить командира Гринир",
-        "Core Samples" => "Образцы ядра",
-        "Courier Ambush" => "Засада на курьера",
-        "Find the Hidden Artifact" => "Найти скрытый артефакт",
-        "For Science!" => "Ради науки",
-        "Isolation Vault Chamber A" => "Изоляционное хранилище A",
-        "Isolation Vault Chamber B" => "Изоляционное хранилище B",
-        "Isolation Vault Chamber C" => "Изоляционное хранилище C",
-        "Master's Voice (Narmer)" => "Голос хозяина — Нармер",
-        "Picket Duty" => "Дозор",
-        "Proof of Life" => "Доказательство жизни",
-        "Protect the Innocent" => "Защитить невиновных",
-        "Reclaim the Stolen Artifact" => "Вернуть украденный артефакт",
-        "Rise and Fall (Narmer)" => "Взлёт и падение — Нармер",
-        "Sabotage Bounty" => "Диверсия",
-        "Salvage" => "Сбор припасов",
-        "Served Cold" => "Холодная подача",
-        "Trash Their Traps" => "Уничтожить ловушки",
-        "Weaken the Grineer Foothold" => "Ослабить позиции Гринир",
-        _ => "Заказ синдиката",
-    }
+fn localized_bounty_title(job: &BountyJob) -> String {
+    // Идентификатор задания совпадает с ключом официальной локализации игры.
+    // Значения сверены с русским `dict.ru.json` Warframe Public Export.
+    let source_key = job
+        .id
+        .trim_end_matches(|character: char| character.is_ascii_digit());
+    let title = match job.kind.as_str() {
+        "For the Unum (Narmer)" => Some("За Унум (Нармер)"),
+        "Rise and Fall (Narmer)" => Some("Взлёт и падение (Нармер)"),
+        "Bring Them Home (Narmer)" => Some("Верните их домой (Нармер)"),
+        "Collection Retrieval (Narmer)" => Some("Захват коллекции (Нармер)"),
+        "Master's Voice (Narmer)" => Some("Голос мастера (Нармер)"),
+        "Crush the Cult (Narmer)" => Some("Сокрушение культа (Нармер)"),
+        "Remembering Tin (Narmer)" => Some("Память Жестянки (Нармер)"),
+        "Digging for Narmer (Narmer)" => Some("Раскопки для Нармера (Нармер)"),
+        "Isolation Vault Chamber A" => Some("Изоляционное хранилище A"),
+        "Isolation Vault Chamber B" => Some("Изоляционное хранилище B"),
+        "Isolation Vault Chamber C" => Some("Изоляционное хранилище C"),
+        _ => match source_key {
+            "AssassinateBountyAss" => Some("Убейте командира"),
+            "AssassinateBountyCap" => Some("Захватите нового командира Гринир"),
+            "AttritionBountyCap" => Some("Захватите их лидера"),
+            "AttritionBountyExt" => Some("Проредите ряды врага"),
+            "AttritionBountyLib" => Some("Ослабьте опорный пункт Гринир"),
+            "AttritionBountySab" => Some("Саботируйте линии поставок припасов Гринир"),
+            "CaptureBountyCapOne" => Some("Захватите командира Гринир"),
+            "CaptureBountyCapTwo" => Some("Поимка шпиона"),
+            "ReclamationBountyCache" => Some("Найдите спрятанный артефакт"),
+            "ReclamationBountyCap" => Some("Захватите агента Гринир"),
+            "ReclamationBountyTheft" => Some("Верните украденный артефакт"),
+            "RescueBountyResc" => Some("Разыскать и спасти"),
+            "SabotageBountySab" => Some("Саботируйте прототип"),
+            "DeimosAreaDefenseBounty" => Some("Вернуть наше по праву"),
+            "DeimosAssassinateBounty" => Some("Очистить землю"),
+            "DeimosCrpSurvivorBounty" => Some("Во имя науки!"),
+            "DeimosEndlessAreaDefenseBounty" => Some("Нашествие (бесконечное)"),
+            "DeimosEndlessExcavateBounty" => Some("Горные разработки (бесконечные)"),
+            "DeimosEndlessPurifyBounty" => Some("Охотник за артефактами (бесконечный)"),
+            "DeimosExcavateBounty" => Some("Образцы керна"),
+            "DeimosGrnSurvivorBounty" => Some("Грубая сила"),
+            "DeimosKeyPiecesBounty" => Some("Вторсырьё"),
+            "DeimosPurifyBounty" => Some("Получение аномалии"),
+            "NarmerVenusCullJobAssassinate" => Some("Голос мастера (Нармер)"),
+            "NarmerVenusCullJobExterminate" => Some("Сокрушение культа (Нармер)"),
+            "NarmerVenusPreservationJobDefense" => Some("Память Жестянки (Нармер)"),
+            "NarmerVenusTheftJobExcavation" => Some("Раскопки для Нармера (Нармер)"),
+            "VenusArtifactJobAmbush" => Some("Западня для курьера"),
+            "VenusArtifactJobExcavation" => Some("Археология"),
+            "VenusArtifactJobRecovery" => Some("Кровавые реликвии"),
+            "VenusChaosJobAssassinate" => Some("Выжженная земля"),
+            "VenusChaosJobExcavation" => Some("Погрести их"),
+            "VenusCullJobAssassinate" => Some("Коллапс сети"),
+            "VenusCullJobExterminate" => Some("Охотник-убийца"),
+            "VenusCullJobResource" => Some("Отклонение и отвлечение"),
+            "VenusHelpingJobCaches" => Some("Ништяк Доски"),
+            "VenusHelpingJobResource" => Some("Грязный приём"),
+            "VenusHelpingJobSpy" => Some("Вроде законно"),
+            "VenusIntelJobRecovery" => Some("Доказательство жизни"),
+            "VenusIntelJobResource" => Some("Операционные сведения"),
+            "VenusIntelJobSpy" => Some("Финансовое освобождение"),
+            "VenusPreservationJobDefense" => Some("Проявление долга"),
+            "VenusPreservationJobRecovery" => Some("Защита невиновных"),
+            "VenusPreservationJobResource" => Some("На мусор их ловушки"),
+            "VenusSpyJobSpy" => Some("Агент ранен"),
+            "VenusTheftJobAmbush" => Some("Обновление программного обеспечения"),
+            "VenusTheftJobExcavation" => Some("Кража ресурсов"),
+            "VenusTheftJobResource" => Some("Налог для налоговика"),
+            "VenusWetworkJobAssassinate" => Some("Холодный приём"),
+            "VenusWetworkJobSpy" => Some("Падающая звезда"),
+            _ => None,
+        },
+    };
+    title.unwrap_or(job.kind.as_str()).to_owned()
 }
 
 fn localized_bounty_reward_name(value: &str) -> String {
@@ -5700,6 +5819,40 @@ mod tests {
         assert_ne!(
             bounty_job_view_id(&make_job("/Lotus/Rewards/Regular")),
             bounty_job_view_id(&make_job("/Lotus/Rewards/Narmer"))
+        );
+    }
+
+    #[test]
+    fn bounty_titles_use_official_russian_game_names() {
+        let make_job = |id: &str, kind: &str| BountyJob {
+            id: id.into(),
+            expiry: Utc::now(),
+            unique_name: "/Lotus/Rewards/Test".into(),
+            reward_pool_drops: Vec::new(),
+            kind: kind.into(),
+            enemy_levels: vec![10, 20],
+            standing_stages: vec![100],
+            min_mr: 0,
+            time_bound: None,
+        };
+
+        assert_eq!(
+            localized_bounty_title(&make_job(
+                "AttritionBountyExt1788456076922",
+                "Cull the Enemy"
+            )),
+            "Проредите ряды врага"
+        );
+        assert_eq!(
+            localized_bounty_title(&make_job(
+                "VenusPreservationJobDefense1788456076922",
+                "Picket Duty"
+            )),
+            "Проявление долга"
+        );
+        assert_eq!(
+            localized_bounty_title(&make_job("1788456076922", "Isolation Vault Chamber B")),
+            "Изоляционное хранилище B"
         );
     }
 
