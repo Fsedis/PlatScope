@@ -10,13 +10,14 @@ members = [
     "crates/platscope-selling",
     "crates/platscope-insights",
     "crates/platscope-account",
+    "crates/platscope-wfm",
     "crates/platscope-storage",
     "crates/platscope-core",
     "apps/desktop/src-tauri",
 ]
 
 [workspace.package]
-version = "0.1.46"
+version = "0.1.47"
 edition = "2024"
 license = "MIT"
 rust-version = "1.88"

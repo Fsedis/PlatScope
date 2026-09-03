@@ -394,6 +394,7 @@ pub struct ResourceConverterView {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BountyRewardView {
+    pub tracking_key: String,
     pub display_name: String,
     pub image_url: Option<String>,
     pub slug: Option<String>,
@@ -1739,6 +1740,10 @@ fn build_bounty_reward_view(
         .filter(|_| expected_price_factor > 0.0)
         .map(|price| price * reward.expected_quantity * expected_price_factor);
     Ok(BountyRewardView {
+        tracking_key: catalog_item.map_or_else(
+            || format!("worldstate:{}", normalize_bounty_name(&reward.source_name)),
+            |item| format!("market:{}", item.slug),
+        ),
         display_name: catalog_item.map_or_else(
             || localized_bounty_reward_name(&reward.source_name),
             |item| catalog_name(item, settings.language),

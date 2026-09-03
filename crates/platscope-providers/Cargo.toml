@@ -11,6 +11,7 @@ chrono.workspace = true
 futures-util.workspace = true
 hex.workspace = true
 platscope-domain = { path = "../platscope-domain" }
+platscope-wfm = { path = "../platscope-wfm" }
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true

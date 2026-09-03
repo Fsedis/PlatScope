@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Минимальные разрешения главного окна PlatScope",
   "windows": ["main", "reward-overlay"],
-  "permissions": ["core:default", "updater:default"]
+  "permissions": ["core:default", "notification:default", "updater:default"]
 }

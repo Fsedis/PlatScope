@@ -14,6 +14,7 @@
   import type { InventoryView } from "./inventory";
   import { formatPlatinum, type LivePricingResult, type PriceRecommendation } from "./market";
   import {
+    applyPriceCheckFailures,
     buildTradeShiftRows,
     filterTradeShiftRows,
     isSaleTrade,
@@ -42,6 +43,7 @@
   let refreshingLive = false;
   let stopLiveRefresh = false;
   let liveProgress = "";
+  let failedPriceChecks = new Set<string>();
   let errorMessage = "";
   let actionMessage = "";
   let accountBusy = false;
@@ -64,7 +66,10 @@
   let orderQuery = "";
 
   $: rows = account
-    ? buildTradeShiftRows(account, inventory, recommendations)
+    ? applyPriceCheckFailures(
+        buildTradeShiftRows(account, inventory, recommendations),
+        failedPriceChecks,
+      )
     : [];
   $: visibleRows = filterTradeShiftRows(rows, orderQuery);
   $: actionableRows = rows.filter((row) => row.needsAction && rowChange(row) !== null);
@@ -100,6 +105,7 @@
   async function loadAll(): Promise<void> {
     loading = true;
     errorMessage = "";
+    failedPriceChecks = new Set();
     actionMessage = "";
     try {
       const [nextAccount, nextInventory, nextEvents, nextTradeSales] = await Promise.all([
@@ -167,8 +173,13 @@
     refreshingLive = true;
     stopLiveRefresh = false;
     errorMessage = "";
-    const candidates = rows.filter((row) => row.key);
+    const candidates = rows.filter((row, index, source) => row.key
+      && source.findIndex((candidate) => candidate.key
+        && recommendationIdentity(candidate.key) === recommendationIdentity(row.key!)) === index);
     const next = new Map(recommendations);
+    const failures = new Set<string>();
+    let checked = 0;
+    let rateLimited = false;
     for (let index = 0; index < candidates.length; index += 1) {
       if (stopLiveRefresh) break;
       const row = candidates[index];
@@ -178,15 +189,30 @@
           key: row.key,
           itemKind: row.itemKind,
         });
-        if (result && row.key) next.set(recommendationIdentity(row.key), result.recommendation);
-      } catch {
-        // One unavailable item must not discard successful checks for the rest of the shift.
+        if (row.key) next.set(recommendationIdentity(row.key), result?.recommendation ?? null);
+        checked += 1;
+      } catch (error) {
+        if (row.key) failures.add(recommendationIdentity(row.key));
+        const reason = String(error).toLowerCase();
+        rateLimited ||= reason.includes("rate limit") || reason.includes("429");
       }
+      failedPriceChecks = new Set(failures);
       recommendations = new Map(next);
     }
-    liveProgress = stopLiveRefresh ? "Проверка остановлена" : `Проверено: ${candidates.length}`;
+    if (stopLiveRefresh) {
+      liveProgress = `Проверка остановлена · проверено ${checked} из ${candidates.length}`;
+    } else if (failures.size) {
+      liveProgress = rateLimited
+        ? `WFM ограничил запросы · проверено ${checked} из ${candidates.length}`
+        : `Проверено: ${checked} из ${candidates.length} · не удалось: ${failures.size}`;
+    } else {
+      liveProgress = `Проверено: ${checked}`;
+    }
     refreshingLive = false;
-    selectSuggestedByDefault(buildTradeShiftRows(account, inventory, next));
+    selectSuggestedByDefault(applyPriceCheckFailures(
+      buildTradeShiftRows(account, inventory, next),
+      failures,
+    ));
   }
 
   function selectSuggestedByDefault(source: TradeShiftRow[] = rows): void {
@@ -498,7 +524,7 @@
       inventory_mismatch: "Количество не сходится",
       overpriced: "Цена выше рынка",
       underpriced: "Можно не сливать",
-      stale: "Давно не проверялся",
+        price_check_failed: "Не удалось проверить цену",
       hidden: "Скрыт",
       healthy: "В порядке",
       unknown: "Нет надёжной цены",
@@ -942,7 +968,8 @@
   .mismatch { color: var(--danger); }
   .health { display: inline-flex; border: 1px solid var(--border); border-radius: 999px; padding: .16rem .42rem; background: var(--surface-2); font-size: .64rem; font-weight: 750; white-space: nowrap; }
   .health--inventory_mismatch, .health--underpriced { border-color: color-mix(in oklch, var(--danger), var(--border) 60%); background: var(--danger-soft); color: var(--danger); }
-  .health--overpriced, .health--stale { border-color: color-mix(in oklch, var(--gold), var(--border) 55%); background: var(--accent-soft); color: var(--accent-strong); }
+  .health--overpriced { border-color: color-mix(in oklch, var(--gold), var(--border) 55%); background: var(--accent-soft); color: var(--accent-strong); }
+  .health--price_check_failed { border-color: color-mix(in oklch, var(--danger), var(--border) 55%); background: color-mix(in oklch, var(--danger), transparent 90%); color: var(--danger); }
   .health--healthy { border-color: color-mix(in oklch, var(--success), var(--border) 60%); background: var(--success-soft); color: var(--success); }
   .order-action-cell { display: flex; align-items: center; justify-content: space-between; gap: .35rem; }
   .order-editor { display: grid; gap: .55rem; margin: .55rem; border: 1px solid var(--border-strong); border-radius: .5rem; padding: .65rem; background: var(--surface-2); }

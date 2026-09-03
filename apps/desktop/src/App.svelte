@@ -14,6 +14,7 @@
   import SellNowScreen from "./lib/SellNowScreen.svelte";
   import SettingsScreen from "./lib/SettingsScreen.svelte";
   import { startAutomaticUpdateChecks } from "./lib/appUpdate";
+  import { startBountyRewardAlerts } from "./lib/bountyAlerts";
 
   import {
     providerLabel,
@@ -446,6 +447,7 @@
     window.addEventListener("keydown", handleShortcut);
     window.addEventListener("pointerdown", handlePointer);
     const stopUpdateChecks = startAutomaticUpdateChecks();
+    const stopBountyRewardAlerts = startBountyRewardAlerts();
     void loadUiSettings().then(() => loadStatus()).then(() => searchMarket());
     void listen<MarketRefreshOutcome>("market-data-updated", (event) => {
       refreshOutcome = event.payload;
@@ -467,6 +469,7 @@
       window.removeEventListener("keydown", handleShortcut);
       window.removeEventListener("pointerdown", handlePointer);
       stopUpdateChecks();
+      stopBountyRewardAlerts();
       if (searchTimer) clearTimeout(searchTimer);
     };
   });

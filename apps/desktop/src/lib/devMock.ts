@@ -1012,6 +1012,7 @@ function makeBountyHunterView(): BountyHunterView {
             priceCoveragePercent: 100,
             rewards: [
               {
+                trackingKey: "market:primed_flow",
                 displayName: "Редкий мод",
                 imageUrl: rows[6]?.imageUrl ?? null,
                 slug: "primed_flow",
@@ -1024,6 +1025,7 @@ function makeBountyHunterView(): BountyHunterView {
                 expectedPlatinum: 3.3,
               },
               {
+                trackingKey: "worldstate:aya",
                 displayName: "Айя",
                 imageUrl: null,
                 slug: null,
@@ -1036,6 +1038,7 @@ function makeBountyHunterView(): BountyHunterView {
                 expectedPlatinum: null,
               },
               {
+                trackingKey: "worldstate:400 endo",
                 displayName: "400 эндо",
                 imageUrl: null,
                 slug: null,
@@ -1070,6 +1073,7 @@ function makeBountyHunterView(): BountyHunterView {
             priceCoveragePercent: 100,
             rewards: [
               {
+                trackingKey: "market:synth_reflex",
                 displayName: "Синт Рефлекс",
                 imageUrl: null,
                 slug: "synth_reflex",

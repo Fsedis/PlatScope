@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  BOUNTY_AUTO_REFRESH_INTERVAL_MS,
   bestBountyJob,
   bountyAutomaticRefreshAt,
   bountyRotationAt,
@@ -76,16 +75,12 @@ describe("bounty hunter view helpers", () => {
     );
   });
 
-  it("refreshes automatically every minute or at rotation, whichever comes first", () => {
+  it("refreshes automatically only when the nearest rotation changes", () => {
     expect(bountyAutomaticRefreshAt(view)).toBe(
-      new Date(view.fetchedAt).getTime() + BOUNTY_AUTO_REFRESH_INTERVAL_MS,
+      new Date("2026-09-02T12:00:00Z").getTime(),
     );
 
-    const soonRotation: BountyHunterView = {
-      ...view,
-      fetchedAt: "2026-09-02T11:59:30Z",
-    };
-    expect(bountyAutomaticRefreshAt(soonRotation)).toBe(
+    expect(bountyAutomaticRefreshAt({ ...view, fetchedAt: "2026-09-02T11:59:30Z" })).toBe(
       new Date("2026-09-02T12:00:00Z").getTime(),
     );
   });

@@ -4,6 +4,7 @@ import type { AccountView } from "./account";
 import type { InventoryView } from "./inventory";
 import type { PriceRecommendation } from "./market";
 import {
+  applyPriceCheckFailures,
   buildTradeShiftRows,
   filterTradeShiftRows,
   pendingSaleEvents,
@@ -55,6 +56,47 @@ function recommendation(): PriceRecommendation {
 }
 
 describe("торговая смена", () => {
+  it("не выдаёт возраст публикации ордера за возраст проверки цены", () => {
+    const quote = { ...recommendation(), listPrice: 140, fairPrice: 140 };
+    const matchingInventory = {
+      ...inventory,
+      items: [{ ...inventory.items[0], sellableQuantity: 3 }],
+    };
+    const rows = buildTradeShiftRows(
+      account,
+      matchingInventory,
+      new Map([[recommendationIdentity(quote.key), quote]]),
+      new Date("2026-09-04T12:00:00Z"),
+    );
+
+    expect(rows[0].health).toBe("healthy");
+  });
+
+  it("не предлагает менять ордер по цене, которую не удалось проверить", () => {
+    const quote = { ...recommendation(), listPrice: 100, fairPrice: 100 };
+    const matchingInventory = {
+      ...inventory,
+      items: [{ ...inventory.items[0], sellableQuantity: 3 }],
+    };
+    const rows = buildTradeShiftRows(
+      account,
+      matchingInventory,
+      new Map([[recommendationIdentity(quote.key), quote]]),
+    );
+    const failed = applyPriceCheckFailures(
+      rows,
+      new Set([recommendationIdentity(quote.key)]),
+    );
+
+    expect(rows[0].health).toBe("overpriced");
+    expect(failed[0]).toMatchObject({
+      health: "price_check_failed",
+      recommendation: null,
+      suggestedPrice: null,
+      needsAction: false,
+    });
+  });
+
   it("ищет ордера по русскому и английскому названию", () => {
     const rows = buildTradeShiftRows(account, inventory, new Map());
 

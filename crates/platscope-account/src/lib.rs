@@ -1,8 +1,7 @@
 #![forbid(unsafe_code)]
 
 use std::fmt;
-use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use futures_util::StreamExt;
@@ -14,7 +13,6 @@ use zeroize::Zeroizing;
 const V1_BASE_URL: &str = "https://api.warframe.market/v1";
 const V2_BASE_URL: &str = "https://api.warframe.market/v2";
 const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
-const MIN_REQUEST_INTERVAL: Duration = Duration::from_millis(350);
 const MAX_TOKEN_BYTES: usize = 16 * 1024;
 const KEYRING_SERVICE: &str = "PlatScope.WarframeMarket";
 const KEYRING_ACCOUNT: &str = "default-session";
@@ -261,7 +259,6 @@ impl CredentialStore for OsCredentialStore {
 pub struct WfmAccountClient {
     client: Client,
     request_lock: tokio::sync::Mutex<()>,
-    last_request: Mutex<Option<Instant>>,
     v1_base_url: String,
     v2_base_url: String,
 }
@@ -281,7 +278,6 @@ impl WfmAccountClient {
         Ok(Self {
             client,
             request_lock: tokio::sync::Mutex::new(()),
-            last_request: Mutex::new(None),
             v1_base_url: V1_BASE_URL.into(),
             v2_base_url: V2_BASE_URL.into(),
         })
@@ -472,22 +468,8 @@ impl WfmAccountClient {
 
     async fn send(&self, request: reqwest::RequestBuilder) -> Result<Response, AccountError> {
         let _request_guard = self.request_lock.lock().await;
-        let wait = {
-            let last = self
-                .last_request
-                .lock()
-                .map_err(|_| AccountError::State("request clock unavailable".into()))?;
-            last.and_then(|instant| MIN_REQUEST_INTERVAL.checked_sub(instant.elapsed()))
-        };
-        if let Some(wait) = wait {
-            tokio::time::sleep(wait).await;
-        }
+        platscope_wfm::wait_for_request_slot().await;
         let response = request.send().await?;
-        *self
-            .last_request
-            .lock()
-            .map_err(|_| AccountError::State("request clock unavailable".into()))? =
-            Some(Instant::now());
         match response.status() {
             StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => Err(AccountError::Unauthorized),
             StatusCode::TOO_MANY_REQUESTS => Err(AccountError::RateLimited),

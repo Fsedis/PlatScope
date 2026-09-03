@@ -12,6 +12,19 @@
     type BountyRewardView,
     type BountySortKey,
   } from "./bountyHunter";
+  import {
+    publishBountyView,
+    publishBountyWatchlistChange,
+    requestBountyNotificationPermission,
+  } from "./bountyAlerts";
+  import {
+    BOUNTY_VIEW_REFRESHED_EVENT,
+    DEFAULT_BOUNTY_WATCH_PREFERENCES,
+    loadBountyWatchPreferences,
+    saveBountyWatchPreferences,
+    watchedReward,
+    type BountyWatchPreferences,
+  } from "./bountyWatchlist";
   import { localeCode, useLocale } from "./i18n";
   import type { LivePricingResult } from "./market";
 
@@ -34,8 +47,11 @@
   let liveBusyJobId = "";
   let liveMessages = new Map<string, string>();
   let expandedJobIds = new Set<string>();
+  let watchPreferences: BountyWatchPreferences = DEFAULT_BOUNTY_WATCH_PREFERENCES;
+  let watchMessage = "";
 
   $: jobs = rankedBountyJobs(view, { region, onlyPriced, query, sort });
+  $: watchedRewardKeys = new Set(watchPreferences.rewards.map((reward) => reward.key));
   $: bestRow = rankedBountyJobs(view, {
     region: "all",
     onlyPriced: true,
@@ -115,6 +131,7 @@
       retryAt = nextDueAt !== null && nextDueAt <= Date.now()
         ? Date.now() + BOUNTY_AUTO_RETRY_DELAY_MS
         : null;
+      if (nextView) publishBountyView(nextView);
     } catch {
       error = view
         ? "Не удалось обновить заказы. Пока показаны последние данные."
@@ -177,6 +194,60 @@
     expandedJobIds = next;
   }
 
+  async function toggleWatchedReward(reward: BountyRewardView): Promise<void> {
+    const adding = !watchedRewardKeys.has(reward.trackingKey);
+    const rewards = adding
+      ? [...watchPreferences.rewards, watchedReward(reward)]
+      : watchPreferences.rewards.filter((item) => item.key !== reward.trackingKey);
+    watchPreferences = { ...watchPreferences, rewards };
+    if (!saveBountyWatchPreferences(watchPreferences)) {
+      watchMessage = "Не удалось сохранить отмеченные награды.";
+      return;
+    }
+    publishBountyWatchlistChange(view, adding ? [reward.trackingKey] : []);
+    watchMessage = adding
+      ? `«${reward.displayName}» отмечена.`
+      : `«${reward.displayName}» больше не отслеживается.`;
+
+    if (adding && watchPreferences.enabled) {
+      const granted = await requestBountyNotificationPermission();
+      if (!granted) {
+        watchPreferences = { ...watchPreferences, enabled: false };
+        saveBountyWatchPreferences(watchPreferences);
+        publishBountyWatchlistChange(view);
+        watchMessage = "Награда отмечена, но системные уведомления не разрешены.";
+      }
+    }
+  }
+
+  function removeWatchedReward(key: string): void {
+    const reward = watchPreferences.rewards.find((item) => item.key === key);
+    watchPreferences = {
+      ...watchPreferences,
+      rewards: watchPreferences.rewards.filter((item) => item.key !== key),
+    };
+    saveBountyWatchPreferences(watchPreferences);
+    publishBountyWatchlistChange(view);
+    watchMessage = reward ? `«${reward.displayName}» больше не отслеживается.` : "";
+  }
+
+  async function setWatchNotifications(enabled: boolean): Promise<void> {
+    if (enabled && !(await requestBountyNotificationPermission())) {
+      watchPreferences = { ...watchPreferences, enabled: false };
+      saveBountyWatchPreferences(watchPreferences);
+      publishBountyWatchlistChange(view);
+      watchMessage = "Разрешите уведомления для PlatScope в настройках Windows.";
+      return;
+    }
+    watchPreferences = { ...watchPreferences, enabled };
+    saveBountyWatchPreferences(watchPreferences);
+    publishBountyWatchlistChange(
+      view,
+      enabled ? watchPreferences.rewards.map((reward) => reward.key) : [],
+    );
+    watchMessage = enabled ? "Уведомления включены." : "Уведомления выключены.";
+  }
+
   async function checkJobPrices(job: BountyJobView): Promise<void> {
     if (liveBusyJobId) return;
     const rewards = job.rewards.filter((reward) => reward.slug && reward.marketKey);
@@ -221,15 +292,28 @@
   }
 
   onMount(() => {
+    watchPreferences = loadBountyWatchPreferences();
     const timer = window.setInterval(tick, 1000);
     const handleVisibility = () => {
       if (!document.hidden) tick();
     };
+    const handleRefreshedView = (event: Event): void => {
+      const nextView = (event as CustomEvent<BountyHunterView>).detail;
+      if (!nextView) return;
+      view = nextView;
+      error = "";
+      retryAt = null;
+      livePrices = new Map();
+      liveMessages = new Map();
+      nowMs = Date.now();
+    };
     document.addEventListener("visibilitychange", handleVisibility);
+    window.addEventListener(BOUNTY_VIEW_REFRESHED_EVENT, handleRefreshedView);
     void load();
     return () => {
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", handleVisibility);
+      window.removeEventListener(BOUNTY_VIEW_REFRESHED_EVENT, handleRefreshedView);
     };
   });
 </script>
@@ -269,7 +353,7 @@
       </div>
       <div>
         <span>Обновлено в {timeLabel(view.fetchedAt)}</span>
-        <strong>{loading ? "Обновляем сейчас" : `Автообновление через ${countdownLabel(automaticRefreshAt, nowMs)}`}</strong>
+        {#if loading}<strong>Обновляем сейчас</strong>{/if}
       </div>
       <button type="button" class="secondary" disabled={loading} onclick={() => load(true)}>
         {loading ? "Обновляем…" : "Обновить"}
@@ -332,6 +416,42 @@
       </label>
     </section>
 
+    <details class="watchlist">
+      <summary>
+        <span class="watchlist__mark" aria-hidden="true">{watchPreferences.rewards.length > 0 ? "★" : "☆"}</span>
+        <strong>Отмеченные награды</strong>
+        <span>{watchPreferences.rewards.length > 0 ? `${watchPreferences.rewards.length} отслеживается` : "Список пуст"}</span>
+      </summary>
+      <div class="watchlist__body">
+        <div class="watchlist__heading">
+          <p>PlatScope сообщит о новой ротации с этой наградой, пока приложение запущено.</p>
+          <label class="watchlist__toggle">
+            <input
+              type="checkbox"
+              checked={watchPreferences.enabled}
+              disabled={watchPreferences.rewards.length === 0}
+              onchange={(event) => void setWatchNotifications((event.currentTarget as HTMLInputElement).checked)}
+            />
+            <span>Уведомлять</span>
+          </label>
+        </div>
+        {#if watchPreferences.rewards.length === 0}
+          <p class="watchlist__empty">Раскройте заказ и нажмите ☆ рядом с нужной наградой.</p>
+        {:else}
+          <ul class="watchlist__items">
+            {#each watchPreferences.rewards as reward (reward.key)}
+              <li>
+                <span class="watchlist__image">{#if reward.imageUrl}<img src={reward.imageUrl} alt="" loading="lazy" decoding="async" />{:else}★{/if}</span>
+                <strong>{reward.displayName}</strong>
+                <button type="button" class="text-action" onclick={() => removeWatchedReward(reward.key)}>Убрать</button>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+        <p class="watchlist__message" aria-live="polite">{watchMessage}</p>
+      </div>
+    </details>
+
     {#if jobs.length === 0}
       <section class="empty-panel">
         <p class="empty-panel__label">Ничего не найдено</p>
@@ -385,13 +505,24 @@
                     <article class:unpriced={item.marketKey && rewardPrice(item) == null} class:untradeable={!item.marketKey}>
                       <div class="reward-name">
                         <span class="reward-image">{#if item.imageUrl}<img src={item.imageUrl} alt="" loading="lazy" decoding="async" />{:else}◇{/if}</span>
-                        <span><strong>{item.displayName}</strong><small>{item.rarity}</small></span>
+                        <span class="reward-name__copy"><strong>{item.displayName}</strong><small>{item.rarity}</small></span>
+                        <button
+                          type="button"
+                          class="watch-button"
+                          class:active={watchedRewardKeys.has(item.trackingKey)}
+                          aria-pressed={watchedRewardKeys.has(item.trackingKey)}
+                          aria-label={watchedRewardKeys.has(item.trackingKey) ? `Не отслеживать ${item.displayName}` : `Отслеживать ${item.displayName}`}
+                          title={watchedRewardKeys.has(item.trackingKey) ? "Не отслеживать" : "Сообщить при появлении"}
+                          onclick={() => void toggleWatchedReward(item)}
+                        >{watchedRewardKeys.has(item.trackingKey) ? "★" : "☆"}</button>
                       </div>
                       <strong>{percent(item.chancePercent)}</strong>
                       <span>{item.marketKey ? (rewardPrice(item) == null ? "Нет свежей цены" : platinum(rewardPrice(item))) : "Не продаётся"}</span>
                       <span>{rewardContribution(item) == null ? "—" : `≈${platinum(rewardContribution(item))}`}</span>
                       <span>{item.ownedQuantity == null ? "—" : `${item.ownedQuantity} шт.`}</span>
-                      <span>{#if item.slug}<button type="button" class="text-action" onclick={() => openMarket(item)}>На рынок ↗</button>{/if}</span>
+                      <span class="reward-actions">
+                        {#if item.slug}<button type="button" class="text-action" onclick={() => openMarket(item)}>На рынок ↗</button>{/if}
+                      </span>
                     </article>
                   {/each}
                 </div>
@@ -469,6 +600,38 @@
   .priced-toggle input { width: 1rem; height: 1rem; accent-color: var(--accent); }
   .bounty-toolbar .priced-toggle > span { color: var(--text); }
 
+  .watchlist {
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: 0.7rem;
+    background: var(--surface-1);
+  }
+  .watchlist > summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.55rem 0.7rem;
+    cursor: pointer;
+    list-style: none;
+  }
+  .watchlist > summary::-webkit-details-marker { display: none; }
+  .watchlist__mark { color: var(--accent-strong); font-size: 1rem; }
+  .watchlist > summary strong { margin-inline-end: auto; font-size: 0.8rem; }
+  .watchlist > summary span { color: var(--text-muted); font-size: 0.68rem; }
+  .watchlist__body { border-block-start: 1px solid var(--border); padding: 0.6rem 0.7rem; }
+  .watchlist__heading { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; }
+  .watchlist__heading p, .watchlist__empty, .watchlist__message { margin: 0; color: var(--text-muted); font-size: 0.68rem; }
+  .watchlist__toggle { display: flex; align-items: center; gap: 0.35rem; font-size: 0.72rem; font-weight: 750; white-space: nowrap; }
+  .watchlist__toggle input { width: 1rem; height: 1rem; accent-color: var(--accent); }
+  .watchlist__items { display: grid; gap: 1px; margin: 0.55rem 0 0; padding: 0; overflow: hidden; border: 1px solid var(--border); border-radius: 0.5rem; background: var(--border); list-style: none; }
+  .watchlist__items li { display: grid; grid-template-columns: 2rem minmax(0, 1fr) auto; align-items: center; gap: 0.5rem; padding: 0.35rem 0.5rem; background: var(--surface-1); }
+  .watchlist__items strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.74rem; }
+  .watchlist__image { display: grid; width: 2rem; height: 2rem; place-items: center; overflow: hidden; border-radius: 0.35rem; background: var(--surface-2); color: var(--accent-strong); }
+  .watchlist__image img { width: 100%; height: 100%; object-fit: contain; }
+  .watchlist__empty { margin-block-start: 0.45rem; }
+  .watchlist__message { min-height: 1rem; margin-block-start: 0.35rem; color: var(--accent-strong); }
+
   .ranking {
     overflow: hidden;
     border: 1px solid var(--border);
@@ -528,14 +691,17 @@
   .reward-table article { font-size: 0.72rem; }
   .reward-table article.unpriced { background: color-mix(in oklch, var(--accent-soft) 24%, var(--surface-1)); }
   .reward-table article.untradeable { color: var(--text-muted); }
-  .reward-name { display: grid; grid-template-columns: 2rem minmax(0, 1fr); align-items: center; gap: 0.45rem; min-width: 0; }
-  .reward-name > span:last-child { display: grid; min-width: 0; }
+  .reward-name { display: grid; grid-template-columns: 2rem minmax(0, 1fr) auto; align-items: center; gap: 0.45rem; min-width: 0; }
+  .reward-name__copy { display: grid; min-width: 0; }
   .reward-name strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.74rem; }
   .reward-name small { color: var(--text-muted); font-size: 0.62rem; }
   .reward-image { display: grid; width: 2rem; height: 2rem; place-items: center; overflow: hidden; border-radius: 0.35rem; background: var(--surface-2); }
   .reward-image img { width: 100%; height: 100%; object-fit: contain; }
   .text-action { border: 0; padding: 0.15rem; background: transparent; color: var(--accent-strong); font-size: 0.68rem; font-weight: 800; white-space: nowrap; }
   .text-action:hover { text-decoration: underline; }
+  .reward-actions { display: flex; align-items: center; justify-content: flex-end; gap: 0.35rem; }
+  .watch-button { display: grid; width: 1.85rem; height: 1.85rem; place-items: center; border: 1px solid var(--border-strong); border-radius: 0.4rem; padding: 0; background: var(--surface-1); color: var(--text-muted); font-size: 1rem; }
+  .watch-button:hover, .watch-button.active { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-strong); }
 
   .bounty-limit { margin: 0; color: var(--text-muted); font-size: 0.68rem; }
   .bounty-loading { display: grid; gap: 0.55rem; }
@@ -570,5 +736,6 @@
     .best-card > div + div { border-inline-start: 0; border-block-start: 1px solid var(--border); }
     .best-card > div:nth-child(3), .search-field { grid-column: auto; }
     .job-details > header, .refresh-warning { align-items: flex-start; flex-direction: column; }
+    .watchlist__heading { align-items: flex-start; flex-direction: column; }
   }
 </style>

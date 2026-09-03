@@ -16,7 +16,7 @@ export type OrderHealth =
   | "inventory_mismatch"
   | "overpriced"
   | "underpriced"
-  | "stale"
+  | "price_check_failed"
   | "hidden"
   | "healthy"
   | "unknown";
@@ -150,7 +150,7 @@ export function buildTradeShiftRows(
   account: AccountView,
   inventory: InventoryView | null,
   recommendations: ReadonlyMap<string, PriceRecommendation | null>,
-  now = new Date(),
+  _now = new Date(),
 ): TradeShiftRow[] {
   const platform = account.profile?.platform || "pc";
   return account.orders
@@ -162,7 +162,7 @@ export function buildTradeShiftRows(
       const recommendation = key
         ? recommendations.get(recommendationIdentity(key)) ?? null
         : null;
-      const result = evaluateOrder(order, owned, recommendation, Boolean(inventory), now);
+      const result = evaluateOrder(order, owned, recommendation, Boolean(inventory));
       return {
         order,
         item: item ?? null,
@@ -177,6 +177,22 @@ export function buildTradeShiftRows(
       healthPriority(left.health) - healthPriority(right.health)
         || (left.item?.displayName ?? "").localeCompare(right.item?.displayName ?? "", "ru")
     );
+}
+
+export function applyPriceCheckFailures(
+  rows: readonly TradeShiftRow[],
+  failedIdentities: ReadonlySet<string>,
+): TradeShiftRow[] {
+  return rows.map((row) => row.key && failedIdentities.has(recommendationIdentity(row.key))
+    ? {
+        ...row,
+        health: "price_check_failed",
+        recommendation: null,
+        suggestedPrice: null,
+        suggestedQuantity: null,
+        needsAction: false,
+      }
+    : row);
 }
 
 export function updateInput(changes: {
@@ -566,7 +582,6 @@ function evaluateOrder(
   inventory: InventoryViewItem | null,
   recommendation: PriceRecommendation | null,
   inventoryAvailable: boolean,
-  now: Date,
 ): Pick<TradeShiftRow, "health" | "suggestedPrice" | "suggestedQuantity" | "needsAction"> {
   const lotSize = order.perTrade ?? 1;
   const listPrice = recommendation?.listPrice === null || recommendation?.listPrice === undefined
@@ -607,10 +622,6 @@ function evaluateOrder(
   if (!order.visible) {
     return { health: "hidden", suggestedPrice: null, suggestedQuantity: null, needsAction: false };
   }
-  const age = now.getTime() - new Date(order.updatedAt).getTime();
-  if (Number.isFinite(age) && age > 72 * 60 * 60 * 1_000) {
-    return { health: "stale", suggestedPrice: listPrice === null ? null : roundedPrice(listPrice), suggestedQuantity: null, needsAction: true };
-  }
   if (!recommendation || recommendation.listPrice === null) {
     return { health: "unknown", suggestedPrice: null, suggestedQuantity: null, needsAction: false };
   }
@@ -631,7 +642,7 @@ function healthPriority(health: OrderHealth): number {
     inventory_mismatch: 0,
     underpriced: 1,
     overpriced: 2,
-    stale: 3,
+    price_check_failed: 3,
     unknown: 4,
     hidden: 5,
     healthy: 6,

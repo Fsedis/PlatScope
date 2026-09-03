@@ -3792,15 +3792,20 @@ async fn refresh_game_metadata_in_background(app_handle: &AppHandle, state: &App
     }
 }
 
+fn desktop_builder() -> tauri::Builder<tauri::Wry> {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+}
+
 /// Запускает Tauri shell и владеет жизненным циклом desktop-приложения.
 ///
 /// # Panics
 ///
 /// Завершает процесс, если Tauri runtime не может быть создан или запущен.
 pub fn run() {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
+    desktop_builder()
         .register_asynchronous_uri_scheme_protocol(
             COMPONENT_IMAGE_PROTOCOL,
             serve_component_image_protocol,

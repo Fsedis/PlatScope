@@ -9,8 +9,7 @@ use platscope_domain::{
 use reqwest::{Client, StatusCode, header};
 use serde::Deserialize;
 use serde_json::Value;
-use tokio::sync::Mutex;
-use tokio::time::{Instant, sleep};
+use tokio::time::sleep;
 
 use crate::{
     LiveMarketProvider, MetadataProvider, ProviderError, ProviderErrorCode, RawMetadataCatalog,
@@ -20,12 +19,10 @@ use crate::{
 const API_BASE: &str = "https://api.warframe.market/v2";
 const MAX_LIVE_RESPONSE_BYTES: usize = 1024 * 1024;
 const MAX_CATALOG_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
-const MIN_REQUEST_INTERVAL: Duration = Duration::from_millis(350);
 const MAX_ATTEMPTS: u32 = 3;
 
 pub struct WarframeMarketProvider {
     client: Client,
-    last_request: Mutex<Option<Instant>>,
 }
 
 impl WarframeMarketProvider {
@@ -41,21 +38,7 @@ impl WarframeMarketProvider {
             .user_agent("PlatScope/0.1.0 (+local-desktop-app)")
             .build()
             .map_err(|error| map_reqwest_error(&error))?;
-        Ok(Self {
-            client,
-            last_request: Mutex::new(None),
-        })
-    }
-
-    async fn wait_for_rate_limit(&self) {
-        let mut last_request = self.last_request.lock().await;
-        if let Some(previous) = *last_request {
-            let elapsed = previous.elapsed();
-            if let Some(wait) = MIN_REQUEST_INTERVAL.checked_sub(elapsed) {
-                sleep(wait).await;
-            }
-        }
-        *last_request = Some(Instant::now());
+        Ok(Self { client })
     }
 
     async fn fetch_top_body(
@@ -67,7 +50,7 @@ impl WarframeMarketProvider {
         let url = format!("{API_BASE}/orders/item/{}/top", item.slug);
         let query = exact_variant_query(item);
         for attempt in 0..MAX_ATTEMPTS {
-            self.wait_for_rate_limit().await;
+            platscope_wfm::wait_for_request_slot().await;
             let response = self
                 .client
                 .get(&url)
@@ -152,7 +135,7 @@ impl WarframeMarketProvider {
     async fn fetch_catalog_body(&self) -> Result<Vec<u8>, ProviderError> {
         let url = format!("{API_BASE}/items");
         for attempt in 0..MAX_ATTEMPTS {
-            self.wait_for_rate_limit().await;
+            platscope_wfm::wait_for_request_slot().await;
             let response = self
                 .client
                 .get(&url)

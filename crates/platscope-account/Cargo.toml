@@ -9,6 +9,7 @@ rust-version.workspace = true
 chrono.workspace = true
 futures-util.workspace = true
 keyring.workspace = true
+platscope-wfm = { path = "../platscope-wfm" }
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true

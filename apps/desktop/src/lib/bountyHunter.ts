@@ -1,6 +1,7 @@
 import type { MarketVariantKey } from "./market";
 
 export interface BountyRewardView {
+  trackingKey: string;
   displayName: string;
   imageUrl?: string | null;
   slug?: string | null;
@@ -51,7 +52,6 @@ export interface RankedBountyJob {
   job: BountyJobView;
 }
 
-export const BOUNTY_AUTO_REFRESH_INTERVAL_MS = 60 * 1000;
 export const BOUNTY_AUTO_RETRY_DELAY_MS = 30 * 1000;
 
 function validTimestamp(value: string | null | undefined): number | null {
@@ -69,15 +69,7 @@ export function bountyRotationAt(view: BountyHunterView | null): number | null {
 }
 
 export function bountyAutomaticRefreshAt(view: BountyHunterView | null): number | null {
-  if (!view) return null;
-  const fetchedAt = validTimestamp(view.fetchedAt);
-  const periodicRefreshAt = fetchedAt === null
-    ? null
-    : fetchedAt + BOUNTY_AUTO_REFRESH_INTERVAL_MS;
-  const rotationAt = bountyRotationAt(view);
-  if (periodicRefreshAt === null) return rotationAt;
-  if (rotationAt === null) return periodicRefreshAt;
-  return Math.min(periodicRefreshAt, rotationAt);
+  return bountyRotationAt(view);
 }
 
 export function visibleBountyRegions(
