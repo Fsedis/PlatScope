@@ -33,6 +33,7 @@
   let livePrices = new Map<string, number>();
   let liveBusyJobId = "";
   let liveMessages = new Map<string, string>();
+  let expandedJobIds = new Set<string>();
 
   $: jobs = rankedBountyJobs(view, { region, onlyPriced, query, sort });
   $: bestRow = rankedBountyJobs(view, {
@@ -161,6 +162,19 @@
   function coverageLabel(job: BountyJobView): string {
     if (job.marketRewardCount === 0) return "Нет наград для продажи";
     return `Учтено цен: ${job.pricedRewardCount} из ${job.marketRewardCount}`;
+  }
+
+  function jobIdentity(regionKey: string, job: BountyJobView): string {
+    return `${regionKey}|${job.id}`;
+  }
+
+  function handleJobToggle(event: Event, regionKey: string, job: BountyJobView): void {
+    const details = event.currentTarget as HTMLDetailsElement;
+    const identity = jobIdentity(regionKey, job);
+    const next = new Set(expandedJobIds);
+    if (details.open) next.add(identity);
+    else next.delete(identity);
+    expandedJobIds = next;
   }
 
   async function checkJobPrices(job: BountyJobView): Promise<void> {
@@ -331,7 +345,8 @@
         </header>
         {#each jobs as row, index (`${row.regionKey}-${row.job.id}`)}
           {@const reward = topReward(row.job)}
-          <details class="bounty-row">
+          {@const identity = jobIdentity(row.regionKey, row.job)}
+          <details class="bounty-row" ontoggle={(event) => handleJobToggle(event, row.regionKey, row.job)}>
             <summary class="bounty-row__summary">
               <strong class="rank">{index + 1}</strong>
               <div class="job-name">
@@ -340,7 +355,7 @@
               </div>
               <span class="level">{row.job.minLevel}–{row.job.maxLevel}</span>
               <div class="top-reward">
-                <span class="top-reward__image">{#if reward?.imageUrl}<img src={reward.imageUrl} alt="" />{:else}◇{/if}</span>
+                <span class="top-reward__image">{#if reward?.imageUrl}<img src={reward.imageUrl} alt="" loading="lazy" decoding="async" />{:else}◇{/if}</span>
                 <span><strong>{reward?.displayName ?? "Нет рыночной награды"}</strong>{#if reward}<small>шанс {percent(reward.chancePercent)}</small>{/if}</span>
               </div>
               <div class="job-price">
@@ -350,36 +365,38 @@
               <span class="rotation">{countdownLabel(new Date(row.expiry).getTime(), nowMs)}</span>
             </summary>
 
-            <div class="job-details">
-              <header>
-                <div>
-                  <strong>Награды за полный заказ</strong>
-                  <span>Шанс учитывает все этапы; платина — среднее за много прохождений.</span>
+            {#if expandedJobIds.has(identity)}
+              <div class="job-details">
+                <header>
+                  <div>
+                    <strong>Награды за полный заказ</strong>
+                    <span>Шанс учитывает все этапы; платина — среднее за много прохождений.</span>
+                  </div>
+                  <button type="button" class="secondary" disabled={Boolean(liveBusyJobId)} onclick={() => checkJobPrices(row.job)}>
+                    {liveBusyJobId === row.job.id ? "Проверяем…" : "Проверить цены сейчас"}
+                  </button>
+                </header>
+                {#if liveMessages.has(row.job.id)}
+                  <p class="live-message">{liveMessages.get(row.job.id)}</p>
+                {/if}
+                <div class="reward-table">
+                  <div class="reward-table__head"><span>Награда</span><span>Шанс</span><span>Цена</span><span>В среднем</span><span>В инвентаре</span><span></span></div>
+                  {#each row.job.rewards as item (`${row.job.id}-${item.displayName}`)}
+                    <article class:unpriced={item.marketKey && rewardPrice(item) == null} class:untradeable={!item.marketKey}>
+                      <div class="reward-name">
+                        <span class="reward-image">{#if item.imageUrl}<img src={item.imageUrl} alt="" loading="lazy" decoding="async" />{:else}◇{/if}</span>
+                        <span><strong>{item.displayName}</strong><small>{item.rarity}</small></span>
+                      </div>
+                      <strong>{percent(item.chancePercent)}</strong>
+                      <span>{item.marketKey ? (rewardPrice(item) == null ? "Нет свежей цены" : platinum(rewardPrice(item))) : "Не продаётся"}</span>
+                      <span>{rewardContribution(item) == null ? "—" : `≈${platinum(rewardContribution(item))}`}</span>
+                      <span>{item.ownedQuantity == null ? "—" : `${item.ownedQuantity} шт.`}</span>
+                      <span>{#if item.slug}<button type="button" class="text-action" onclick={() => openMarket(item)}>На рынок ↗</button>{/if}</span>
+                    </article>
+                  {/each}
                 </div>
-                <button type="button" class="secondary" disabled={Boolean(liveBusyJobId)} onclick={() => checkJobPrices(row.job)}>
-                  {liveBusyJobId === row.job.id ? "Проверяем…" : "Проверить цены сейчас"}
-                </button>
-              </header>
-              {#if liveMessages.has(row.job.id)}
-                <p class="live-message">{liveMessages.get(row.job.id)}</p>
-              {/if}
-              <div class="reward-table">
-                <div class="reward-table__head"><span>Награда</span><span>Шанс</span><span>Цена</span><span>В среднем</span><span>В инвентаре</span><span></span></div>
-                {#each row.job.rewards as item (`${row.job.id}-${item.displayName}`)}
-                  <article class:unpriced={item.marketKey && rewardPrice(item) == null} class:untradeable={!item.marketKey}>
-                    <div class="reward-name">
-                      <span class="reward-image">{#if item.imageUrl}<img src={item.imageUrl} alt="" />{:else}◇{/if}</span>
-                      <span><strong>{item.displayName}</strong><small>{item.rarity}</small></span>
-                    </div>
-                    <strong>{percent(item.chancePercent)}</strong>
-                    <span>{item.marketKey ? (rewardPrice(item) == null ? "Нет свежей цены" : platinum(rewardPrice(item))) : "Не продаётся"}</span>
-                    <span>{rewardContribution(item) == null ? "—" : `≈${platinum(rewardContribution(item))}`}</span>
-                    <span>{item.ownedQuantity == null ? "—" : `${item.ownedQuantity} шт.`}</span>
-                    <span>{#if item.slug}<button type="button" class="text-action" onclick={() => openMarket(item)}>На рынок ↗</button>{/if}</span>
-                  </article>
-                {/each}
               </div>
-            </div>
+            {/if}
           </details>
         {/each}
       </section>
