@@ -331,7 +331,7 @@
         </header>
         {#each jobs as row, index (`${row.regionKey}-${row.job.id}`)}
           {@const reward = topReward(row.job)}
-          <details class="bounty-row" open={index === 0 && !query}>
+          <details class="bounty-row">
             <summary class="bounty-row__summary">
               <strong class="rank">{index + 1}</strong>
               <div class="job-name">
