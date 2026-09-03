@@ -445,7 +445,6 @@
   async function reloadAccount(): Promise<void> {
     try {
       account = await invoke<AccountView>("account_status");
-      recommendations = new Map();
       await loadSavedPrices();
     } catch (error) {
       errorMessage = accountActionErrorMessage(String(error));
