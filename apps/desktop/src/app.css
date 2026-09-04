@@ -10,7 +10,7 @@
   --border-strong: oklch(0.68 0.045 66);
   --text: oklch(0.255 0.025 55);
   --text-muted: oklch(0.44 0.025 58);
-  --text-subtle: oklch(0.55 0.025 62);
+  --text-subtle: oklch(0.50 0.025 62);
   --accent: oklch(0.48 0.105 48);
   --accent-strong: oklch(0.39 0.09 45);
   --accent-soft: oklch(0.91 0.05 67);
@@ -200,7 +200,7 @@ summary:focus-visible,
 .app-brand__copy small {
   margin-block-start: 0.12rem;
   color: var(--text-subtle);
-  font-size: 0.68rem;
+  font-size: .68rem;
   font-weight: 700;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -348,14 +348,14 @@ h3 {
 
 .sidebar-status strong {
   color: var(--text-muted);
-  font-size: 0.65rem;
+  font-size: .75rem;
   letter-spacing: 0.06em;
 }
 
 .sidebar-status small {
   margin-block-start: 0.12rem;
   color: var(--text-subtle);
-  font-size: 0.65rem;
+  font-size: .75rem;
 }
 
 .live-region {
@@ -541,7 +541,7 @@ kbd {
   background: var(--surface-3);
   color: var(--text);
   font-family: inherit;
-  font-size: 0.6875rem;
+  font-size: .75rem;
 }
 
 select {
@@ -617,16 +617,16 @@ td {
   vertical-align: middle;
 }
 
-th:first-child {
+.market-table th:first-child {
   width: 46%;
 }
 
-th:nth-child(2),
-th:nth-child(3) {
+.market-table th:nth-child(2),
+.market-table th:nth-child(3) {
   width: 16%;
 }
 
-th:nth-child(4) {
+.market-table th:nth-child(4) {
   width: 22%;
 }
 
@@ -636,7 +636,7 @@ thead {
 
 th {
   color: #8298a2;
-  font-size: 0.6875rem;
+  font-size: .75rem;
   font-weight: 700;
   letter-spacing: 0.045em;
   text-transform: uppercase;
@@ -724,7 +724,7 @@ td {
 .item-button small {
   margin-block-start: 0.15rem;
   color: #7f949e;
-  font-size: 0.6875rem;
+  font-size: .75rem;
   font-weight: 450;
 }
 
@@ -746,7 +746,7 @@ td {
   min-height: 1.25rem;
   border-radius: 999px;
   padding-inline: 0.35rem;
-  font-size: 0.6875rem;
+  font-size: .75rem;
   font-weight: 700;
   white-space: nowrap;
 }
@@ -840,7 +840,7 @@ td {
   display: grid;
   gap: 0.25rem;
   color: #82969f;
-  font-size: 0.6875rem;
+  font-size: .75rem;
   line-height: 1.45;
 }
 
@@ -880,7 +880,7 @@ td {
 .detail-meta span,
 .diagnostics dt {
   color: #81959e;
-  font-size: 0.6875rem;
+  font-size: .75rem;
 }
 
 .price-grid dd {
@@ -916,7 +916,7 @@ td {
 .live-orders table {
   min-width: 22rem;
   table-layout: auto;
-  font-size: 0.72rem;
+  font-size: .75rem;
 }
 
 .live-orders th,
@@ -930,7 +930,7 @@ td {
 .order-side {
   border-radius: 999px;
   padding: 0.2rem 0.45rem;
-  font-size: 0.67rem;
+  font-size: .75rem;
   font-weight: 750;
 }
 
@@ -1037,7 +1037,7 @@ td {
 .history-empty {
   margin-block: 0.65rem;
   color: #82969f;
-  font-size: 0.6875rem;
+  font-size: .75rem;
   line-height: 1.45;
 }
 
@@ -1060,7 +1060,7 @@ td {
 
 .trend-grid dt {
   color: #81959e;
-  font-size: 0.6875rem;
+  font-size: .75rem;
 }
 
 .trend-grid dd {
@@ -1201,7 +1201,7 @@ td {
 .inventory-command-bar__status span,
 .inventory-reserve-control > span {
   color: var(--text-muted);
-  font-size: 0.72rem;
+  font-size: .75rem;
 }
 
 .inventory-reserve-control {
@@ -1214,9 +1214,9 @@ td {
 }
 
 .sell-summary dl {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0.45rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.5rem;
   margin: 0;
 }
 
@@ -1279,6 +1279,27 @@ td {
   color: #748993;
 }
 
+.detail-back { display: none; }
+.live-region:empty { display: none; }
+.sell-table td { font-size: .875rem; }
+.sell-table .item-button { font-size: .875rem; }
+.sell-table .item-button__copy small { font-size: .75rem; }
+.sell-table .stacked-cell > strong { font-size: .8125rem; }
+.sell-table .stacked-cell > span { font-size: .75rem; }
+.list-sort { display: flex; align-items: center; gap: .4rem; min-width: 0; }
+.list-sort label { font-size: .8rem; color: var(--text-muted); }
+.list-sort select { max-width: 13rem; min-width: 0; padding: .35rem; color: var(--text); background: var(--surface-1); border: 1px solid var(--border); border-radius: .4rem; }
+.list-sort button { padding: .3rem .65rem; flex: 0 0 auto; }
+.sell-table .item-button__copy > span { white-space: normal; overflow: visible; overflow-wrap: anywhere; }
+.sell-table .timing-pill { white-space: normal; border-radius: .4rem; }
+.sell-results .panel-heading { flex-wrap: wrap; }
+@media (max-width: 65rem) { .inventory-back { display: block; } }
+@media (max-width: 46rem) {
+  .market-back { display: block; }
+  .sell-table thead { display: none; }
+  .sell-results .list-sort { width: 100%; }
+}
+
 .sell-now-layout {
   display: grid;
   grid-template-columns: minmax(0, 2fr) minmax(19rem, 0.72fr);
@@ -1291,23 +1312,23 @@ td {
 }
 
 .sell-table th:first-child {
-  width: 19%;
+  width: 32%;
 }
 
 .sell-table th:nth-child(2) {
-  width: 11%;
-}
-
-.sell-table th:nth-child(3) {
   width: 15%;
 }
 
+.sell-table th:nth-child(3) {
+  width: 16%;
+}
+
 .sell-table th:nth-child(4) {
-  width: 12%;
+  width: 17%;
 }
 
 .sell-table th:nth-child(5) {
-  width: 16%;
+  width: 20%;
 }
 
 .sell-table th:nth-child(6) {
@@ -1335,7 +1356,7 @@ td {
 
 .stacked-cell > span {
   color: #9eb0b7;
-  font-size: 0.6875rem;
+  font-size: .75rem;
 }
 
 .stacked-cell > strong {
@@ -1350,7 +1371,7 @@ td {
   width: fit-content;
   border-radius: 999px;
   padding-inline: 0.35rem;
-  font-size: 0.6875rem;
+  font-size: .75rem;
   font-weight: 750;
   white-space: nowrap;
 }
@@ -1389,7 +1410,7 @@ td {
 
 .priority small {
   color: inherit;
-  font-size: 0.625rem;
+  font-size: .75rem;
   font-weight: 650;
 }
 
@@ -1445,7 +1466,7 @@ td {
   padding: 0.2rem 0.5rem;
   background: var(--accent-soft);
   color: var(--accent-strong);
-  font-size: 0.7rem;
+  font-size: .75rem;
   font-weight: 700;
 }
 
@@ -1808,7 +1829,7 @@ td,
   width: fit-content;
   min-height: 1.35rem;
   padding-inline: 0.4rem;
-  font-size: 0.6875rem;
+  font-size: .75rem;
   line-height: 1.2;
 }
 
@@ -1942,7 +1963,7 @@ td,
   .section-tabs button span {
     max-width: 100%;
     overflow: hidden;
-    font-size: 0.65rem;
+    font-size: .75rem;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -1952,7 +1973,7 @@ td,
   }
 }
 
-@media (max-width: 78rem) {
+@media (max-width: 58rem) {
   .sell-toolbar {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
@@ -1965,11 +1986,6 @@ td,
 @media (max-width: 65rem) {
   .market-layout {
     grid-template-columns: minmax(0, 1fr) minmax(18rem, 0.7fr);
-  }
-
-  th:nth-child(5),
-  td:nth-child(5) {
-    display: none;
   }
 
   .sell-now-layout {
@@ -2142,7 +2158,7 @@ td,
   td::before {
     content: attr(data-label);
     color: #758b95;
-    font-size: 0.6875rem;
+    font-size: .75rem;
     font-weight: 500;
     text-align: start;
   }
@@ -2231,7 +2247,7 @@ td,
 
 .equipped-overview dt {
   color: var(--text-muted);
-  font-size: 0.72rem;
+  font-size: .75rem;
 }
 
 .equipped-overview dd {
@@ -2289,7 +2305,7 @@ td,
 
 .equipped-master > header span {
   color: var(--text-muted);
-  font-size: 0.68rem;
+  font-size: .75rem;
 }
 
 .equipped-master ul,
@@ -2388,7 +2404,7 @@ td,
 .equipped-mod-copy small,
 .equipped-mod-count {
   color: var(--text-muted);
-  font-size: 0.66rem;
+  font-size: .75rem;
   line-height: 1.35;
 }
 
@@ -2424,7 +2440,7 @@ td,
 .equipped-detail__header > div > span,
 .equipped-location__image + div small {
   color: var(--text-muted);
-  font-size: 0.68rem;
+  font-size: .75rem;
 }
 
 .equipped-detail__header h2 {
@@ -2436,7 +2452,7 @@ td,
 .equipped-detail__header p {
   margin: 0;
   color: var(--text-muted);
-  font-size: 0.72rem;
+  font-size: .75rem;
 }
 
 .equipped-detail__header > strong {
@@ -2444,7 +2460,7 @@ td,
   padding: 0.25rem 0.5rem;
   background: var(--success-soft);
   color: var(--success);
-  font-size: 0.7rem;
+  font-size: .75rem;
   white-space: nowrap;
 }
 
@@ -2507,7 +2523,7 @@ td,
   padding: 0.2rem 0.4rem;
   background: var(--accent-soft);
   color: var(--accent-strong);
-  font-size: 0.66rem;
+  font-size: .75rem;
   font-weight: 700;
   white-space: nowrap;
 }
@@ -2535,7 +2551,7 @@ td,
 .equipped-readonly {
   margin: 0.7rem 0 0;
   color: var(--text-muted);
-  font-size: 0.72rem;
+  font-size: .75rem;
 }
 
 @media (max-width: 50rem) {

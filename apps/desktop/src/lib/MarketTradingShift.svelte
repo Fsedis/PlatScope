@@ -1,7 +1,8 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
+  import { checkedLivePrice } from "./livePriceCheck";
 
   import {
     accountActionErrorMessage,
@@ -64,6 +65,32 @@
   let manualReviewOpen = false;
   let orderToRemove: AccountOrder | null = null;
   let orderQuery = "";
+  let editorHeading: HTMLHeadingElement;
+  let batchHeading: HTMLHeadingElement;
+  let manualHeading: HTMLHeadingElement;
+  let removeHeading: HTMLHeadingElement;
+  let editorTrigger: HTMLElement | null = null;
+  let batchTrigger: HTMLElement | null = null;
+
+  function reveal(element: HTMLElement | undefined): void {
+    element?.scrollIntoView({ block: "center" });
+    element?.focus({ preventScroll: true });
+  }
+
+  $: if (reviewOpen) void tick().then(() => reveal(batchHeading));
+  $: if (manualReviewOpen) void tick().then(() => reveal(manualHeading));
+  $: if (orderToRemove) void tick().then(() => reveal(removeHeading));
+
+  function closeEditor(): void {
+    editingOrder = null;
+    manualReviewOpen = false;
+    reveal(editorTrigger ?? undefined);
+  }
+
+  function closeBatchReview(): void {
+    reviewOpen = false;
+    reveal(batchTrigger ?? undefined);
+  }
 
   $: rows = account
     ? applyPriceCheckFailures(
@@ -105,7 +132,6 @@
   async function loadAll(): Promise<void> {
     loading = true;
     errorMessage = "";
-    failedPriceChecks = new Set();
     actionMessage = "";
     try {
       const [nextAccount, nextInventory, nextEvents, nextTradeSales] = await Promise.all([
@@ -177,7 +203,8 @@
       && source.findIndex((candidate) => candidate.key
         && recommendationIdentity(candidate.key) === recommendationIdentity(row.key!)) === index);
     const next = new Map(recommendations);
-    const failures = new Set<string>();
+    const candidateKeys = new Set(candidates.map((row) => recommendationIdentity(row.key!)));
+    const failures = new Set([...failedPriceChecks].filter((key) => candidateKeys.has(key)));
     let checked = 0;
     let rateLimited = false;
     for (let index = 0; index < candidates.length; index += 1) {
@@ -189,6 +216,8 @@
           key: row.key,
           itemKind: row.itemKind,
         });
+        if (checkedLivePrice(result).state === "failed") throw new Error("stale price fallback");
+        if (row.key) failures.delete(recommendationIdentity(row.key));
         if (row.key) next.set(recommendationIdentity(row.key), result?.recommendation ?? null);
         checked += 1;
       } catch (error) {
@@ -281,12 +310,15 @@
   }
 
   function beginManualEdit(row: TradeShiftRow): void {
+    editorTrigger = document.activeElement as HTMLElement | null;
     editingOrder = row.order;
     editPlatinum = row.order.platinum;
     editQuantity = row.order.quantity;
     editVisible = row.order.visible;
     editError = "";
     manualReviewOpen = false;
+    reviewOpen = false;
+    void tick().then(() => reveal(editorHeading));
   }
 
   function reviewManualEdit(event: SubmitEvent): void {
@@ -523,7 +555,7 @@
     return ({
       inventory_mismatch: "Количество не сходится",
       overpriced: "Цена выше рынка",
-      underpriced: "Можно не сливать",
+      underpriced: "Можно повысить цену",
         price_check_failed: "Не удалось проверить цену",
       hidden: "Скрыт",
       healthy: "В порядке",
@@ -738,7 +770,7 @@
           <input id="order-search" type="search" bind:value={orderQuery} maxlength="80" autocomplete="off" spellcheck="false" placeholder="Например, Рино Прайм или Rhino Prime" aria-describedby="orders-result-count" disabled={!rows.length} />
         </label>
         <div class="orders-toolbar__actions">
-          <button class="compact" type="button" disabled={!selectedRows.length || applying} onclick={() => (reviewOpen = true)}>Посмотреть изменения ({selectedRows.length})</button>
+          <button class="compact" type="button" disabled={!selectedRows.length || applying} onclick={(event) => { batchTrigger = event.currentTarget; reviewOpen = true; }}>Посмотреть изменения ({selectedRows.length})</button>
         </div>
       </header>
 
@@ -767,15 +799,16 @@
                       </span>
                     </span>
                   </th>
-                  <td><strong>{formatPlatinum(row.order.platinum)}</strong><small>×{row.order.quantity}</small></td>
-                  <td>
+                  <td data-label="В ордере"><strong>{formatPlatinum(row.order.platinum)}</strong><small>×{row.order.quantity}</small></td>
+                  <td data-label="Рекомендуется">
                     {#if row.suggestedPrice !== null && row.suggestedPrice !== row.order.platinum}
                       <strong class="suggestion">{formatPlatinum(row.suggestedPrice)}</strong>
                     {:else}
                       <span>{formatPlatinum(row.recommendation?.listPrice ?? null)}</span>
                     {/if}
+                    {#if row.priceCheckFailed}<small class="price-check-error">Цена не проверена</small>{/if}
                   </td>
-                  <td>
+                  <td data-label="Можно продать">
                     {#if inventory}
                       <strong class:mismatch={row.inventory && row.order.quantity > row.inventory.sellableQuantity}>{row.inventory?.sellableQuantity ?? 0}</strong>
                     {:else}
@@ -797,8 +830,8 @@
       {#if editingOrder}
         <form class="order-editor" aria-labelledby="order-editor-heading" onsubmit={reviewManualEdit}>
           <div class="order-editor__heading">
-            <div><h3 id="order-editor-heading">Изменить ордер</h3><p>{manualOrderName(editingOrder)}</p></div>
-            <button class="text-button compact" type="button" onclick={() => { editingOrder = null; manualReviewOpen = false; }}>Закрыть</button>
+            <div><h3 id="order-editor-heading" tabindex="-1" bind:this={editorHeading}>Изменить ордер</h3><p>{manualOrderName(editingOrder)}</p></div>
+            <button class="text-button compact" type="button" onclick={closeEditor}>Закрыть</button>
           </div>
           <div class="order-editor__fields">
             <label>Цена, платина<input type="number" inputmode="numeric" bind:value={editPlatinum} min="1" max="900000" step="1" required /></label>
@@ -812,7 +845,7 @@
 
       {#if manualReviewOpen && editingOrder}
         <section class="confirm-panel" aria-labelledby="manual-review-heading">
-          <h3 id="manual-review-heading">Сохранить изменения?</h3>
+          <h3 id="manual-review-heading" tabindex="-1" bind:this={manualHeading}>Сохранить изменения?</h3>
           <p><strong>{manualOrderName(editingOrder)}</strong>: {editingOrder.platinum}p → {editPlatinum}p, {editingOrder.quantity} → {editQuantity} шт., {editVisible ? "показывать покупателям" : "скрыть от покупателей"}.</p>
           <div class="confirm-actions"><button type="button" disabled={applying} onclick={applyManualEdit}>Сохранить</button><button class="secondary" type="button" disabled={applying} onclick={() => (manualReviewOpen = false)}>Вернуться</button></div>
         </section>
@@ -820,7 +853,7 @@
 
       {#if orderToRemove}
         <section class="confirm-panel confirm-panel--danger" aria-labelledby="remove-order-heading">
-          <h3 id="remove-order-heading">Снять ордер?</h3>
+          <h3 id="remove-order-heading" tabindex="-1" bind:this={removeHeading}>Снять ордер?</h3>
           <p>«{manualOrderName(orderToRemove)}» исчезнет с Warframe Market. Вернуть ордер можно будет только новой публикацией.</p>
           <div class="confirm-actions"><button class="danger-primary" type="button" disabled={applying} onclick={removeManualOrder}>Снять ордер</button><button class="secondary" type="button" disabled={applying} onclick={() => (orderToRemove = null)}>Отмена</button></div>
         </section>
@@ -828,7 +861,7 @@
 
       {#if reviewOpen}
         <section class="confirm-panel" aria-labelledby="batch-heading">
-          <h3 id="batch-heading">Проверьте изменения перед отправкой</h3>
+          <h3 id="batch-heading" tabindex="-1" bind:this={batchHeading}>Проверьте изменения перед отправкой</h3>
           <ul>
             {#each selectedRows as row}
               {@const change = rowChange(row)}
@@ -836,7 +869,7 @@
             {/each}
           </ul>
           <p>PlatScope отправит только перечисленные изменения и остановится при первой ошибке.</p>
-          <div class="confirm-actions"><button type="button" disabled={applying} onclick={applySelectedChanges}>Применить ({selectedRows.length})</button><button class="secondary" type="button" disabled={applying} onclick={() => (reviewOpen = false)}>Отмена</button></div>
+          <div class="confirm-actions"><button type="button" disabled={applying} onclick={applySelectedChanges}>Применить ({selectedRows.length})</button><button class="secondary" type="button" disabled={applying} onclick={closeBatchReview}>Отмена</button></div>
           {#if applyProgress}<span class="status-line">{applyProgress}</span>{/if}
         </section>
       {/if}
@@ -898,22 +931,22 @@
   .sales-header h2 { margin-bottom: .12rem; font-size: 1.08rem; }
   .sales-header p { max-width: 65ch; margin: 0; color: var(--text-muted); font-size: .76rem; }
   .sales-header__actions, .account-panel__actions, .orders-toolbar__actions, .confirm-actions, .trade-event__actions, .management-panel__actions { display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; }
-  button.compact { min-height: 1.8rem; padding: .22rem .5rem; font-size: .75rem; }
-  .status-line { min-height: .9rem; padding: 0 .1rem; color: var(--text-muted); font-size: .7rem; }
+  button.compact { min-height: 2rem; padding: .3rem .6rem; font-size: .8125rem; }
+  .status-line { min-height: .9rem; padding: 0 .1rem; color: var(--text-muted); font-size: .75rem; }
   .status-line:empty { display: none; }
   .inline-error { margin: 0; border-radius: .45rem; padding: .5rem .6rem; background: var(--danger-soft); color: var(--danger); font-size: .75rem; font-weight: 650; }
   .account-panel { display: flex; align-items: center; justify-content: space-between; gap: .8rem; border: 1px solid var(--border); border-radius: .55rem; padding: .55rem .65rem; background: var(--surface-2); }
   .account-panel h3, .account-panel p { margin: 0; }
   .account-panel h3 { font-size: .82rem; }
-  .account-panel p { margin-block-start: .1rem; color: var(--text-muted); font-size: .68rem; }
+  .account-panel p { margin-block-start: .1rem; color: var(--text-muted); font-size: .75rem; }
   .connect-panel { display: grid; justify-items: start; gap: .65rem; border: 1px solid var(--border); border-radius: .6rem; padding: .8rem; background: var(--surface-1); box-shadow: var(--shadow-sm); }
   .connect-panel__copy h3, .connect-panel__copy p { margin: 0; }
   .connect-panel__copy h3 { font-size: .92rem; }
-  .connect-panel__copy p { margin-block-start: .12rem; color: var(--text-muted); font-size: .74rem; }
+  .connect-panel__copy p { margin-block-start: .12rem; color: var(--text-muted); font-size: .75rem; }
   .connect-fields { display: grid; grid-template-columns: repeat(2, minmax(12rem, 1fr)); gap: .6rem; width: min(100%, 38rem); }
-  .connect-fields label { display: grid; gap: .22rem; color: var(--text-muted); font-size: .68rem; font-weight: 700; }
+  .connect-fields label { display: grid; gap: .22rem; color: var(--text-muted); font-size: .75rem; font-weight: 700; }
   .connect-fields input { min-width: 0; min-height: 2.1rem; width: 100%; border: 1px solid var(--border); border-radius: .45rem; padding: .35rem .55rem; background: oklch(0.995 0.004 84); color: var(--text); }
-  .security-details { width: min(100%, 38rem); color: var(--text-muted); font-size: .7rem; }
+  .security-details { width: min(100%, 38rem); color: var(--text-muted); font-size: .75rem; }
   .security-details summary { cursor: pointer; font-weight: 700; }
   .security-details p { margin: .4rem 0 0; line-height: 1.45; }
   .sales-empty { margin: 0; border: 1px solid var(--border); border-radius: .6rem; padding: .85rem; background: var(--surface-1); color: var(--text-muted); font-size: .78rem; }
@@ -923,28 +956,28 @@
   .sales-summary { display: grid; grid-template-columns: repeat(3, minmax(8rem, 1fr)); margin: 0; border: 1px solid var(--border); border-radius: .6rem; background: var(--surface-1); box-shadow: var(--shadow-sm); overflow: clip; }
   .sales-summary div { min-width: 0; padding: .55rem .7rem; border-inline-end: 1px solid var(--border); }
   .sales-summary div:last-child { border-inline-end: 0; }
-  .sales-summary dt { color: var(--text-muted); font-size: .65rem; }
+  .sales-summary dt { color: var(--text-muted); font-size: .75rem; }
   .sales-summary dd { margin: .08rem 0 0; font-size: 1rem; font-weight: 800; font-variant-numeric: tabular-nums; }
-  .sales-summary dd small { color: var(--text-muted); font-size: .65rem; font-weight: 600; }
+  .sales-summary dd small { color: var(--text-muted); font-size: .75rem; font-weight: 600; }
   .sales-summary .attention dd { color: var(--danger); }
-  .verification-note { display: flex; align-items: center; justify-content: space-between; gap: .6rem; border: 1px solid color-mix(in oklch, var(--gold), var(--border) 55%); border-radius: .5rem; padding: .45rem .6rem; background: var(--accent-soft); color: var(--accent-strong); font-size: .7rem; font-weight: 650; }
+  .verification-note { display: flex; align-items: center; justify-content: space-between; gap: .6rem; border: 1px solid color-mix(in oklch, var(--gold), var(--border) 55%); border-radius: .5rem; padding: .45rem .6rem; background: var(--accent-soft); color: var(--accent-strong); font-size: .75rem; font-weight: 650; }
   .priority-panel, .orders-panel { border: 1px solid var(--border); border-radius: .6rem; background: var(--surface-1); box-shadow: var(--shadow-sm); overflow: clip; }
   .priority-panel { border-color: color-mix(in oklch, var(--gold), var(--border) 55%); }
   .section-heading, .orders-toolbar { gap: .75rem; padding: .55rem .7rem; background: var(--surface-2); }
   .section-heading { display: flex; align-items: center; justify-content: space-between; }
   .orders-toolbar { display: grid; grid-template-columns: minmax(9rem, .35fr) minmax(15rem, 1fr) auto; align-items: end; }
   .section-heading h3, .orders-toolbar h3 { margin: 0; font-size: .9rem; }
-  .section-kicker { margin: 0 0 .05rem; color: var(--accent-strong); font-size: .61rem; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; }
-  .count-badge { min-width: 1.55rem; border-radius: 999px; padding: .16rem .42rem; background: var(--accent); color: var(--surface-1); font-size: .68rem; font-weight: 800; text-align: center; }
-  .section-hint { margin: 0; border-block-start: 1px solid var(--border); padding: .45rem .7rem; color: var(--text-muted); font-size: .7rem; }
-  .orders-toolbar > div:first-child span { color: var(--text-muted); font-size: .68rem; }
-  .order-search { display: grid; gap: .18rem; min-width: 0; color: var(--text-muted); font-size: .66rem; font-weight: 700; }
+  .section-kicker { margin: 0 0 .05rem; color: var(--accent-strong); font-size: .75rem; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; }
+  .count-badge { min-width: 1.55rem; border-radius: 999px; padding: .16rem .42rem; background: var(--accent); color: var(--surface-1); font-size: .75rem; font-weight: 800; text-align: center; }
+  .section-hint { margin: 0; border-block-start: 1px solid var(--border); padding: .45rem .7rem; color: var(--text-muted); font-size: .75rem; }
+  .orders-toolbar > div:first-child span { color: var(--text-muted); font-size: .75rem; }
+  .order-search { display: grid; gap: .18rem; min-width: 0; color: var(--text-muted); font-size: .75rem; font-weight: 700; }
   .order-search input { min-width: 0; min-height: 1.8rem; width: 100%; border: 1px solid var(--border); border-radius: .45rem; padding: .28rem .5rem; background: var(--surface-1); color: var(--text); font-size: .75rem; }
   .orders-toolbar__actions { justify-content: flex-end; }
-  .compact-check { display: inline-flex; align-items: center; gap: .35rem; min-height: 1.8rem; font-size: .72rem; font-weight: 650; }
+  .compact-check { display: inline-flex; align-items: center; gap: .35rem; min-height: 1.8rem; font-size: .75rem; font-weight: 650; }
   .compact-check input, .shift-table input { width: 1rem; height: 1rem; accent-color: var(--accent); }
   .shift-table-wrap { max-height: 26rem; overflow: auto; border-top: 1px solid var(--border); }
-  .shift-table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: .75rem; }
+  .shift-table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: .875rem; }
   .shift-table .col-check { width: 2.2rem; }
   .shift-table .col-item { width: 31%; }
   .shift-table .col-order { width: 12%; }
@@ -953,40 +986,40 @@
   .shift-table .col-status { width: 24%; }
   .shift-table th, .shift-table td { border-bottom: 1px solid var(--border); padding: .42rem .55rem; text-align: start; vertical-align: middle; }
   .shift-table th:nth-child(5), .shift-table td:nth-child(5) { display: table-cell; }
-  .shift-table thead th { position: sticky; top: 0; z-index: 1; background: var(--surface-2); color: var(--text-muted); font-size: .61rem; letter-spacing: .04em; text-transform: uppercase; }
+  .shift-table thead th { position: sticky; top: 0; z-index: 1; background: var(--surface-2); color: var(--text-muted); font-size: .75rem; font-weight: 650; }
   .shift-table tbody tr:hover { background: var(--surface-hover); }
   .shift-table td strong, .shift-table td small { display: block; font-variant-numeric: tabular-nums; }
-  .shift-table td small { margin-top: .08rem; color: var(--text-subtle); font-size: .64rem; }
+  .shift-table td small { margin-top: .15rem; color: var(--text-muted); font-size: .75rem; }
   .item-cell { display: flex; align-items: center; gap: .45rem; min-width: 0; }
   .item-cell > span { min-width: 0; }
   .item-cell img { width: 2rem; height: 2rem; border: 1px solid var(--border); border-radius: .35rem; object-fit: contain; background: var(--surface-2); }
   .item-cell strong, .item-cell small { display: block; }
   .item-cell strong { display: -webkit-box; overflow: hidden; line-height: 1.2; text-transform: none; letter-spacing: 0; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; }
-  .item-cell .item-name-en { display: block; margin-block-start: .08rem; overflow: hidden; color: var(--text-muted); font-size: .66rem; font-weight: 600; line-height: 1.2; text-overflow: ellipsis; text-transform: none; white-space: nowrap; }
-  .item-cell small { margin-top: .1rem; color: var(--text-subtle); font-size: .64rem; font-weight: 500; }
+  .item-cell .item-name-en { display: block; margin-block-start: .08rem; overflow: hidden; color: var(--text-muted); font-size: .75rem; font-weight: 600; line-height: 1.2; text-overflow: ellipsis; text-transform: none; white-space: nowrap; }
+  .item-cell small { margin-top: .1rem; color: var(--text-subtle); font-size: .75rem; font-weight: 500; }
   .suggestion { color: var(--success); }
   .mismatch { color: var(--danger); }
-  .health { display: inline-flex; border: 1px solid var(--border); border-radius: 999px; padding: .16rem .42rem; background: var(--surface-2); font-size: .64rem; font-weight: 750; white-space: nowrap; }
+  .health { display: inline-flex; border: 1px solid var(--border); border-radius: 999px; padding: .16rem .42rem; background: var(--surface-2); font-size: .75rem; font-weight: 750; white-space: nowrap; }
   .health--inventory_mismatch, .health--underpriced { border-color: color-mix(in oklch, var(--danger), var(--border) 60%); background: var(--danger-soft); color: var(--danger); }
   .health--overpriced { border-color: color-mix(in oklch, var(--gold), var(--border) 55%); background: var(--accent-soft); color: var(--accent-strong); }
   .health--price_check_failed { border-color: color-mix(in oklch, var(--danger), var(--border) 55%); background: color-mix(in oklch, var(--danger), transparent 90%); color: var(--danger); }
   .health--healthy { border-color: color-mix(in oklch, var(--success), var(--border) 60%); background: var(--success-soft); color: var(--success); }
-  .order-action-cell { display: flex; align-items: center; justify-content: space-between; gap: .35rem; }
+  .order-action-cell { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: .35rem; }
   .order-editor { display: grid; gap: .55rem; margin: .55rem; border: 1px solid var(--border-strong); border-radius: .5rem; padding: .65rem; background: var(--surface-2); }
   .order-editor__heading { display: flex; align-items: flex-start; justify-content: space-between; gap: .6rem; }
   .order-editor__heading h3, .order-editor__heading p { margin: 0; }
   .order-editor__heading h3 { font-size: .86rem; }
-  .order-editor__heading p { margin-top: .08rem; color: var(--text-muted); font-size: .7rem; }
+  .order-editor__heading p { margin-top: .08rem; color: var(--text-muted); font-size: .75rem; }
   .order-editor__fields { display: grid; grid-template-columns: minmax(7rem, 10rem) minmax(7rem, 10rem) minmax(10rem, 1fr); align-items: end; gap: .5rem; }
-  .order-editor__fields > label:not(.compact-check) { display: grid; gap: .2rem; color: var(--text-muted); font-size: .66rem; font-weight: 650; }
-  .order-editor__fields input[type="number"] { min-height: 2rem; width: 100%; }
+  .order-editor__fields > label:not(.compact-check) { display: grid; gap: .2rem; color: var(--text-muted); font-size: .75rem; font-weight: 650; }
+  .order-editor__fields input[type="number"] { min-height: 2rem; width: 100%; border: 1px solid var(--border-strong); border-radius: .4rem; padding: .35rem .5rem; background: var(--surface-1); color: var(--text); font-size: .875rem; }
   .order-editor__actions { display: flex; align-items: center; gap: .4rem; }
-  .editor-error { margin: 0; color: var(--danger); font-size: .72rem; font-weight: 650; }
+  .editor-error { margin: 0; color: var(--danger); font-size: .75rem; font-weight: 650; }
   .confirm-panel { margin: 0; border: 1px solid var(--accent); border-radius: .55rem; padding: .7rem; background: var(--accent-soft); }
   .confirm-panel--danger { border-color: var(--danger); background: var(--danger-soft); }
   .orders-panel .confirm-panel { margin: .55rem; }
   .confirm-panel h3 { margin-bottom: .25rem; font-size: .9rem; }
-  .confirm-panel p, .confirm-panel li { font-size: .74rem; line-height: 1.4; }
+  .confirm-panel p, .confirm-panel li { font-size: .75rem; line-height: 1.4; }
   .confirm-panel ul { margin: .4rem 0; padding-inline-start: 1.2rem; }
   .confirm-panel .status-line { padding: .35rem 0 0; }
   .trade-events article { display: flex; align-items: center; justify-content: space-between; gap: .8rem; padding: .55rem .7rem; border-top: 1px solid var(--border); }
@@ -994,18 +1027,23 @@
   .trade-event__copy { min-width: 0; }
   .trade-event__copy strong, .trade-event__copy span, .trade-event__copy small { display: block; }
   .trade-event__copy strong { font-size: .78rem; }
-  .trade-event__copy span { margin-top: .1rem; font-size: .71rem; overflow-wrap: anywhere; }
-  .trade-event__copy small { margin-top: .12rem; color: var(--text-subtle); font-size: .63rem; }
-  .manual { color: var(--danger); font-size: .68rem; font-weight: 700; }
-  .done { color: var(--success); font-size: .68rem; font-weight: 700; }
+  .trade-event__copy span { margin-top: .1rem; font-size: .75rem; overflow-wrap: anywhere; }
+  .trade-event__copy small { margin-top: .12rem; color: var(--text-subtle); font-size: .75rem; }
+  .manual { color: var(--danger); font-size: .75rem; font-weight: 700; }
+  .done { color: var(--success); font-size: .75rem; font-weight: 700; }
   .secondary-sections { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .65rem; }
   .management-panel, .trade-history { min-width: 0; border: 1px solid var(--border); border-radius: .55rem; background: var(--surface-1); }
   .management-panel summary, .trade-history summary { min-height: 2.2rem; padding: .55rem .65rem; cursor: pointer; font-size: .77rem; font-weight: 800; }
-  .management-panel summary span, .trade-history summary span { margin-inline-start: .3rem; color: var(--text-muted); font-size: .65rem; font-weight: 600; }
+  .management-panel summary span, .trade-history summary span { margin-inline-start: .3rem; color: var(--text-muted); font-size: .75rem; font-weight: 600; }
   .management-panel__body { border-top: 1px solid var(--border); padding: .6rem .7rem; }
-  .management-panel__body p { margin-bottom: .5rem; color: var(--text-muted); font-size: .7rem; }
+  .management-panel__body p { margin-bottom: .5rem; color: var(--text-muted); font-size: .75rem; }
   .trade-history .trade-events { max-height: 16rem; overflow: auto; }
-  .history-empty { margin: 0; border-top: 1px solid var(--border); padding: .7rem; color: var(--text-muted); font-size: .72rem; }
+  .history-empty { margin: 0; border-top: 1px solid var(--border); padding: .7rem; color: var(--text-muted); font-size: .75rem; }
+  .sales-workspace .health { font-size: .75rem; white-space: normal; border-radius: .4rem; }
+  .sales-workspace .item-cell small, .sales-workspace .item-name-en { font-size: .75rem; color: var(--text-muted); }
+  .sales-workspace .order-editor__fields > label { font-size: .8125rem; }
+  .sales-workspace .sales-summary dt { font-size: .75rem; }
+  .sales-workspace .health--underpriced { background: var(--accent-soft); color: var(--accent-strong); border-color: var(--border-strong); }
   @media (max-width: 60rem) { .secondary-sections { grid-template-columns: minmax(0, 1fr); } }
   @media (max-width: 50rem) { .sales-header, .account-panel, .sales-empty--action, .verification-note { align-items: stretch; flex-direction: column; } .sales-summary, .order-editor__fields, .connect-fields, .orders-toolbar { grid-template-columns: minmax(0, 1fr); } .orders-toolbar__actions { justify-content: flex-start; } .sales-summary div { border-inline-end: 0; border-block-end: 1px solid var(--border); } .sales-summary div:last-child { border-block-end: 0; } .shift-table-wrap { max-height: none; } .trade-events article { align-items: flex-start; flex-direction: column; } }
   @media (max-width: 46rem) {
@@ -1015,6 +1053,7 @@
     .shift-table tbody tr:hover { background: var(--surface-hover); }
     .shift-table tbody th, .shift-table tbody td, .shift-table tbody td:nth-child(5) { display: block; width: auto; min-width: 0; border: 0; padding: 0; text-align: start; }
     .shift-table tbody td::before { content: none; }
+    .shift-table tbody td[data-label]::before { content: attr(data-label); display: block; color: var(--text-muted); font-size: .75rem; margin-bottom: .2rem; }
     .shift-table tbody td:nth-child(1) { grid-column: 1; grid-row: 1; }
     .shift-table tbody th:nth-child(2) { grid-column: 2 / 4; grid-row: 1; }
     .shift-table tbody td:nth-child(3) { grid-column: 2; grid-row: 2; }

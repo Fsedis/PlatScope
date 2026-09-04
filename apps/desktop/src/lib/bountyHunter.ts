@@ -54,6 +54,34 @@ export interface RankedBountyJob {
 
 export const BOUNTY_AUTO_RETRY_DELAY_MS = 30 * 1000;
 
+export function withBountyLivePrices(
+  view: BountyHunterView | null,
+  prices: ReadonlyMap<string, number>,
+): BountyHunterView | null {
+  if (!view || prices.size === 0) return view;
+  return {
+    ...view,
+    regions: view.regions.map((region) => ({
+      ...region,
+      jobs: region.jobs.map((job) => {
+        if (!job.rewards.some((reward) => reward.slug && prices.has(reward.slug))) return job;
+        const rewards = job.rewards.map((reward) => {
+          const price = reward.slug ? prices.get(reward.slug) : undefined;
+          return price === undefined ? reward : {
+            ...reward, unitPrice: price, expectedPlatinum: price * reward.expectedQuantity,
+          };
+        });
+        const pricedRewardCount = rewards.filter((reward) => reward.marketKey && reward.unitPrice != null).length;
+        return {
+          ...job, rewards, pricedRewardCount,
+          expectedPlatinum: rewards.reduce((total, reward) => total + (reward.expectedPlatinum ?? 0), 0),
+          priceCoveragePercent: job.marketRewardCount > 0 ? pricedRewardCount / job.marketRewardCount * 100 : 0,
+        };
+      }),
+    })),
+  };
+}
+
 function validTimestamp(value: string | null | undefined): number | null {
   if (!value) return null;
   const timestamp = new Date(value).getTime();

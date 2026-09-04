@@ -14,6 +14,7 @@
   } from "./diagnostics";
 
   const locale = useLocale();
+  export let onOpenSettings: () => void;
   const copy = {
     ru: {
       loadError: (_reason: string) => "Не удалось проверить состояние данных. Перезапустите PlatScope или повторите попытку.",
@@ -112,6 +113,21 @@
       <button type="button" onclick={loadDiagnostics}>{c.retry}</button>
     </section>
   {:else if status}
+    <section class="data-readiness" aria-label={$locale === "ru" ? "Доступные данные" : "Available data"}>
+      <h2>{$locale === "ru" ? "Можно ли пользоваться оценками?" : "Are estimates available?"}</h2>
+      <p>{status.foundation.marketSnapshot
+        ? ($locale === "ru" ? `Цены сохранены от ${status.foundation.marketSnapshot.sourceDate}.` : `Prices saved from ${status.foundation.marketSnapshot.sourceDate}.`)
+        : c.noMarket}</p>
+      <p>{status.foundation.inventoryItemCount != null
+        ? ($locale === "ru" ? "Инвентарь загружен." : "Inventory is loaded.")
+        : ($locale === "ru" ? "Инвентарь ещё не загружен." : "Inventory has not been loaded yet.")}</p>
+      {#if !status.foundation.marketSnapshot || providers.some((provider) => provider.condition === "degraded" || provider.condition === "error")}
+        <button type="button" class="secondary" onclick={onOpenSettings}>{$locale === "ru" ? "Открыть обновление данных" : "Open data updates"}</button>
+      {/if}
+    </section>
+
+    <details class="technical-details">
+      <summary>{c.storageVersion}</summary>
     <section aria-labelledby="storage-heading">
       <div class="section-heading">
         <div>
@@ -122,10 +138,11 @@
         </span>
       </div>
       <dl class="summary-grid">
-        <div><dt>{c.application}</dt><dd>{status.foundation.appName} {status.foundation.appVersion}</dd></div><div><dt>{c.storage}</dt><dd>{describeFoundationStatus(status.foundation, $locale)}</dd></div><div><dt>{c.schema}</dt><dd>{status.foundation.schemaVersion}</dd></div>
+        <div><dt>{c.application}</dt><dd>{status.foundation.appName} {status.foundation.appVersion}</dd></div><div><dt>{c.storage}</dt><dd>{describeFoundationStatus(status.foundation, $locale)}</dd></div>
       </dl>
       <details class="database-path"><summary>{c.database}</summary><code>{status.foundation.databasePath}</code></details>
     </section>
+    </details>
 
     <section aria-labelledby="providers-heading">
       <div class="section-heading">
@@ -194,6 +211,13 @@
 </div>
 
 <style>
+  .data-readiness { padding: .85rem; border: 1px solid var(--border); border-radius: .6rem; background: var(--surface-1); }
+  .data-readiness p { margin: .35rem 0; }
+  .technical-details { padding: .75rem; border: 1px solid var(--border); border-radius: .6rem; }
+  .technical-details > summary { cursor: pointer; font-weight: 700; }
+  .technical-details > section { margin-top: .7rem; }
+  .provider-card header { flex-wrap: wrap; }
+  .provider-card header h3 { overflow-wrap: normal; word-break: normal; }
   .diagnostics-shell { display: grid; gap: 1rem; }
   .diagnostics-intro, .section-heading { display: flex; align-items: start; justify-content: space-between; gap: 1.25rem; }
   .diagnostics-intro { justify-content: end; }

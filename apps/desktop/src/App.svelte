@@ -13,6 +13,7 @@
   import MarketTradingShift from "./lib/MarketTradingShift.svelte";
   import SellNowScreen from "./lib/SellNowScreen.svelte";
   import SettingsScreen from "./lib/SettingsScreen.svelte";
+  import { revealCompactDetail, revealElement } from "./lib/detailNavigation";
   import { startAutomaticUpdateChecks } from "./lib/appUpdate";
   import { startBountyRewardAlerts } from "./lib/bountyAlerts";
 
@@ -170,8 +171,19 @@
   let liveSequence = 0;
   let historySequence = 0;
   let keyboardNavigation = false;
+  let detailTrigger: HTMLElement | null = null;
+  let settingsScreen: SettingsScreen | undefined;
 
   function navigateTo(screen: AppScreen): void {
+    if (screen === activeScreen) return;
+    if (activeScreen === "settings" && settingsScreen) {
+      settingsScreen.requestLeave(() => completeNavigation(screen));
+      return;
+    }
+    completeNavigation(screen);
+  }
+
+  function completeNavigation(screen: AppScreen): void {
     activeScreen = screen;
     void tick().then(() => {
       window.scrollTo({ top: 0, left: 0 });
@@ -276,9 +288,11 @@
   }
 
   function selectRow(row: MarketSearchRow): void {
+    detailTrigger = document.activeElement as HTMLElement | null;
     selectedIdentity = rowIdentity(row);
     void loadLivePrice(row);
     void loadHistory(row);
+    void revealCompactDetail("detail-heading", "(max-width: 46rem)");
   }
 
   async function loadLivePrice(row: MarketSearchRow): Promise<void> {
@@ -546,7 +560,7 @@
   <header class="app-header">
     <div class="page-heading">
       <h1 bind:this={pageHeading} tabindex="-1">{screenTitle(activeScreen, shell)}</h1>
-      <p class="lede">{screenLede(activeScreen, shell)}</p>
+      <p class="lede" class:sr-only={["market", "inventory", "insights", "bounty_hunter"].includes(activeScreen)}>{screenLede(activeScreen, shell)}</p>
     </div>
   </header>
 
@@ -561,7 +575,7 @@
       {shell.openingStorage}
     {:else if refreshOutcome?.stale}
       {shell.providersUnavailable}
-    {:else}
+    {:else if marketWorkspace === "browse"}
       {resultStatus}
     {/if}
   </div>
@@ -655,7 +669,7 @@
 
         {#if visibleRows.length}
           <div class="table-wrap">
-            <table>
+            <table class="market-table">
               <caption class="sr-only">{shell.marketCaption}</caption>
               <thead>
                 <tr>
@@ -726,7 +740,8 @@
           <div class="detail-heading">
             {#if selectedRow.imageUrl}<img class="detail-art" src={selectedRow.imageUrl} alt="" decoding="async" />{/if}
             <p>{selectedRow.itemKind === "relic" ? shell.relic : selectedRow.itemKind === "riven" ? shell.riven : shell.marketItem}</p>
-            <h2 id="detail-heading">{selectedRow.displayName}</h2>
+            <button type="button" class="secondary detail-back market-back" onclick={() => revealElement(detailTrigger ?? document.getElementById("results-heading"))}>{$locale === "ru" ? "← К результатам" : "← Back to results"}</button>
+            <h2 id="detail-heading" tabindex="-1">{selectedRow.displayName}</h2>
             <span>{variantLabel(selectedRow.recommendation.key, $locale)}</span>
           </div>
 
@@ -889,9 +904,9 @@
   {:else if activeScreen === "bounty_hunter"}
     <BountyHunterScreen onOpenSettings={() => navigateTo("settings")} />
   {:else if activeScreen === "diagnostics"}
-    <DiagnosticsScreen />
+    <DiagnosticsScreen onOpenSettings={() => navigateTo("settings")} />
   {:else if activeScreen === "settings"}
-    <SettingsScreen onSettingsSaved={applySettings} onMarketRefreshed={handleMarketRefreshed} />
+    <SettingsScreen bind:this={settingsScreen} onSettingsSaved={applySettings} onMarketRefreshed={handleMarketRefreshed} />
   {/if}
   {/key}
   </div>

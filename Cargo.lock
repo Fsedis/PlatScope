@@ -2940,7 +2940,7 @@ checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
 
 [[package]]
 name = "platscope-account"
-version = "0.1.47"
+version = "0.1.48"
 dependencies = [
  "chrono",
  "futures-util",
@@ -2956,7 +2956,7 @@ dependencies = [
 
 [[package]]
 name = "platscope-core"
-version = "0.1.47"
+version = "0.1.48"
 dependencies = [
  "chrono",
  "platscope-account",
@@ -2978,7 +2978,7 @@ dependencies = [
 
 [[package]]
 name = "platscope-desktop"
-version = "0.1.47"
+version = "0.1.48"
 dependencies = [
  "chrono",
  "platscope-core",
@@ -2988,6 +2988,7 @@ dependencies = [
  "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "tao",
  "tauri",
  "tauri-build",
  "tauri-plugin-notification",
@@ -2995,11 +2996,12 @@ dependencies = [
  "tauri-plugin-updater",
  "tokio",
  "tracing",
+ "wry",
 ]
 
 [[package]]
 name = "platscope-domain"
-version = "0.1.47"
+version = "0.1.48"
 dependencies = [
  "chrono",
  "serde",
@@ -3009,7 +3011,7 @@ dependencies = [
 
 [[package]]
 name = "platscope-insights"
-version = "0.1.47"
+version = "0.1.48"
 dependencies = [
  "platscope-domain",
  "serde",
@@ -3017,7 +3019,7 @@ dependencies = [
 
 [[package]]
 name = "platscope-inventory"
-version = "0.1.47"
+version = "0.1.48"
 dependencies = [
  "chrono",
  "hex",
@@ -3029,7 +3031,7 @@ dependencies = [
 
 [[package]]
 name = "platscope-pricing"
-version = "0.1.47"
+version = "0.1.48"
 dependencies = [
  "chrono",
  "platscope-domain",
@@ -3039,7 +3041,7 @@ dependencies = [
 
 [[package]]
 name = "platscope-providers"
-version = "0.1.47"
+version = "0.1.48"
 dependencies = [
  "async-trait",
  "chrono",
@@ -3057,7 +3059,7 @@ dependencies = [
 
 [[package]]
 name = "platscope-readonly-scan"
-version = "0.1.47"
+version = "0.1.48"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3074,7 +3076,7 @@ dependencies = [
 
 [[package]]
 name = "platscope-selling"
-version = "0.1.47"
+version = "0.1.48"
 dependencies = [
  "platscope-domain",
  "platscope-trends",
@@ -3083,7 +3085,7 @@ dependencies = [
 
 [[package]]
 name = "platscope-storage"
-version = "0.1.47"
+version = "0.1.48"
 dependencies = [
  "chrono",
  "platscope-domain",
@@ -3095,7 +3097,7 @@ dependencies = [
 
 [[package]]
 name = "platscope-trends"
-version = "0.1.47"
+version = "0.1.48"
 dependencies = [
  "chrono",
  "platscope-domain",
@@ -3104,7 +3106,7 @@ dependencies = [
 
 [[package]]
 name = "platscope-wfm"
-version = "0.1.47"
+version = "0.1.48"
 dependencies = [
  "tokio",
 ]

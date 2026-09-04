@@ -68,6 +68,22 @@ export function rewardPrice(choice: RelicRewardChoice): number | null {
     ?? null;
 }
 
+export function overlayStatusText(view: RelicRewardScanView | null, loading: boolean, unavailable: boolean): string {
+  if (unavailable) return "Оверлей временно недоступен";
+  if (loading) return "Распознаём награды…";
+  if (!view) return "Награды пока не распознаны";
+  if (view.status !== "ok") return "Не удалось распознать награды";
+  return "Не удалось распознать достаточно наград для сравнения";
+}
+
+export function rewardDecisionLabel(choice: RelicRewardChoice): string | null {
+  if (!choice.itemId) return "Не распознано";
+  if (choice.confidence < 0.75) return "Проверьте название";
+  if (choice.completesSet) return "Завершит комплект";
+  if (choice.recommended) return "Выше оценка награды";
+  return null;
+}
+
 export function confidencePercent(confidence: number): number {
   return Math.round(Math.max(0, Math.min(1, confidence)) * 100);
 }

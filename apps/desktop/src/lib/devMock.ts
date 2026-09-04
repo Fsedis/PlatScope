@@ -328,14 +328,38 @@ function connectedDemoAccount(): AccountView {
 }
 
 export async function installMarketBrowserMock(): Promise<void> {
-  if (new URLSearchParams(window.location.search).get("mockTradeShift") === "1") {
+  const mockOptions = new URLSearchParams(window.location.search);
+  if (mockOptions.get("mockTradeShift") === "1") {
     account = connectedDemoAccount();
+    if (mockOptions.get("mockOrders") === "27") {
+      const originals = [...account.orders];
+      account.orders = Array.from({ length: 27 }, (_, index) => {
+        const original = originals[index % originals.length]!;
+        if (index < originals.length) return original;
+        const originalItem = account.orderItems![original.itemId!]!;
+        const originalRow = rows.find((row) => row.recommendation.key.slug === originalItem.slug)!;
+        const originalInventory = inventory.items.find((item) => item.itemId === original.itemId)!;
+        const slug = `${originalItem.slug}_qa_${index + 1}`;
+        const itemId = `qa-item-${index + 1}`;
+        const displayName = `${originalItem.displayName} — тестовый предмет ${index + 1}`;
+        const key = { ...originalRow.recommendation.key, slug };
+        account.orderItems![itemId] = { ...originalItem, slug, displayName };
+        rows.push({ ...originalRow, itemId, displayName, recommendation: { ...originalRow.recommendation, key } });
+        inventory.items.push({ ...originalInventory, itemId, canonicalGameId: slug, displayName, key });
+        return { ...original, itemId, id: `qa-order-${index + 1}` };
+      });
+      inventory.metadata.itemCount = inventory.items.length;
+      inventory.summary.resolvedRows = inventory.items.filter((item) => item.resolution === "resolved").length;
+      inventory.summary.ownedQuantity = inventory.items.reduce((total, item) => total + item.ownedQuantity, 0);
+      inventory.summary.sellableQuantity = inventory.items.reduce((total, item) => total + item.sellableQuantity, 0);
+    }
   }
   mockIPC((command, args) => {
     if (command === "plugin:event|listen") return nextEventListener++;
     if (command === "plugin:event|unlisten") return null;
     if (command === "load_settings") return appSettings;
     if (command === "save_settings") {
+      if (mockOptions.get("mockSettingsError") === "1") throw new Error("test storage unavailable");
       const next = (args as { settings?: AppSettings })?.settings;
       if (!next) throw new Error("settings are required");
       appSettings = { ...next };
@@ -543,7 +567,7 @@ export async function installMarketBrowserMock(): Promise<void> {
         { row: rows[4], rawText: "Никс Прайм: Система", confidence: 0.93, ducats: 100, ownedQuantity: 2, completesSet: null },
       ];
       return {
-        status: "ok",
+        status: mockOptions.get("mockOverlayState") === "failed" ? "failed" : "ok",
         message: null,
         recognizedCount: rewards.length,
         scanDurationMs: 620,
@@ -554,7 +578,7 @@ export async function installMarketBrowserMock(): Promise<void> {
         rewards: rewards.map((reward, slot) => ({
           slot,
           rawText: reward.rawText,
-          confidence: reward.confidence,
+          confidence: mockOptions.get("mockOverlayState") === "uncertain" && slot === 1 ? 0.5 : reward.confidence,
           itemId: reward.row.itemId,
           slug: reward.row.recommendation.key.slug,
           displayName: localizedName(reward.row.recommendation.key.slug, reward.row.displayName),
@@ -564,8 +588,8 @@ export async function installMarketBrowserMock(): Promise<void> {
           set: reward.rawText.startsWith("Акси ") ? null : {
             setName: "Никс Прайм: Комплект",
             setPrice: 87,
-            readyComponents: reward.completesSet ? 3 : 2,
-            totalComponents: 4,
+            readyComponents: reward.completesSet ? 4 : 3,
+            totalComponents: 5,
             parts: reward.completesSet
               ? [
                   { name: "Чертёж", imageUrl: rows[1].imageUrl ?? null, ownedQuantity: 1, requiredQuantity: 1, isReward: false },
@@ -636,6 +660,7 @@ export async function installMarketBrowserMock(): Promise<void> {
       ).recommendation;
     }
     if (command === "live_price_current_variant") {
+      if (mockOptions.get("mockLiveFailure") === "all") throw new Error("test network unavailable");
       const key = (args as { key?: MarketSearchRow["recommendation"]["key"] })?.key;
       const row = rows.find((candidate) => candidate.recommendation.key.slug === key?.slug);
       if (!row) return null;
@@ -663,7 +688,7 @@ export async function installMarketBrowserMock(): Promise<void> {
           ],
         },
         fetchedAt: "2026-08-27T06:45:00Z",
-        quoteState: "network",
+        quoteState: mockOptions.get("mockLiveFailure") === "stale" ? "stale_cache" : "network",
         sellOrderCount: 5,
         buyOrderCount: 1,
         orders: [

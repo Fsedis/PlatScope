@@ -8,6 +8,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { onMount, tick } from "svelte";
+  import { revealCompactDetail, revealElement } from "./detailNavigation";
   import { localeCode, useLocale } from "./i18n";
   import {
     accountActionErrorMessage,
@@ -78,7 +79,7 @@
       noCandidatesLabel: "Очередь пуста", noCandidates: "Нет предметов, готовых к продаже", noCandidatesBody: "Проверьте количество, возможность обмена и резерв копий в инвентаре.", checkInventory: "Открыть инвентарь",
       filters: "Поиск и фильтры", search: "Поиск предмета", searchExample: "Например, Поток Прайм", category: "Тип предмета", allCategories: "Все типы", view: "Показывать", allCandidates: "Весь торговый инвентарь", sellable: "Всё к продаже", sellNow: "Продавать сейчас", hold: "Лучше подождать", duplicates: "Дубликаты", unpriced: "Без цены", attention: "Требуют проверки", usage: "Использование", allUsage: "Все", freeOnly: "Не надеты", equippedOnly: "Надеты", equippedCount: (count: number) => `Надето: ${count}`,
       queue: "Мои предметы", exactSnapshot: (date: string) => `Цены рынка от ${date}`, missingSnapshot: "дата неизвестна",
-      tableCaption: "Предметы инвентаря, рекомендуемая цена, продажи, тренд цены и очерёдность", item: "Предмет", salesPerDay: "Продажи / день", priceTrend90: "Тренд цены / 90 дней", unknownVariant: "вариант не определён",
+      tableCaption: "Предметы инвентаря, количество, рекомендуемая цена, продажи и время продажи", item: "Предмет", salesPerDay: "Продажи / день", priceTrend90: "Тренд цены / 90 дней", unknownVariant: "вариант не определён",
       dailyTrades: (value: string) => `${value} сделок/день`,
       priceUp: (value: string) => `Цена растёт ↑ ${value} за 90 дней`, priceDown: (value: string) => `Цена падает ↓ ${value} за 90 дней`, priceFlat: "Цена стабильна →", noPriceTrend: "Нет данных о цене за 90 дней",
       noFiltered: "Нет кандидатов для этих фильтров", changeFilters: "Измените тип предмета или другие фильтры.", reset: "Сбросить фильтры",
@@ -103,7 +104,7 @@
       noCandidatesLabel: "No candidates", noCandidates: "No confirmed items to sell", noCandidatesBody: "Check the import, tradeability, and copy reserve. Ambiguous variants are excluded automatically.", checkInventory: "Check inventory",
       filters: "Item search and filters", search: "Search items", searchExample: "For example, Primed Flow", category: "Item type", allCategories: "All types", view: "Show", allCandidates: "All market inventory", sellable: "All sellable", sellNow: "Sell now", hold: "Better to wait", duplicates: "Duplicates", unpriced: "Unpriced", attention: "Needs review", usage: "Usage", allUsage: "All", freeOnly: "Not equipped", equippedOnly: "Equipped", equippedCount: (count: number) => `Equipped: ${count}`,
       queue: "My items", exactSnapshot: (date: string) => `Market prices from ${date}`, missingSnapshot: "not found",
-      tableCaption: "Inventory items, recommended price, sales, price trend, and priority", item: "Item", salesPerDay: "Sales / day", priceTrend90: "Price trend / 90 days", unknownVariant: "variant unavailable",
+      tableCaption: "Inventory items, quantity, recommended price, sales, and sale timing", item: "Item", salesPerDay: "Sales / day", priceTrend90: "Price trend / 90 days", unknownVariant: "variant unavailable",
       dailyTrades: (value: string) => `${value} trades/day`,
       priceUp: (value: string) => `Price rising ↑ ${value} over 90 days`, priceDown: (value: string) => `Price falling ↓ ${value} over 90 days`, priceFlat: "Price stable →", noPriceTrend: "No 90-day price data",
       noFiltered: "No candidates match these filters", changeFilters: "Change the item type or another filter.", reset: "Reset filters",
@@ -154,6 +155,7 @@
   let preset: SellNowPreset = "sell_now";
   let equipped: EquippedFilter = "all";
   let sortKey: SellNowSortKey = "priority";
+  let detailTrigger: HTMLElement | null = null;
   let sortDirection: SellNowSortDirection = "desc";
   let viewPreferencesReady = false;
 
@@ -378,8 +380,10 @@
   }
 
   function selectRow(row: SellNowRow): void {
+    detailTrigger = document.activeElement as HTMLElement | null;
     selectedIdentity = sellNowRowIdentity(row);
     liveError = "";
+    void revealCompactDetail("sell-detail-heading", "(max-width: 65rem)");
   }
 
   function changeCategory(event: Event): void {
@@ -525,7 +529,7 @@
   });
 </script>
 
-<div class="sell-now-status" role="status" aria-live="polite">{scanning ? c.scanningInventory : resultStatus}</div>
+<div class="sell-now-status" class:sr-only={!scanning && !loading} role="status" aria-live="polite">{scanning ? c.scanningInventory : resultStatus}</div>
 
 {#if errorMessage}
   <div class="error-block" role="alert">
@@ -559,12 +563,10 @@
   <section class="sell-summary" aria-labelledby="sell-summary-heading">
     <h2 id="sell-summary-heading" class="sr-only">{c.summary}</h2>
     <dl>
-      <div><dt>{c.totalCopies}</dt><dd>{view.inventorySummary.ownedQuantity.toLocaleString(localeCode($locale))}</dd></div>
       <div><dt>{c.candidates}</dt><dd>{view.summary.candidateRows.toLocaleString(localeCode($locale))}</dd></div>
-      <div><dt>{c.recommended}</dt><dd>{recommendedCount.toLocaleString(localeCode($locale))}</dd></div>
       <div><dt>{c.nominal}</dt><dd>{formatPlatinum(view.summary.nominalValue, $locale)}</dd></div>
     </dl>
-    <p><strong>{c.notForecast}</strong> {c.nominalBody}</p>
+    <p class="sr-only">{c.nominalBody}</p>
   </section>
 
   {#if view.rows.length === 0}
@@ -616,10 +618,19 @@
       <section class="results-panel sell-results" aria-labelledby="sell-results-heading">
         <div class="panel-heading">
           <div>
-            <h2 id="sell-results-heading">{c.queue}</h2>
+            <h2 id="sell-results-heading" tabindex="-1">{c.queue}</h2>
             <p>{c.exactSnapshot(view.marketSnapshot?.sourceDate ?? c.missingSnapshot)}</p>
           </div>
           <span class="result-count">{visibleRows.length}</span>
+          <div class="list-sort">
+            <label class="sr-only" for="inventory-sort">{$locale === "ru" ? "Сортировка" : "Sort by"}</label>
+            <select id="inventory-sort" bind:value={sortKey}>
+              <option value="priority">{c.priority}</option><option value="name">{c.item}</option>
+              <option value="sellable">{c.ownedSellable}</option><option value="fair">{c.fairListQuick}</option>
+              <option value="volume">{c.salesPerDay}</option><option value="trend">{c.priceTrend90}</option>
+            </select>
+            <button type="button" class="secondary" onclick={() => changeSort(sortKey)} aria-label={$locale === "ru" ? "Изменить направление сортировки" : "Reverse sort order"}>{sortDirection === "desc" ? "↓" : "↑"}</button>
+          </div>
         </div>
 
         {#if visibleRows.length}
@@ -628,13 +639,11 @@
               <caption class="sr-only">{c.tableCaption}</caption>
               <thead>
                 <tr>
-                  <th scope="col" aria-sort={sortAria("name", sortKey, sortDirection)}><button type="button" onclick={() => changeSort("name")}>{c.item} <span aria-hidden="true">{sortMarker("name", sortKey, sortDirection)}</span></button></th>
-                  <th scope="col" aria-sort={sortAria("sellable", sortKey, sortDirection)}><button type="button" onclick={() => changeSort("sellable")}>{c.ownedSellable} <span aria-hidden="true">{sortMarker("sellable", sortKey, sortDirection)}</span></button></th>
-                  <th scope="col" aria-sort={sortAria("fair", sortKey, sortDirection)}><button type="button" onclick={() => changeSort("fair")}>{c.fairListQuick} <span aria-hidden="true">{sortMarker("fair", sortKey, sortDirection)}</span></button></th>
-                  <th scope="col" aria-sort={sortAria("volume", sortKey, sortDirection)}><button type="button" onclick={() => changeSort("volume")}>{c.salesPerDay} <span aria-hidden="true">{sortMarker("volume", sortKey, sortDirection)}</span></button></th>
-                  <th scope="col" aria-sort={sortAria("trend", sortKey, sortDirection)}><button type="button" onclick={() => changeSort("trend")}>{c.priceTrend90} <span aria-hidden="true">{sortMarker("trend", sortKey, sortDirection)}</span></button></th>
+                  <th scope="col" aria-sort={sortAria("name", sortKey, sortDirection)}>{c.item}</th>
+                  <th scope="col" aria-sort={sortAria("sellable", sortKey, sortDirection)}>{c.ownedSellable}</th>
+                  <th scope="col" aria-sort={sortAria("fair", sortKey, sortDirection)}>{c.fairListQuick}</th>
+                  <th scope="col" aria-sort={sortAria("volume", sortKey, sortDirection)}>{c.salesPerDay}</th>
                   <th scope="col">{c.moment}</th>
-                  <th scope="col" aria-sort={sortAria("priority", sortKey, sortDirection)}><button type="button" title={c.priorityHint} onclick={() => changeSort("priority")}>{c.priority} <span aria-hidden="true">{sortMarker("priority", sortKey, sortDirection)}</span></button></th>
                 </tr>
               </thead>
               <tbody>
@@ -659,15 +668,7 @@
                     <td class="numeric stacked-cell" data-label={c.salesPerDay}>
                       <strong>{c.dailyTrades(formatVolume(row.recommendation?.closedVolume ?? null, $locale))}</strong>
                     </td>
-                    <td class="numeric stacked-cell" data-label={c.priceTrend90}>
-                      <strong class={`price-trend price-trend--${priceTrendClass(row.trend?.change90d)}`}>{priceTrendText(row.trend?.change90d)}</strong>
-                    </td>
                     <td class="stacked-cell" data-label={c.moment}><strong class={`timing-pill timing-pill--${row.trend?.timing ?? "unknown"}`} title={timingDescription(row)} aria-label={timingDescription(row)}>{shortTiming(row)}</strong></td>
-                    <td class="numeric" data-label={c.priority}>
-                      <span class={`priority priority--${priorityVisualBand(priorityRank(row))}`} title={c.priorityPosition(priorityRank(row), row.priority.score)} aria-label={c.priorityPosition(priorityRank(row), row.priority.score)}>
-                        {priorityRank(row) === null ? "—" : `№${priorityRank(row)}`}<small>{row.priority.score}/100</small>
-                      </span>
-                    </td>
                   </tr>
                 {/each}
               </tbody>
@@ -685,7 +686,8 @@
           <div class="detail-heading">
             {#if selectedRow.inventory.imageUrl}<img class="detail-art" src={selectedRow.inventory.imageUrl} alt="" decoding="async" />{/if}
             <p>{c.candidate}</p>
-            <h2 id="sell-detail-heading">{selectedRow.inventory.displayName}</h2>
+            <button type="button" class="secondary detail-back inventory-back" onclick={() => revealElement(detailTrigger ?? document.getElementById("sell-results-heading"))}>{$locale === "ru" ? "← К предметам" : "← Back to items"}</button>
+            <h2 id="sell-detail-heading" tabindex="-1">{selectedRow.inventory.displayName}</h2>
             <span>{selectedRow.inventory.key ? variantLabel(selectedRow.inventory.key, $locale) : c.unknownVariant}</span>
           </div>
 
@@ -831,6 +833,7 @@
             <div><span>{c.forSale}</span><strong>{selectedRow.inventory.sellableQuantity} {c.of} {selectedRow.inventory.ownedQuantity}</strong></div>
             <div><span>{c.moment}</span><strong>{selectedRow.trend?.timing ? timingLabel(selectedRow.trend.timing, $locale) : c.noSignal}</strong></div>
             <div><span>{c.priority}</span><strong>{c.priorityPosition(priorityRank(selectedRow), selectedRow.priority.score)}</strong></div>
+            <div><span>{c.priceTrend90}</span><strong class={`price-trend price-trend--${priceTrendClass(selectedRow.trend?.change90d)}`}>{priceTrendText(selectedRow.trend?.change90d)}</strong></div>
             <div><span>{c.nominal}</span><strong>{formatPlatinum(selectedRow.nominalValue, $locale)}</strong></div>
           </div>
           <p class="nominal-warning">{c.nominalWarning}</p>

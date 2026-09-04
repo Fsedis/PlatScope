@@ -1,6 +1,6 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
-  import { onDestroy, onMount } from "svelte";
+  import { onDestroy, onMount, tick } from "svelte";
 
   import {
     languageFromLocale,
@@ -195,6 +195,40 @@
   let overlayPreviewError = "";
   let overlayPreviewDebounce: ReturnType<typeof setTimeout> | undefined;
   let overlayPreviewLifetime: ReturnType<typeof setTimeout> | undefined;
+  let leaveDialog: HTMLDialogElement;
+  let pendingLeave: (() => void) | null = null;
+
+  export function requestLeave(leave: () => void): void {
+    if (!changed && !saving) { leave(); return; }
+    pendingLeave = leave;
+    leaveDialog.showModal();
+  }
+
+  function cancelLeave(): void {
+    pendingLeave = null;
+    leaveDialog.close();
+  }
+
+  function discardAndLeave(): void {
+    const leave = pendingLeave;
+    cancelLeave();
+    leave?.();
+  }
+
+  async function saveAndLeave(): Promise<void> {
+    const leave = pendingLeave;
+    if (await saveSettings() && pendingLeave === leave) {
+      pendingLeave = null;
+      leaveDialog?.close();
+      leave?.();
+    }
+  }
+
+  function guardUnload(event: BeforeUnloadEvent): void {
+    if (!changed && !saving) return;
+    event.preventDefault();
+    event.returnValue = "";
+  }
 
   $: c = copy[$locale];
   $: changed = settings !== null && (
@@ -247,20 +281,24 @@
     }
   }
 
-  async function saveSettings(): Promise<void> {
-    if (!settings || !changed) return;
+  async function saveSettings(): Promise<boolean> {
+    if (saving || !settings) return false;
+    if (!changed) return true;
     saving = true;
     errorMessage = "";
     statusMessage = "";
     const nextSettings = draftSettings();
-    if (!nextSettings) return;
+    if (!nextSettings) { saving = false; return false; }
     try {
       await invoke("save_settings", { settings: nextSettings });
       settings = nextSettings;
       onSettingsSaved(nextSettings);
       statusMessage = copy[selectedLocale].saved;
+      return true;
     } catch {
       errorMessage = c.saveError;
+      await tick();
+      return false;
     } finally {
       saving = false;
     }
@@ -377,6 +415,28 @@
     clearTimeout(overlayPreviewLifetime);
   });
 </script>
+
+<svelte:window onbeforeunload={guardUnload} />
+
+<dialog class="leave-dialog" bind:this={leaveDialog} oncancel={() => (pendingLeave = null)} aria-labelledby="leave-settings-heading">
+  <h2 id="leave-settings-heading">{$locale === "ru" ? "Сохранить настройки перед выходом?" : "Save settings before leaving?"}</h2>
+  <p>{$locale === "ru" ? "Изменения ещё не применены." : "Your changes have not been applied yet."}</p>
+  {#if errorMessage}<p role="alert">{errorMessage}</p>{/if}
+  <div class="leave-dialog__actions">
+    <button type="button" disabled={saving} onclick={saveAndLeave}>{saving ? c.saving : c.save}</button>
+    <button type="button" class="secondary" disabled={saving} onclick={discardAndLeave}>{$locale === "ru" ? "Не сохранять" : "Discard changes"}</button>
+    <button type="button" class="secondary" onclick={cancelLeave}>{$locale === "ru" ? "Остаться" : "Stay"}</button>
+  </div>
+</dialog>
+
+{#if changed || saving}
+  <div class="settings-actions" role="region" aria-label={$locale === "ru" ? "Несохранённые настройки" : "Unsaved settings"}>
+    <span>{$locale === "ru" ? "Есть несохранённые изменения" : "You have unsaved changes"}</span>
+    <button type="button" onclick={() => void saveSettings()} disabled={loading || saving || !settings}>
+      {saving ? c.saving : c.save}
+    </button>
+  </div>
+{/if}
 
 {#if loading || statusMessage}
   <div class="settings-status" role="status" aria-live="polite">
@@ -585,13 +645,10 @@
 
 <AppUpdatePanel mode="settings" />
 
-<div class="settings-actions">
-  <button type="button" onclick={saveSettings} disabled={loading || saving || !settings || !changed}>
-    {saving ? c.saving : c.save}
-  </button>
-</div>
-
 <style>
+  .leave-dialog { width: min(32rem, calc(100vw - 2rem)); border: 1px solid var(--border); border-radius: .8rem; padding: 1.25rem; background: var(--surface-1); color: var(--text); }
+  .leave-dialog::backdrop { background: rgb(0 0 0 / .4); }
+  .leave-dialog__actions { display: flex; flex-wrap: wrap; gap: .6rem; margin-top: 1rem; }
   .settings-status { min-height: 1.5rem; color: var(--text-muted); }
   .settings-card, .settings-error { border: 1px solid var(--border); border-radius: .75rem; padding: .75rem; background: var(--surface-1); box-shadow: var(--shadow-sm); }
   .settings-card { display: grid; grid-template-columns: minmax(16rem, .7fr) minmax(22rem, 1.3fr); align-items: start; gap: 1.25rem; }
@@ -637,7 +694,7 @@
   .refresh-option button { min-width: 11rem; min-height: 2.125rem; }
   .refresh-message { min-height: 1.35rem; color: var(--success); font-weight: 700; }
   .refresh-error { padding: .6rem; border: 1px solid var(--danger); border-radius: .55rem; background: var(--danger-soft); color: var(--danger); font-weight: 700; }
-  .settings-actions { display: flex; justify-content: end; }
+  .settings-actions { position: sticky; top: .5rem; z-index: 5; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: .5rem; padding: .65rem; margin-bottom: .75rem; border: 1px solid var(--border-strong); border-radius: .65rem; background: var(--surface-1); box-shadow: var(--shadow-sm); }
   .settings-actions button, .settings-error button { min-height: 2.125rem; }
   .settings-actions button { min-width: 10rem; }
   .settings-error { border-color: var(--danger); background: var(--danger-soft); }

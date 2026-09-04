@@ -6,6 +6,7 @@ import {
   bountyRotationAt,
   rankedBountyJobs,
   visibleBountyRegions,
+  withBountyLivePrices,
   type BountyHunterView,
 } from "./bountyHunter";
 
@@ -52,6 +53,27 @@ const view: BountyHunterView = {
 };
 
 describe("bounty hunter view helpers", () => {
+  it("updates ranking and coverage from live prices without changing saved data", () => {
+    const saved: BountyHunterView = {
+      ...view,
+      regions: [{ ...view.regions[0]!, jobs: [
+        { ...view.regions[0]!.jobs[1]!, id: "saved", expectedPlatinum: 4.2 },
+        { ...view.regions[0]!.jobs[0]!, id: "live", marketRewardCount: 1, rewards: [{
+          trackingKey: "reward", displayName: "Награда", slug: "reward", rarity: "rare",
+          marketKey: { slug: "reward", platform: "pc", rank: null, charges: null, subtype: null, amberStars: null, cyanStars: null }, expectedQuantity: 0.5, chancePercent: 50,
+          unitPrice: null, expectedPlatinum: null,
+        }] },
+      ] }],
+    };
+    const updated = withBountyLivePrices(saved, new Map([["reward", 20]]));
+    const rows = rankedBountyJobs(updated, { region: "cetus", onlyPriced: true, query: "", sort: "platinum" });
+    expect(rows.map((row) => row.job.id)).toEqual(["live", "saved"]);
+    expect(rows[0]!.job).toMatchObject({ expectedPlatinum: 10, pricedRewardCount: 1, priceCoveragePercent: 100 });
+    expect(saved.regions[0]!.jobs[1]!.rewards[0]!.unitPrice).toBeNull();
+    expect(withBountyLivePrices(saved, new Map())).toBe(saved);
+    expect(rankedBountyJobs(updated, { region: "fortuna", onlyPriced: true, query: "", sort: "platinum" })).toEqual([]);
+    expect(rankedBountyJobs(updated, { region: "all", onlyPriced: true, query: "не существует", sort: "platinum" })).toEqual([]);
+  });
   it("keeps only jobs with market rewards when requested", () => {
     const rows = visibleBountyRegions(view, "all", true);
     expect(rows[0]?.jobs.map((job) => job.id)).toEqual(["priced"]);

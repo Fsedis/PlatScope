@@ -1,12 +1,14 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { onMount } from "svelte";
+  import { checkedLivePrice, priceCheckSummary } from "./livePriceCheck";
 
   import {
     BOUNTY_AUTO_RETRY_DELAY_MS,
     bountyAutomaticRefreshAt,
     bountyRotationAt,
     rankedBountyJobs,
+    withBountyLivePrices,
     type BountyHunterView,
     type BountyJobView,
     type BountyRewardView,
@@ -50,14 +52,9 @@
   let watchPreferences: BountyWatchPreferences = DEFAULT_BOUNTY_WATCH_PREFERENCES;
   let watchMessage = "";
 
-  $: jobs = rankedBountyJobs(view, { region, onlyPriced, query, sort });
+  $: pricedView = withBountyLivePrices(view, livePrices);
+  $: jobs = rankedBountyJobs(pricedView, { region, onlyPriced, query, sort });
   $: watchedRewardKeys = new Set(watchPreferences.rewards.map((reward) => reward.key));
-  $: bestRow = rankedBountyJobs(view, {
-    region: "all",
-    onlyPriced: true,
-    query: "",
-    sort: "platinum",
-  }).find((row) => row.job.priceCoveragePercent >= 80) ?? null;
   $: rotationAt = bountyRotationAt(view);
   $: automaticRefreshAt = retryAt ?? bountyAutomaticRefreshAt(view);
 
@@ -173,7 +170,8 @@
   }
 
   function topReward(job: BountyJobView): BountyRewardView | null {
-    return job.rewards.find((reward) => rewardPrice(reward) != null) ?? job.rewards[0] ?? null;
+    return job.rewards.filter((reward) => rewardPrice(reward) != null)
+      .sort((a, b) => (rewardContribution(b) ?? 0) - (rewardContribution(a) ?? 0))[0] ?? job.rewards[0] ?? null;
   }
 
   function coverageLabel(job: BountyJobView): string {
@@ -262,23 +260,27 @@
         key: reward.marketKey,
         itemKind: "standard",
       });
-      const price = result?.recommendation.listPrice ?? result?.recommendation.fairPrice ?? null;
-      return { slug: reward.slug!, price };
+      return { slug: reward.slug!, ...checkedLivePrice(result) };
     }));
     const nextPrices = new Map(livePrices);
     let updated = 0;
+    let empty = 0;
+    let failed = 0;
     for (const result of results) {
-      if (result.status === "fulfilled" && result.value.price != null) {
+      if (result.status === "rejected" || result.value.state === "failed") {
+        failed += 1;
+      } else if (result.value.state === "priced") {
         nextPrices.set(result.value.slug, result.value.price);
         updated += 1;
+      } else {
+        empty += 1;
+        nextPrices.delete(result.value.slug);
       }
     }
     livePrices = nextPrices;
     liveMessages = new Map(liveMessages).set(
       job.id,
-      updated > 0
-        ? `Актуальные цены получены: ${updated} из ${rewards.length}.`
-        : "Сейчас нет подходящих ордеров игроков в игре.",
+      priceCheckSummary(updated, empty, failed),
     );
     liveBusyJobId = "";
   }
@@ -367,26 +369,6 @@
       </section>
     {/if}
 
-    {#if bestRow}
-      <section class="best-card" aria-label="Лучший заказ сейчас">
-        <div class="best-card__main">
-          <span class="eyebrow">Лучший сейчас</span>
-          <h2>{bestRow.job.title}</h2>
-          <p>{bestRow.regionName} · ур. {bestRow.job.minLevel}–{bestRow.job.maxLevel} · {bestRow.job.stageCount} этапов</p>
-        </div>
-        <div class="best-card__value">
-          <span>В среднем за заказ</span>
-          <strong>≈{platinum(jobPlatinum(bestRow.job))}</strong>
-          <small>{coverageLabel(bestRow.job)}</small>
-        </div>
-        <div class="best-card__reward">
-          <span>Главная рыночная награда</span>
-          <strong>{topReward(bestRow.job)?.displayName ?? "Нет"}</strong>
-          <small>{topReward(bestRow.job) ? `шанс ${percent(topReward(bestRow.job)!.chancePercent)}` : ""}</small>
-        </div>
-      </section>
-    {/if}
-
     <section class="bounty-toolbar" aria-label="Поиск и сортировка заказов">
       <label class="search-field">
         <span>Найти награду или заказ</span>
@@ -442,7 +424,7 @@
             {#each watchPreferences.rewards as reward (reward.key)}
               <li>
                 <span class="watchlist__image">{#if reward.imageUrl}<img src={reward.imageUrl} alt="" loading="lazy" decoding="async" />{:else}★{/if}</span>
-                <strong>{reward.displayName}</strong>
+                <button type="button" class="watchlist-link" onclick={() => { query = reward.displayName; region = "all"; onlyPriced = false; }}>{reward.displayName}</button>
                 <button type="button" class="text-action" onclick={() => removeWatchedReward(reward.key)}>Убрать</button>
               </li>
             {/each}
@@ -471,6 +453,7 @@
               <strong class="rank">{index + 1}</strong>
               <div class="job-name">
                 <strong>{row.job.title}</strong>
+                {#if row.job.rewards.some((item) => watchedRewardKeys.has(item.trackingKey))}<span class="watched-job">★ Есть отмеченная награда</span>{/if}
                 <span>{row.regionName} · {row.job.stageCount} этапов · {number(row.job.totalStanding)} репутации</span>
               </div>
               <span class="level">{row.job.minLevel}–{row.job.maxLevel}</span>
@@ -516,10 +499,10 @@
                           onclick={() => void toggleWatchedReward(item)}
                         >{watchedRewardKeys.has(item.trackingKey) ? "★" : "☆"}</button>
                       </div>
-                      <strong>{percent(item.chancePercent)}</strong>
-                      <span>{item.marketKey ? (rewardPrice(item) == null ? "Нет свежей цены" : platinum(rewardPrice(item))) : "Не продаётся"}</span>
-                      <span>{rewardContribution(item) == null ? "—" : `≈${platinum(rewardContribution(item))}`}</span>
-                      <span>{item.ownedQuantity == null ? "—" : `${item.ownedQuantity} шт.`}</span>
+                      <strong data-label="Шанс">{percent(item.chancePercent)}</strong>
+                      <span data-label="Цена">{item.marketKey ? (rewardPrice(item) == null ? "Нет свежей цены" : platinum(rewardPrice(item))) : "Не продаётся"}</span>
+                      <span data-label="В среднем">{rewardContribution(item) == null ? "—" : `≈${platinum(rewardContribution(item))}`}</span>
+                      <span data-label="В инвентаре">{item.ownedQuantity == null ? "—" : `${item.ownedQuantity} шт.`}</span>
                       <span class="reward-actions">
                         {#if item.slug}<button type="button" class="text-action" onclick={() => openMarket(item)}>На рынок ↗</button>{/if}
                       </span>
@@ -538,8 +521,13 @@
 </div>
 
 <style>
+  .watchlist-link { padding: .3rem; min-width: 0; background: transparent; color: var(--text); text-align: left; border: 0; white-space: normal; font-weight: 700; }
+  .watched-job { color: var(--accent-strong); font-weight: 700; }
+  .bounty-row__summary .job-name > strong::before { content: "▸ "; }
+  .bounty-row[open] .job-name > strong::before { content: "▾ "; }
+  .live-region:empty { display: none; }
   .bounty-screen { display: grid; gap: 0.65rem; }
-  .live-region { min-height: 1rem; color: var(--text-muted); font-size: 0.72rem; }
+  .live-region { min-height: 1rem; color: var(--text-muted); font-size: .75rem; }
 
   .rotation-bar {
     display: grid;
@@ -553,7 +541,7 @@
     box-shadow: var(--shadow-sm);
   }
   .rotation-bar > div { display: grid; gap: 0.08rem; }
-  .rotation-bar span { color: var(--text-muted); font-size: 0.68rem; }
+  .rotation-bar span { color: var(--text-muted); font-size: .75rem; }
   .rotation-bar strong { font-size: 0.82rem; font-variant-numeric: tabular-nums; }
 
   .refresh-warning {
@@ -561,24 +549,6 @@
     border: 1px solid var(--gold); border-radius: 0.6rem; padding: 0.5rem 0.65rem;
     background: var(--accent-soft); font-size: 0.75rem;
   }
-
-  .best-card {
-    display: grid;
-    grid-template-columns: minmax(15rem, 1.5fr) minmax(9rem, 0.55fr) minmax(13rem, 0.9fr);
-    overflow: hidden;
-    border: 1px solid color-mix(in oklch, var(--success) 50%, var(--border));
-    border-radius: 0.75rem;
-    background: color-mix(in oklch, var(--success-soft) 32%, var(--surface-1));
-    box-shadow: var(--shadow-sm);
-  }
-  .best-card > div { display: grid; align-content: center; gap: 0.1rem; min-width: 0; padding: 0.65rem 0.8rem; }
-  .best-card > div + div { border-inline-start: 1px solid var(--border); }
-  .best-card h2, .best-card p { margin: 0; }
-  .best-card h2 { font-size: 1rem; }
-  .best-card p, .best-card span, .best-card small { color: var(--text-muted); font-size: 0.68rem; }
-  .best-card .eyebrow { color: var(--success); font-weight: 850; letter-spacing: 0.06em; text-transform: uppercase; }
-  .best-card__value strong { color: var(--accent-strong); font-size: 1.45rem; font-variant-numeric: tabular-nums; }
-  .best-card__reward strong { overflow-wrap: anywhere; font-size: 0.85rem; }
 
   .bounty-toolbar {
     display: grid;
@@ -591,7 +561,7 @@
     background: var(--surface-1);
   }
   .bounty-toolbar label { display: grid; gap: 0.22rem; }
-  .bounty-toolbar label > span { color: var(--text-muted); font-size: 0.68rem; font-weight: 750; }
+  .bounty-toolbar label > span { color: var(--text-muted); font-size: .75rem; font-weight: 750; }
   .bounty-toolbar input[type="search"], .bounty-toolbar select {
     width: 100%; min-height: 2.05rem; border: 1px solid var(--border-strong); border-radius: 0.45rem;
     padding: 0.38rem 0.55rem; background: var(--surface-1); color: var(--text);
@@ -618,15 +588,14 @@
   .watchlist > summary::-webkit-details-marker { display: none; }
   .watchlist__mark { color: var(--accent-strong); font-size: 1rem; }
   .watchlist > summary strong { margin-inline-end: auto; font-size: 0.8rem; }
-  .watchlist > summary span { color: var(--text-muted); font-size: 0.68rem; }
+  .watchlist > summary span { color: var(--text-muted); font-size: .75rem; }
   .watchlist__body { border-block-start: 1px solid var(--border); padding: 0.6rem 0.7rem; }
   .watchlist__heading { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; }
-  .watchlist__heading p, .watchlist__empty, .watchlist__message { margin: 0; color: var(--text-muted); font-size: 0.68rem; }
-  .watchlist__toggle { display: flex; align-items: center; gap: 0.35rem; font-size: 0.72rem; font-weight: 750; white-space: nowrap; }
+  .watchlist__heading p, .watchlist__empty, .watchlist__message { margin: 0; color: var(--text-muted); font-size: .75rem; }
+  .watchlist__toggle { display: flex; align-items: center; gap: 0.35rem; font-size: .75rem; font-weight: 750; white-space: nowrap; }
   .watchlist__toggle input { width: 1rem; height: 1rem; accent-color: var(--accent); }
   .watchlist__items { display: grid; gap: 1px; margin: 0.55rem 0 0; padding: 0; overflow: hidden; border: 1px solid var(--border); border-radius: 0.5rem; background: var(--border); list-style: none; }
   .watchlist__items li { display: grid; grid-template-columns: 2rem minmax(0, 1fr) auto; align-items: center; gap: 0.5rem; padding: 0.35rem 0.5rem; background: var(--surface-1); }
-  .watchlist__items strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.74rem; }
   .watchlist__image { display: grid; width: 2rem; height: 2rem; place-items: center; overflow: hidden; border-radius: 0.35rem; background: var(--surface-2); color: var(--accent-strong); }
   .watchlist__image img { width: 100%; height: 100%; object-fit: contain; }
   .watchlist__empty { margin-block-start: 0.45rem; }
@@ -649,7 +618,7 @@
     padding: 0.48rem 0.7rem;
     background: var(--surface-2);
     color: var(--text-muted);
-    font-size: 0.64rem;
+    font-size: .75rem;
     font-weight: 850;
     letter-spacing: 0.04em;
     text-transform: uppercase;
@@ -661,8 +630,8 @@
   .bounty-row__summary:hover { background: var(--surface-hover); }
   .rank { color: var(--accent-strong); text-align: center; font-variant-numeric: tabular-nums; }
   .job-name, .top-reward, .job-price { display: grid; gap: 0.08rem; min-width: 0; }
-  .job-name > strong, .top-reward strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.78rem; }
-  .job-name span, .top-reward small, .job-price small { color: var(--text-muted); font-size: 0.64rem; }
+  .job-name > strong, .top-reward strong { overflow-wrap: anywhere; font-size: .875rem; }
+  .job-name span, .top-reward small, .job-price small { color: var(--text-muted); font-size: .75rem; }
   .level, .rotation { font-size: 0.75rem; font-variant-numeric: tabular-nums; }
   .top-reward { grid-template-columns: 1.8rem minmax(0, 1fr); align-items: center; }
   .top-reward > span { display: grid; min-width: 0; }
@@ -675,7 +644,7 @@
   .job-details > header { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; margin-block-end: 0.45rem; }
   .job-details > header > div { display: grid; gap: 0.08rem; }
   .job-details header strong { font-size: 0.8rem; }
-  .job-details header span, .live-message { color: var(--text-muted); font-size: 0.66rem; }
+  .job-details header span, .live-message { color: var(--text-muted); font-size: .75rem; }
   .live-message { margin: 0 0 0.4rem; }
 
   .reward-table { overflow: hidden; border: 1px solid var(--border); border-radius: 0.55rem; }
@@ -686,40 +655,38 @@
     gap: 0.5rem;
     padding: 0.38rem 0.55rem;
   }
-  .reward-table__head { background: var(--surface-2); color: var(--text-muted); font-size: 0.61rem; font-weight: 850; text-transform: uppercase; }
+  .reward-table__head { background: var(--surface-2); color: var(--text-muted); font-size: .75rem; font-weight: 850; text-transform: uppercase; }
   .reward-table article + article { border-block-start: 1px solid var(--border); }
-  .reward-table article { font-size: 0.72rem; }
+  .reward-table article { font-size: .8125rem; }
   .reward-table article.unpriced { background: color-mix(in oklch, var(--accent-soft) 24%, var(--surface-1)); }
   .reward-table article.untradeable { color: var(--text-muted); }
   .reward-name { display: grid; grid-template-columns: 2rem minmax(0, 1fr) auto; align-items: center; gap: 0.45rem; min-width: 0; }
   .reward-name__copy { display: grid; min-width: 0; }
-  .reward-name strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.74rem; }
-  .reward-name small { color: var(--text-muted); font-size: 0.62rem; }
+  .reward-name strong { overflow-wrap: anywhere; font-size: .875rem; }
+  .reward-name small { color: var(--text-muted); font-size: .75rem; }
   .reward-image { display: grid; width: 2rem; height: 2rem; place-items: center; overflow: hidden; border-radius: 0.35rem; background: var(--surface-2); }
   .reward-image img { width: 100%; height: 100%; object-fit: contain; }
-  .text-action { border: 0; padding: 0.15rem; background: transparent; color: var(--accent-strong); font-size: 0.68rem; font-weight: 800; white-space: nowrap; }
+  .text-action { min-height: 2rem; border: 0; padding: 0.25rem; background: transparent; color: var(--accent-strong); font-size: .8125rem; font-weight: 700; white-space: nowrap; }
   .text-action:hover { text-decoration: underline; }
   .reward-actions { display: flex; align-items: center; justify-content: flex-end; gap: 0.35rem; }
   .watch-button { display: grid; width: 1.85rem; height: 1.85rem; place-items: center; border: 1px solid var(--border-strong); border-radius: 0.4rem; padding: 0; background: var(--surface-1); color: var(--text-muted); font-size: 1rem; }
   .watch-button:hover, .watch-button.active { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-strong); }
 
-  .bounty-limit { margin: 0; color: var(--text-muted); font-size: 0.68rem; }
+  .bounty-limit { margin: 0; color: var(--text-muted); font-size: .75rem; }
   .bounty-loading { display: grid; gap: 0.55rem; }
   .bounty-loading__status { display: flex; justify-content: space-between; border: 1px solid var(--border); border-radius: 0.7rem; padding: 0.65rem; background: var(--surface-1); }
-  .bounty-loading__status span { color: var(--text-muted); font-size: 0.72rem; }
+  .bounty-loading__status span { color: var(--text-muted); font-size: .75rem; }
   .bounty-loading__row { height: 4.5rem; border-radius: 0.7rem; background: var(--surface-2); }
 
   @media (max-width: 75rem) {
-    .ranking__header, .bounty-row__summary { grid-template-columns: 1.8rem minmax(11rem, 1.2fr) 4rem minmax(10rem, 1fr) 6rem; }
+    .ranking__header, .bounty-row__summary { grid-template-columns: 1.8rem minmax(11rem, 1.2fr) 4rem minmax(10rem, 1fr) 8rem; }
     .ranking__header > :last-child, .bounty-row__summary > .rotation { display: none; }
-    .reward-table__head, .reward-table article { grid-template-columns: minmax(12rem, 1.4fr) 4.5rem 7rem 6rem 5rem; }
-    .reward-table__head > :last-child, .reward-table article > :last-child { grid-column: 1 / -1; justify-self: end; }
+    .reward-table__head, .reward-table article { grid-template-columns: minmax(11rem, 1.4fr) 4rem 6.5rem 5.5rem 5rem 6rem; }
   }
 
   @media (max-width: 55rem) {
-    .rotation-bar, .best-card, .bounty-toolbar { grid-template-columns: 1fr 1fr; }
+    .rotation-bar, .bounty-toolbar { grid-template-columns: 1fr 1fr; }
     .rotation-bar button { justify-self: start; }
-    .best-card > div:nth-child(3) { grid-column: 1 / -1; border-inline-start: 0; border-block-start: 1px solid var(--border); }
     .search-field { grid-column: 1 / -1; }
     .ranking__header { display: none; }
     .bounty-row__summary { grid-template-columns: 1.7rem minmax(0, 1fr) auto; }
@@ -732,9 +699,8 @@
   }
 
   @media (max-width: 38rem) {
-    .rotation-bar, .best-card, .bounty-toolbar { grid-template-columns: 1fr; }
-    .best-card > div + div { border-inline-start: 0; border-block-start: 1px solid var(--border); }
-    .best-card > div:nth-child(3), .search-field { grid-column: auto; }
+    .rotation-bar, .bounty-toolbar { grid-template-columns: 1fr; }
+    .search-field { grid-column: auto; }
     .job-details > header, .refresh-warning { align-items: flex-start; flex-direction: column; }
     .watchlist__heading { align-items: flex-start; flex-direction: column; }
   }

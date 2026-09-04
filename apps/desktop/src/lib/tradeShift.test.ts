@@ -93,8 +93,20 @@ describe("торговая смена", () => {
       health: "price_check_failed",
       recommendation: null,
       suggestedPrice: null,
-      needsAction: false,
+      needsAction: true,
+      priceCheckFailed: true,
     });
+  });
+
+  it("сбой цены не скрывает лишнее количество в ордере", () => {
+    const quote = recommendation();
+    const rows = buildTradeShiftRows(account, inventory, new Map([[recommendationIdentity(quote.key), quote]]));
+    const failed = applyPriceCheckFailures(rows, new Set([recommendationIdentity(quote.key)]));
+    expect(failed[0]).toMatchObject({
+      health: "inventory_mismatch", suggestedQuantity: 2, suggestedPrice: null,
+      recommendation: null, needsAction: true, priceCheckFailed: true,
+    });
+    expect(rows[0].priceCheckFailed).toBeUndefined();
   });
 
   it("ищет ордера по русскому и английскому названию", () => {

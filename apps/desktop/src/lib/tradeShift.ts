@@ -77,6 +77,7 @@ export interface TradeShiftRow {
   suggestedPrice: number | null;
   suggestedQuantity: number | null;
   needsAction: boolean;
+  priceCheckFailed?: boolean;
 }
 
 export interface TradeReconciliationAction {
@@ -183,16 +184,17 @@ export function applyPriceCheckFailures(
   rows: readonly TradeShiftRow[],
   failedIdentities: ReadonlySet<string>,
 ): TradeShiftRow[] {
-  return rows.map((row) => row.key && failedIdentities.has(recommendationIdentity(row.key))
+  return rows.map<TradeShiftRow>((row) => row.key && failedIdentities.has(recommendationIdentity(row.key))
     ? {
         ...row,
-        health: "price_check_failed",
+        health: row.health === "inventory_mismatch" ? row.health : "price_check_failed",
+        priceCheckFailed: true,
         recommendation: null,
         suggestedPrice: null,
-        suggestedQuantity: null,
-        needsAction: false,
+        suggestedQuantity: row.suggestedQuantity,
+        needsAction: true,
       }
-    : row);
+    : row).sort((a, b) => Number(b.needsAction) - Number(a.needsAction));
 }
 
 export function updateInput(changes: {

@@ -5,7 +5,8 @@
 
   import { formatPlatinum } from "./market";
   import {
-    confidencePercent,
+    overlayStatusText,
+    rewardDecisionLabel,
     overlayContentScale,
     rewardPrice,
     type RelicRewardChoice,
@@ -15,6 +16,7 @@
 
   let result: RelicRewardScanView | null = null;
   let unavailable = false;
+  let loading = true;
 
   function partStatus(reward: RelicRewardChoice, part: RewardSetPart): string {
     if (reward.set?.readyComponents === null) return "Количество неизвестно";
@@ -39,11 +41,12 @@
       })
       .catch(() => {
         if (!disposed) unavailable = true;
-      });
+      }).finally(() => { if (!disposed) loading = false; });
 
     void listen<RelicRewardScanView>("relic-rewards-updated", (event) => {
       result = event.payload;
       unavailable = false;
+      loading = false;
     }).then((cleanup) => {
       if (disposed) cleanup();
       else unlisten = cleanup;
@@ -67,13 +70,12 @@
     >
       {#each result.rewards as reward, index (reward.slot)}
         {@const price = rewardPrice(reward)}
-        <article class:recommended={reward.recommended} class:uncertain={reward.confidence < 0.75}>
+        {@const decisionLabel = rewardDecisionLabel(reward)}
+        <article class:recommended={reward.recommended && reward.confidence >= 0.75 && Boolean(reward.itemId)} class:uncertain={reward.confidence < 0.75}>
           <header class="card-topline">
             <span>Вариант {index + 1}</span>
-            {#if !reward.itemId}
-              <strong class="recognition-warning">Не распознано</strong>
-            {:else if reward.recommended}
-              <strong>Лучший выбор</strong>
+            {#if decisionLabel}
+              <strong class:recognition-warning={!reward.itemId || reward.confidence < 0.75}>{decisionLabel}</strong>
             {/if}
           </header>
 
@@ -145,9 +147,7 @@
             </section>
           {:else}
             <div class="simple-status">
-              {reward.confidence < 0.75
-                ? `Проверьте название · OCR ${confidencePercent(reward.confidence)}%`
-                : "Рыночная цена детали"}
+              Оценка продажи отдельно
             </div>
           {/if}
         </article>
@@ -155,7 +155,7 @@
     </section>
   {:else}
     <section class="overlay-empty" aria-live="polite">
-      <strong>{unavailable ? "Оверлей временно недоступен" : "Распознаём награды…"}</strong>
+      <strong>{overlayStatusText(result, loading, unavailable)}</strong>
     </section>
   {/if}
 </main>
