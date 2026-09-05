@@ -13,6 +13,10 @@ export function makeMasteryMock(scenario: string | null): MasteryView {
     { gameRef: "/Lotus/Demo/Mastery/Coda", displayName: "Хема Кода", displayNameEn: "Coda Hema", category: "primary", imageUrl: null, maxRank: 40, masteryRank: 30, xp: 450_000, status: "progress", reason: "history_partial", setSlugs: [] },
     { gameRef: "/Lotus/Demo/Mastery/Raplak", displayName: "Призма: Раплак", displayNameEn: "Raplak Prism", category: "amp", imageUrl: null, maxRank: 30, masteryRank: 28, xp: 406_864, status: "progress", reason: "history_partial", setSlugs: [] },
   ];
+  // Те же карточки сетов и наград во всех состояниях, без изменения торговых данных.
+  if (scenario === "progress") Object.assign(seeds[0], { xp: 93_000, masteryRank: 9, status: "progress", reason: "history_partial" });
+  if (scenario === "unknown") Object.assign(seeds[0], { xp: null, masteryRank: null, status: "unknown", reason: "no_record" });
+  if (scenario === "unmapped") seeds.shift();
   const items = scenario === "large"
     ? Array.from({ length: 97 }, (_, index) => ({ ...seeds[index % seeds.length], gameRef: `${seeds[index % seeds.length].gameRef}/${index}`, displayName: `${seeds[index % seeds.length].displayName} ${index + 1}`, displayNameEn: `${seeds[index % seeds.length].displayNameEn} ${index + 1}` }))
     : seeds;

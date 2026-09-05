@@ -33,8 +33,49 @@ export interface MasteryState {
 
 export function masteryStatusLabel(status: MasteryStatus, locale: UiLocale = "ru"): string {
   return locale === "ru"
-    ? { mastered: "Освоено", progress: "Не до конца", unknown: "Нет данных" }[status]
-    : { mastered: "Mastered", progress: "Incomplete", unknown: "Unknown" }[status];
+    ? { mastered: "Освоено", progress: "Не освоено", unknown: "Нет данных" }[status]
+    : { mastered: "Mastered", progress: "Not mastered", unknown: "Unknown" }[status];
+}
+
+/** Отсутствие подтверждения не подменяем нулевым прогрессом. */
+export function masteryExplanation(item: MasteryItemView, locale: UiLocale = "ru"): string {
+  const t = (ru: string, en: string) => locale === "ru" ? ru : en;
+  if (item.reason === "unsupported") return t("Для этого снаряжения особые правила освоения. Автоматический статус пока не определяем.", "This equipment has special mastery rules. An automatic status is not available yet.");
+  if (item.reason === "no_record") return t("В полученной истории нет записи об этом предмете. Его освоение пока неизвестно, а не равно нулю.", "The received history has no entry for this item. Its mastery is unknown, not zero.");
+  if (item.status === "progress") return t("Максимальный ранг ещё не достигнут. Показано освоение готового предмета за всё время, а не текущий ранг отдельной копии.", "The maximum rank has not been reached. This is lifetime mastery of the built item, not the current rank of an individual copy.");
+  return t("Готовый предмет уже освоен на аккаунте. Продажа и применение Формы не стирают эту отметку.", "The built item is already mastered on this account. Selling and Forma do not remove this record.");
+}
+
+export function masteryAnnotation(
+  item: MasteryItemView | undefined,
+  options: { loading?: boolean; error?: boolean; stale?: boolean; historyAvailable?: boolean } = {},
+  locale: UiLocale = "ru",
+) {
+  const t = (ru: string, en: string) => locale === "ru" ? ru : en;
+  const tone = item?.status ?? "unknown";
+  let text = item && item.status !== "unknown"
+    ? masteryStatusLabel(item.status, locale)
+    : t("Освоение: нет данных", "Mastery: unknown");
+  let title = item ? masteryExplanation(item, locale)
+    : t("Для этого предмета нет данных об освоении.", "Mastery data is unavailable for this item.");
+  if (item?.status === "progress" && item.masteryRank != null && item.maxRank != null) {
+    text += ` · ${item.masteryRank}/${item.maxRank}`;
+    title += t(` Освоено рангов: ${item.masteryRank} из ${item.maxRank}.`, ` Mastery ranks: ${item.masteryRank} of ${item.maxRank}.`);
+  }
+  if (!item && options.loading) {
+    text = t("Освоение: загружаем…", "Mastery: loading…");
+    title = t("Получаем историю освоения аккаунта.", "Loading account mastery history.");
+  } else if (!item && options.error) {
+    text = t("Освоение недоступно", "Mastery unavailable");
+    title = t("Не удалось загрузить историю. Повторите обновление в «Мои предметы → Освоение».", "History could not be loaded. Retry in My items → Mastery.");
+  } else if ((!item || item.status === "unknown") && !options.historyAvailable) {
+    title += t(" Обновите данные из Warframe в «Мои предметы → Освоение».", "Update from Warframe in My items → Mastery.");
+  }
+  if (item && options.stale) {
+    text += t(" · сохранено", " · saved");
+    title += t(" Показана последняя сохранённая история: обновить её не удалось.", " Showing the last saved history: refresh failed.");
+  }
+  return { text, title, tone, mastered: item?.status === "mastered" };
 }
 
 const categoryNames: Record<string, readonly [string, string]> = {

@@ -1,5 +1,18 @@
 # Уведомления о стороннем коде
 
+## Warframe: игровой значок освоения
+
+`apps/desktop/src/lib/assets/warframe-mastered.png` — оригинальная текстура
+Warframe `/Lotus/Interface/Icons/CodexObjectsLaurelWhite.png`, © Digital Extremes.
+Используется для обозначения освоенного снаряжения; права на игровую графику
+принадлежат Digital Extremes, а не проекту PlatScope.
+
+Соответствие игровому маркеру `MASTERED` проверено по
+[ExportTextIcons.json](https://github.com/calamity-inc/warframe-public-export-plus/blob/senpai/ExportTextIcons.json).
+Файл получен без перерисовки из [зеркала игровых ресурсов browse.wf](https://browse.wf/Lotus/Interface/Icons/CodexObjectsLaurelWhite.png).
+SHA-256: `239249f3ffb73e3c94ce8b5cda9b2d8c3ff6ba82832a30ac187462b795ad9f06`.
+Цвет в интерфейсе задаётся маской, исходная форма и прозрачность сохранены.
+
 ## WFInfo
 
 Геометрия экрана наград, палитра тем и устройство OCR-пайплайна в

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createMasteryStore, filterMasteryItems, masteryStatusLabel, masteryTargetsForReward, type MasteryItemView, type MasteryState, type MasteryView } from "./mastery";
+import { createMasteryStore, filterMasteryItems, masteryAnnotation, masteryStatusLabel, masteryTargetsForReward, type MasteryItemView, type MasteryState, type MasteryView } from "./mastery";
 import { makeMasteryMock } from "./masteryMock";
 
 const source = () => makeMasteryMock(null);
@@ -34,7 +34,7 @@ describe("освоение аккаунта", () => {
     const coda = source().items.find(item => item.displayNameEn === "Coda Hema")!;
     expect(coda.masteryRank).toBe(30);
     expect(coda.maxRank).toBe(40);
-    expect(masteryStatusLabel(coda.status)).toBe("Не до конца");
+    expect(masteryStatusLabel(coda.status)).toBe("Не освоено");
   });
   it("использует точную связь детали с готовым предметом, без догадок по имени", () => {
     const sets = [
@@ -54,6 +54,51 @@ describe("освоение аккаунта", () => {
       expect(masteryTargetsForReward({ rewardGameRef: `/NyxPrime${part}Blueprint`, rewardSlug: `nyx_prime_${part}` }, sets)).toEqual(["/NyxPrime"]);
     }
     expect(masteryTargetsForReward({ rewardGameRef: "/NyxPrimechassisBlueprint", rewardSlug: "nyx_prime" }, sets)).toEqual([]);
+  });
+});
+
+describe("видимые отметки освоения у сетов и наград", () => {
+  it("показывает игровой венок только для подтверждённого освоения", () => {
+    for (const item of source().items) {
+      const mark = masteryAnnotation(item, { historyAvailable: true });
+      expect(mark.text.length).toBeGreaterThan(0);
+      expect(mark.mastered).toBe(item.status === "mastered");
+    }
+    expect(masteryAnnotation(source().items[0]).text).toBe("Освоено");
+  });
+  it("не скрывает неосвоенный предмет и показывает ранг, включая нулевой", () => {
+    const item = source().items.find(item => item.status === "progress")!;
+    expect(masteryAnnotation(item).text).toBe("Не освоено · 9/30");
+    expect(masteryAnnotation({ ...item, masteryRank: 0 }).text).toBe("Не освоено · 0/30");
+    expect(masteryAnnotation({ ...item, masteryRank: null }).text).toBe("Не освоено");
+    const coda = source().items.find(item => item.displayNameEn === "Coda Hema")!;
+    expect(masteryAnnotation(coda).text).toBe("Не освоено · 30/40");
+    expect(masteryAnnotation(item, {}, "en").text).toBe("Not mastered · 9/30");
+  });
+  it("отличает отсутствие записи от неосвоенного предмета", () => {
+    const item = source().items.find(item => item.reason === "no_record")!;
+    const mark = masteryAnnotation(item, { historyAvailable: true });
+    expect(mark.text).toBe("Освоение: нет данных");
+    expect(mark.title).toContain("неизвестно, а не равно нулю");
+    expect(mark.mastered).toBe(false);
+    const unsupported = source().items.find(item => item.reason === "unsupported")!;
+    expect(masteryAnnotation(unsupported).title).toContain("особые правила");
+  });
+  it("не оставляет пустое место при загрузке, ошибке и отсутствии сопоставления", () => {
+    expect(masteryAnnotation(undefined, { loading: true }).text).toBe("Освоение: загружаем…");
+    expect(masteryAnnotation(undefined, { error: true }).text).toBe("Освоение недоступно");
+    expect(masteryAnnotation(undefined, { error: true }).title).toContain("Повторите");
+    expect(masteryAnnotation(undefined).text).toBe("Освоение: нет данных");
+    expect(masteryAnnotation(undefined).title).toContain("Обновите данные");
+    expect(masteryAnnotation(undefined, { historyAvailable: true }).title).not.toContain("Обновите данные");
+  });
+  it("сохраняет статус при обновлении и отмечает устаревшую историю после ошибки", () => {
+    const item = source().items[0];
+    expect(masteryAnnotation(item, { loading: true }).text).toBe("Освоено");
+    const saved = masteryAnnotation(item, { stale: true, error: true });
+    expect(saved.text).toBe("Освоено · сохранено");
+    expect(saved.mastered).toBe(true);
+    expect(saved.title).toContain("обновить её не удалось");
   });
 });
 
