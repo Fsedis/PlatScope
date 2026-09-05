@@ -2739,6 +2739,7 @@ mod tests {
                 game_ref: "test-set-ref".into(),
                 mastery_requirement: 8,
             }],
+            mastery_items: Vec::new(),
             item_localizations: Vec::new(),
             syndicate_offers: Vec::new(),
             nightwave_offers: Vec::new(),

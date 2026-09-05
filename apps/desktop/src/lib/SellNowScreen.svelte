@@ -2,6 +2,7 @@
   import type { SellNowView as CachedSellNowView } from "./sellNow";
 
   let cachedSellNowView: CachedSellNowView | null = null;
+  let cachedItemMode: "inventory" | "mastery" = "inventory";
 </script>
 
 <script lang="ts">
@@ -10,6 +11,8 @@
   import { onMount, tick } from "svelte";
   import { revealCompactDetail, revealElement } from "./detailNavigation";
   import { localeCode, useLocale } from "./i18n";
+  import MasteryScreen from "./MasteryScreen.svelte";
+  import { masteryStore } from "./mastery";
   import {
     accountActionErrorMessage,
     createListingInputFromInventory,
@@ -143,6 +146,8 @@
   let loading = cachedSellNowView === null;
   let refreshing = false;
   let scanning = false;
+  let itemMode: "inventory" | "mastery" = cachedItemMode;
+  function selectItemMode(mode: "inventory" | "mastery") { itemMode = mode; cachedItemMode = mode; }
   let reserveUpdating = false;
   let errorMessage = "";
   let selectedIdentity = "";
@@ -245,7 +250,7 @@
     errorMessage = "";
     try {
       await invoke("scan_read_only_inventory");
-      await loadSellNow();
+      await Promise.all([loadSellNow(), masteryStore.refresh()]);
       onInventoryChange?.();
     } catch {
       errorMessage = c.scanError;
@@ -529,6 +534,15 @@
   });
 </script>
 
+<div class="item-mode-switch" role="group" aria-label={$locale === "ru" ? "Мои предметы" : "My items"}>
+  <button type="button" aria-pressed={itemMode === "inventory"} onclick={() => selectItemMode("inventory")}>{$locale === "ru" ? "Инвентарь" : "Inventory"}</button>
+  <button type="button" aria-pressed={itemMode === "mastery"} onclick={() => selectItemMode("mastery")}>{$locale === "ru" ? "Освоение" : "Mastery"}</button>
+</div>
+
+{#if itemMode === "mastery"}
+  {#if errorMessage}<div class="error-block" role="alert"><p>{errorMessage}</p></div>{/if}
+  <MasteryScreen {scanning} onScan={scanWarframe} />
+{:else}
 <div class="sell-now-status" class:sr-only={!scanning && !loading} role="status" aria-live="polite">{scanning ? c.scanningInventory : resultStatus}</div>
 
 {#if errorMessage}
@@ -857,3 +871,10 @@
     </div>
   {/if}
 {/if}
+{/if}
+
+<style>
+  .item-mode-switch{display:flex;width:fit-content;gap:.25rem;padding:.2rem;margin-bottom:1rem;border:1px solid var(--border);border-radius:.65rem;background:var(--surface-1)}
+  .item-mode-switch button{background:transparent;color:var(--text);border-color:transparent}
+  .item-mode-switch button[aria-pressed="true"]{background:var(--accent-soft);border-color:var(--accent)}
+</style>

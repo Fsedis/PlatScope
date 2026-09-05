@@ -20,9 +20,9 @@ use platscope_core::{
     HistoryBootstrapOutcome, HistoryService, InsightsService, InsightsView, InventoryService,
     InventoryView, LivePricingResult, LivePricingService, LiveSellNowResult, LoggingGuard,
     MarketBrowserService, MarketDataService, MarketHistoryView, MarketRefreshOutcome,
-    MarketSearchResult, MarketSearchRow, PriceRecommendation, PricingService,
-    ResourceConverterService, ResourceConverterView, SETTINGS_KEY, SellNowService, SellNowView,
-    SetComponentInsight, UpdateListingInput, enrich_account_view, init_logging,
+    MarketSearchResult, MarketSearchRow, MasteryService, MasteryView, PriceRecommendation,
+    PricingService, ResourceConverterService, ResourceConverterView, SETTINGS_KEY, SellNowService,
+    SellNowView, SetComponentInsight, UpdateListingInput, enrich_account_view, init_logging,
 };
 use platscope_domain::{
     GameMetadataSnapshot, InventoryResolution, MarketItemKind, MarketVariantKey, PriceConfidence,
@@ -445,6 +445,21 @@ async fn scan_read_only_inventory(
         InventoryService::import_read_only_scan_json(&state.database, &raw_json, &settings)
             .map_err(|error| error.to_string())?,
     );
+    // История не блокирует торговый инвентарь. Привязка к checksum не даст
+    // показать старый аккаунт при смене снимка или неудачной записи кэша.
+    if MasteryService::capture(
+        &state.database,
+        &raw_json,
+        &scan_info.account_id,
+        &view.metadata.checksum_sha256,
+    )
+    .is_err()
+    {
+        tracing::warn!(
+            event = "mastery_cache_failed",
+            "mastery history was not cached"
+        );
+    }
     let nightwave_offer_count = nightwave_vendor.as_ref().map_or(0, |snapshot| {
         let count = snapshot.offers.len();
         if let Err(error) =
@@ -476,6 +491,19 @@ async fn scan_read_only_inventory(
     app.emit("inventory-updated", ())
         .map_err(|error| error.to_string())?;
     Ok(view)
+}
+
+#[tauri::command(async)]
+#[allow(clippy::needless_pass_by_value)] // Tauri command extractor owns State.
+fn load_mastery(state: State<'_, AppState>) -> Result<MasteryView, String> {
+    MasteryService::view(&state.database)
+        .map(|mut view| {
+            for item in &mut view.items {
+                localize_component_image_url(&mut item.image_url);
+            }
+            view
+        })
+        .map_err(|_| "unable to load saved mastery history".to_owned())
 }
 
 #[tauri::command(async)]
@@ -3898,6 +3926,7 @@ pub fn run() {
             bootstrap_history,
             scan_read_only_inventory,
             load_inventory,
+            load_mastery,
             set_inventory_keep_copies,
             sell_now,
             sell_now_live,

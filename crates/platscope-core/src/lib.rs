@@ -1,5 +1,8 @@
 #![forbid(unsafe_code)]
 
+mod mastery;
+pub use mastery::{MasteryService, MasteryView};
+
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
@@ -58,7 +61,7 @@ const HISTORY_FETCH_ATTEMPTS: u8 = 3;
 pub const DEFAULT_KEEP_COPIES: u32 = 1;
 pub const DEFAULT_REWARD_OVERLAY_SCALE_PERCENT: u16 = 100;
 pub const DEFAULT_REWARD_OVERLAY_OFFSET_PERCENT: i16 = 0;
-const CURRENT_GAME_METADATA_SCHEMA_VERSION: u32 = 7;
+const CURRENT_GAME_METADATA_SCHEMA_VERSION: u32 = 8;
 const CURRENT_CATALOG_SCHEMA_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -5650,6 +5653,7 @@ mod tests {
             prime_parts: Vec::new(),
             riven_dispositions: Vec::new(),
             item_definitions: Vec::new(),
+            mastery_items: Vec::new(),
             item_localizations: Vec::new(),
             syndicate_offers: Vec::new(),
             nightwave_offers: Vec::new(),
@@ -6436,6 +6440,7 @@ mod tests {
             prime_parts: vec![],
             riven_dispositions: vec![],
             item_definitions: vec![],
+            mastery_items: vec![],
             item_localizations: vec![],
             syndicate_offers: vec![],
             nightwave_offers: vec![],

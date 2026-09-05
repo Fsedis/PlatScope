@@ -1,4 +1,5 @@
 import { mockIPC } from "@tauri-apps/api/mocks";
+import { makeMasteryMock } from "./masteryMock";
 
 import type {
   AccountOrder,
@@ -771,6 +772,14 @@ export async function installMarketBrowserMock(): Promise<void> {
     if (command === "sell_now") {
       return makeSellNowView();
     }
+    if (command === "load_mastery") {
+      if (mockOptions.get("mockMastery") === "error") throw new Error("test mastery unavailable");
+      return makeMasteryMock(mockOptions.get("mockMastery"));
+    }
+    if (command === "scan_read_only_inventory") {
+      if (mockOptions.get("mockMastery") === "scan-error") throw new Error("test scan unavailable");
+      return localizeInventoryView(inventory);
+    }
     if (command === "insights") {
       const view = makeInsightsView();
       if (mockOptions.get("mockInsights") === "1") {
@@ -1206,7 +1215,7 @@ function makeInsightsView(): InsightsView {
   ].map((reward) => ({
     definition: {
       rewardSlug: reward.slug,
-      rewardGameRef: `/Lotus/Demo/${reward.name.replaceAll(" ", "")}`,
+      rewardGameRef: `/Lotus/Demo/${reward.slug ?? reward.name.replaceAll(" ", "")}`,
       displayNameEn: reward.name,
       chancePercent: reward.chance,
     },

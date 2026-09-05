@@ -6,9 +6,9 @@ use futures_util::{StreamExt, stream};
 use platscope_domain::{
     ArcaneDissolutionDefinition, ArcanePackComponentDefinition, ArcanePackDefinition, CatalogItem,
     GameItemDefinition, GameItemLocalization, GameMetadataSnapshot, GameMetadataSnapshotMetadata,
-    GameMetadataSource, ItemCatalog, NightwaveOfferDefinition, PrimePartMetadata,
-    PrimeSetComponentDefinition, PrimeSetDefinition, RelicDefinition, RelicRefinement,
-    RelicRewardDefinition, RivenDispositionDefinition, RivenWeaponCategory,
+    GameMetadataSource, ItemCatalog, MasteryItemDefinition, NightwaveOfferDefinition,
+    PrimePartMetadata, PrimeSetComponentDefinition, PrimeSetDefinition, RelicDefinition,
+    RelicRefinement, RelicRewardDefinition, RivenDispositionDefinition, RivenWeaponCategory,
     SyndicateOfferDefinition, VaultStatus,
 };
 use serde::Deserialize;
@@ -21,7 +21,7 @@ use crate::{
 
 const DEFAULT_BASE_URL: &str =
     "https://raw.githubusercontent.com/WFCD/warframe-items/master/data/json";
-const WFCD_DOCUMENT_NAMES: [&str; 12] = [
+const WFCD_DOCUMENT_NAMES: [&str; 14] = [
     "Relics.json",
     "Warframes.json",
     "Primary.json",
@@ -32,13 +32,15 @@ const WFCD_DOCUMENT_NAMES: [&str; 12] = [
     "Archwing.json",
     "Arch-Gun.json",
     "Arch-Melee.json",
+    "Pets.json",
+    "Misc.json",
     "Mods.json",
     "i18n.json",
 ];
 const ARCANE_DISSOLUTION_URL: &str = "https://raw.githubusercontent.com/calamity-inc/warframe-public-export-plus/senpai/ExportArcanes.json";
 const ARCANE_PACKS_URL: &str = "https://raw.githubusercontent.com/calamity-inc/warframe-public-export-plus/senpai/ExportBoosterPacks.json";
 const VENDOR_MANIFESTS_URL: &str = "https://raw.githubusercontent.com/calamity-inc/warframe-public-export-plus/senpai/ExportVendors.json";
-const MAX_DOCUMENT_COUNT: usize = 16;
+const MAX_DOCUMENT_COUNT: usize = 18;
 const MAX_METADATA_DOCUMENT_BYTES: usize = 64 * 1024 * 1024;
 const MAX_TOTAL_BYTES: usize = 128 * 1024 * 1024;
 const MAX_CONCURRENT_DOWNLOADS: usize = 4;
@@ -148,6 +150,19 @@ struct WfcdSetItem {
     disposition: Option<u8>,
     omega_attenuation: Option<f64>,
     mastery_req: Option<u8>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WfcdMasteryItem {
+    unique_name: String,
+    name: String,
+    #[serde(default)]
+    masterable: bool,
+    #[serde(rename = "type")]
+    item_type: Option<String>,
+    image_name: Option<String>,
+    max_level_cap: Option<u8>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -388,6 +403,7 @@ fn normalize_wfcd_metadata(
     let mut riven_dispositions: Vec<_> = riven_dispositions.into_values().collect();
     riven_dispositions.sort_by(|left, right| left.weapon_name_en.cmp(&right.weapon_name_en));
     let item_definitions: Vec<_> = item_definitions.into_values().collect();
+    let mastery_items = normalize_mastery_items(dump, &item_localizations)?;
     let item_localizations: Vec<_> = item_localizations.into_values().collect();
     let syndicate_offers: Vec<_> = syndicate_offers.into_values().collect();
     let nightwave_offers: Vec<_> = nightwave_offers.into_values().collect();
@@ -397,7 +413,7 @@ fn normalize_wfcd_metadata(
         metadata: GameMetadataSnapshotMetadata {
             source: GameMetadataSource::WfcdWarframeItems,
             fetched_at: dump.fetched_at,
-            schema_version: 7,
+            schema_version: 8,
             set_count: u64::try_from(prime_sets.len()).unwrap_or(u64::MAX),
             relic_count: u64::try_from(relics.len()).unwrap_or(u64::MAX),
             prime_part_count: u64::try_from(prime_parts.len()).unwrap_or(u64::MAX),
@@ -410,12 +426,267 @@ fn normalize_wfcd_metadata(
         prime_parts,
         riven_dispositions,
         item_definitions,
+        mastery_items,
         item_localizations,
         syndicate_offers,
         nightwave_offers,
         arcane_dissolutions,
         arcane_packs,
     })
+}
+
+fn normalize_mastery_items(
+    dump: &RawGameMetadataDump,
+    localizations: &BTreeMap<String, GameItemLocalization>,
+) -> Result<Vec<MasteryItemDefinition>, ProviderError> {
+    let mut definitions = BTreeMap::new();
+    for document in &dump.documents {
+        parse_mastery_items(&document.body, &document.name, &mut definitions)?;
+    }
+    if dump
+        .documents
+        .iter()
+        .any(|document| document.name.eq_ignore_ascii_case("Misc.json"))
+    {
+        add_missing_mastery_definitions(&mut definitions);
+    }
+    for definition in definitions.values_mut() {
+        definition.display_name_ru = localizations
+            .get(&definition.game_ref)
+            .map(|localization| localization.display_name_ru.clone())
+            .or_else(|| definition.display_name_ru.clone());
+    }
+    Ok(definitions.into_values().collect())
+}
+
+fn mastery_document_category(document_name: &str) -> Option<&'static str> {
+    match document_name.to_ascii_lowercase().as_str() {
+        "warframes.json" => Some("warframe"),
+        "primary.json" => Some("primary"),
+        "secondary.json" => Some("secondary"),
+        "melee.json" => Some("melee"),
+        "sentinels.json" | "pets.json" => Some("companion"),
+        "sentinelweapons.json" => Some("companion_weapon"),
+        "archwing.json" => Some("archwing"),
+        "arch-gun.json" => Some("archgun"),
+        "arch-melee.json" => Some("archmelee"),
+        "misc.json" => Some("unsupported"),
+        _ => None,
+    }
+}
+
+fn mastery_category_and_rank(
+    item: &WfcdMasteryItem,
+    document_category: &str,
+) -> (String, Option<u8>) {
+    let game_ref = item.unique_name.as_str();
+    let item_type = item.item_type.as_deref().unwrap_or_default();
+    if matches!(
+        game_ref,
+        "/Lotus/Powersuits/EntratiMech/NechroTech" | "/Lotus/Powersuits/EntratiMech/ThanoTech"
+    ) {
+        return ("necramech".into(), Some(40));
+    }
+    // XPInfo хранит освоение по определяющей детали, не по каждой сборке.
+    if item_type == "K-Drive Component" {
+        return ("kdrive".into(), Some(30));
+    }
+    if (document_category == "companion"
+        && (game_ref.starts_with("/Lotus/Types/Friendly/Pets/MoaPets/")
+            || game_ref.starts_with("/Lotus/Types/Friendly/Pets/ZanukaPets/")
+            || game_ref.starts_with("/Lotus/Types/Friendly/Pets/CreaturePets/")))
+        || game_ref.starts_with("/Lotus/Powersuits/Khora/Kavat/")
+    {
+        return ("companion".into(), Some(30));
+    }
+    if matches!(item_type, "Zaw Component" | "Kitgun Component") || is_missing_kitgun(game_ref) {
+        return (
+            "modular".into(),
+            match item.max_level_cap {
+                None | Some(30) => Some(30),
+                _ => None,
+            },
+        );
+    }
+    if item_type == "Amp Component" {
+        return ("amp".into(), Some(30));
+    }
+    let ordinary = match document_category {
+        "warframe" => {
+            item_type == "Warframe" && !game_ref.starts_with("/Lotus/Powersuits/EntratiMech/")
+        }
+        "primary" | "secondary" => matches!(
+            item_type,
+            "Bow"
+                | "Launcher"
+                | "Pistol"
+                | "Rifle"
+                | "Shotgun"
+                | "Sniper"
+                | "Dual Pistols"
+                | "Throwing"
+        ),
+        "melee" => matches!(item_type, "Melee" | "Rifle"),
+        "companion" => matches!(item_type, "Sentinel" | "Pets"),
+        "companion_weapon" => item_type == "Companion Weapon",
+        "archwing" => item_type == "Archwing",
+        "archgun" => item_type == "Arch-Gun",
+        "archmelee" => item_type == "Arch-Melee",
+        _ => false,
+    };
+    let max_rank = if ordinary {
+        match item.max_level_cap {
+            None | Some(30) => Some(30),
+            Some(40) => Some(40),
+            // Новый неподтверждённый предел не должен становиться обычным 30.
+            Some(_) => None,
+        }
+    } else {
+        None
+    };
+    (document_category.into(), max_rank)
+}
+
+fn parse_mastery_items(
+    body: &[u8],
+    document_name: &str,
+    definitions: &mut BTreeMap<String, MasteryItemDefinition>,
+) -> Result<(), ProviderError> {
+    let Some(category) = mastery_document_category(document_name) else {
+        return Ok(());
+    };
+    let items: Vec<WfcdMasteryItem> = serde_json::from_slice(body).map_err(|error| {
+        ProviderError::schema_changed(format!("invalid WFCD mastery JSON: {error}"))
+    })?;
+    for item in items
+        .into_iter()
+        .filter(|item| item.masterable || is_mastery_override(&item.unique_name))
+    {
+        if !item.unique_name.starts_with("/Lotus/")
+            || item.unique_name.len() > 256
+            || item.name.trim().is_empty()
+            || item.name.len() > 256
+        {
+            return Err(ProviderError::validation(
+                "invalid WFCD mastery item identity",
+            ));
+        }
+        let (category, max_rank) = mastery_category_and_rank(&item, category);
+        let definition = MasteryItemDefinition {
+            game_ref: item.unique_name.clone(),
+            display_name_en: item.name.trim().to_owned(),
+            display_name_ru: None,
+            category,
+            image_url: wfcd_component_image_url(item.image_name.as_deref()),
+            max_rank,
+        };
+        if let Some(previous) = definitions.get(&item.unique_name) {
+            if previous != &definition {
+                return Err(ProviderError::validation(
+                    "conflicting WFCD mastery item definitions",
+                ));
+            }
+        } else {
+            definitions.insert(item.unique_name, definition);
+        }
+    }
+    Ok(())
+}
+
+fn is_missing_kitgun(game_ref: &str) -> bool {
+    matches!(
+        game_ref,
+        "/Lotus/Weapons/Infested/Pistols/InfKitGun/Barrels/InfBarrelEgg/InfModularBarrelEggPart"
+            | "/Lotus/Weapons/Infested/Pistols/InfKitGun/Barrels/InfBarrelBeam/InfModularBarrelBeamPart"
+    )
+}
+
+fn is_mastery_override(game_ref: &str) -> bool {
+    is_missing_kitgun(game_ref)
+        || matches!(
+            game_ref,
+            "/Lotus/Powersuits/Khora/Kavat/KhoraKavatPowerSuit"
+                | "/Lotus/Powersuits/Khora/Kavat/KhoraPrimeKavatPowerSuit"
+        )
+}
+
+// WFCD не экспортирует усилители. Точные определения и имена проверены по
+// ExportWeapons + dict.en/dict.ru публичного экспорта DE (05.09.2026).
+// Дополняем только отсутствующие записи: будущий полноценный каталог приоритетен.
+fn add_missing_mastery_definitions(definitions: &mut BTreeMap<String, MasteryItemDefinition>) {
+    for (game_ref, en, ru, category) in [
+        (
+            "/Lotus/Weapons/Operator/Pistols/DrifterPistol/DrifterPistolPlayerWeapon",
+            "Sirocco",
+            "Сирокко",
+            "amp",
+        ),
+        (
+            "/Lotus/Weapons/Sentients/OperatorAmplifiers/SentTrainingAmplifier/SentAmpTrainingBarrel",
+            "Mote Prism",
+            "Призма: Пылинка",
+            "amp",
+        ),
+        (
+            "/Lotus/Weapons/Sentients/OperatorAmplifiers/Set1/Barrel/SentAmpSet1BarrelPartA",
+            "Raplak Prism",
+            "Призма: Раплак",
+            "amp",
+        ),
+        (
+            "/Lotus/Weapons/Sentients/OperatorAmplifiers/Set1/Barrel/SentAmpSet1BarrelPartB",
+            "Shwaak Prism",
+            "Призма: Шваак",
+            "amp",
+        ),
+        (
+            "/Lotus/Weapons/Sentients/OperatorAmplifiers/Set1/Barrel/SentAmpSet1BarrelPartC",
+            "Granmu Prism",
+            "Призма: Гранму",
+            "amp",
+        ),
+        (
+            "/Lotus/Weapons/Sentients/OperatorAmplifiers/Set2/Barrel/SentAmpSet2BarrelPartA",
+            "Rahn Prism",
+            "Призма: Ран",
+            "amp",
+        ),
+        (
+            "/Lotus/Weapons/Corpus/OperatorAmplifiers/Set1/Barrel/CorpAmpSet1BarrelPartA",
+            "Cantic Prism",
+            "Призма: Кантик",
+            "amp",
+        ),
+        (
+            "/Lotus/Weapons/Corpus/OperatorAmplifiers/Set1/Barrel/CorpAmpSet1BarrelPartB",
+            "Lega Prism",
+            "Призма: Лега",
+            "amp",
+        ),
+        (
+            "/Lotus/Weapons/Corpus/OperatorAmplifiers/Set1/Barrel/CorpAmpSet1BarrelPartC",
+            "Klamora Prism",
+            "Призма: Кламора",
+            "amp",
+        ),
+        (
+            "/Lotus/Types/Game/CrewShip/RailjackHarness",
+            "Plexus",
+            "Плексус",
+            "plexus",
+        ),
+    ] {
+        definitions
+            .entry(game_ref.into())
+            .or_insert_with(|| MasteryItemDefinition {
+                game_ref: game_ref.into(),
+                display_name_en: en.into(),
+                display_name_ru: Some(ru.into()),
+                category: category.into(),
+                image_url: None,
+                max_rank: Some(30),
+            });
+    }
 }
 
 fn catalog_image_url(item: &CatalogItem) -> Option<String> {
@@ -963,7 +1234,14 @@ mod tests {
         validate_metadata_dump(&dump).expect("production metadata stays within aggregate limit");
         let snapshot = normalize_wfcd_metadata(&dump, &catalog)
             .expect("production metadata normalizes against the current catalog");
-        assert_eq!(snapshot.metadata.schema_version, 7);
+        assert_eq!(snapshot.metadata.schema_version, 8);
+        assert!(snapshot.mastery_items.len() > 500);
+        assert!(
+            snapshot
+                .mastery_items
+                .iter()
+                .any(|item| item.category == "modular")
+        );
         assert!(!snapshot.syndicate_offers.is_empty());
         assert!(!snapshot.arcane_dissolutions.is_empty());
     }
@@ -983,7 +1261,7 @@ mod tests {
                 },
                 RawGameMetadataDocument {
                     name: "Primary.json".into(),
-                    body: br#"[{"uniqueName":"/Lotus/Weapons/Test/Soma","name":"Soma","disposition":4,"omegaAttenuation":1.2}]"#.to_vec(),
+                    body: br#"[{"uniqueName":"/Lotus/Weapons/Test/Soma","name":"Soma","type":"Rifle","masterable":true,"imageName":"Soma.png","disposition":4,"omegaAttenuation":1.2}]"#.to_vec(),
                 },
                 RawGameMetadataDocument {
                     name: "i18n.json".into(),
@@ -1028,6 +1306,272 @@ mod tests {
             "/Lotus/Weapons/Test/Soma"
         );
         assert_eq!(result.item_localizations[0].display_name_ru, "Сома");
+        // Сома отсутствует в market-каталоге fixture, но есть в истории освоения.
+        assert_eq!(result.mastery_items.len(), 1);
+        let mastery = &result.mastery_items[0];
+        assert_eq!(mastery.game_ref, "/Lotus/Weapons/Test/Soma");
+        assert_eq!(mastery.display_name_ru.as_deref(), Some("Сома"));
+        assert_eq!(mastery.category, "primary");
+        assert_eq!(mastery.max_rank, Some(30));
+        assert_eq!(
+            mastery.image_url.as_deref(),
+            Some("https://cdn.warframestat.us/img/Soma.png")
+        );
+        let mut legacy = serde_json::to_value(&result).expect("snapshot serializes");
+        legacy.as_object_mut().unwrap().remove("masteryItems");
+        assert!(
+            serde_json::from_value::<GameMetadataSnapshot>(legacy)
+                .expect("old snapshot parses")
+                .mastery_items
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn mastery_catalog_keeps_only_explicit_masterable_exact_items() {
+        let mut definitions = BTreeMap::new();
+        parse_mastery_items(
+            br#"[
+          {"uniqueName":"/Lotus/Weapons/Test/A","name":"A","type":"Rifle","masterable":true},
+          {"uniqueName":"/Lotus/Weapons/Test/A","name":"A","type":"Rifle","masterable":true},
+          {"uniqueName":"/Lotus/Weapons/Test/B","name":"B","type":"Rifle","masterable":false},
+          {"uniqueName":"/Lotus/Weapons/Test/C","name":"C","type":"Rifle"}
+        ]"#,
+            "Primary.json",
+            &mut definitions,
+        )
+        .unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(definitions.values().next().unwrap().max_rank, Some(30));
+        assert!(parse_mastery_items(br#"[{"uniqueName":"/Lotus/Weapons/Test/A","name":"Different","type":"Rifle","masterable":true}]"#,
+            "Primary.json", &mut definitions).is_err());
+        assert!(
+            parse_mastery_items(
+                br#"[{"uniqueName":"short-name","name":"A","type":"Rifle","masterable":true}]"#,
+                "Primary.json",
+                &mut BTreeMap::new()
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // Таблица независимых сочетаний категории, типа и предела.
+    fn mastery_rank_rules_preserve_uncertainty_for_special_equipment() {
+        let cases = [
+            (
+                "Warframes.json",
+                "/Lotus/Powersuits/Test/Suit",
+                "Warframe",
+                None,
+                "warframe",
+                Some(30),
+            ),
+            (
+                "Warframes.json",
+                "/Lotus/Powersuits/EntratiMech/NechroTech",
+                "Warframe",
+                None,
+                "necramech",
+                Some(40),
+            ),
+            (
+                "Warframes.json",
+                "/Lotus/Powersuits/EntratiMech/ThanoTech",
+                "Warframe",
+                None,
+                "necramech",
+                Some(40),
+            ),
+            (
+                "Warframes.json",
+                "/Lotus/Powersuits/EntratiMech/Future",
+                "Warframe",
+                None,
+                "warframe",
+                None,
+            ),
+            (
+                "Primary.json",
+                "/Lotus/Weapons/Test/Kuva",
+                "Rifle",
+                Some(40),
+                "primary",
+                Some(40),
+            ),
+            (
+                "Primary.json",
+                "/Lotus/Weapons/Test/Future",
+                "Rifle",
+                Some(50),
+                "primary",
+                None,
+            ),
+            (
+                "Primary.json",
+                "/Lotus/Weapons/Test/Novel",
+                "Unknown type",
+                None,
+                "primary",
+                None,
+            ),
+            (
+                "Pets.json",
+                "/Lotus/Types/Game/CatbrowPet/MirrorCatbrowPetPowerSuit",
+                "Pets",
+                None,
+                "companion",
+                Some(30),
+            ),
+            (
+                "Pets.json",
+                "/Lotus/Types/Friendly/Pets/MoaPets/MoaPetParts/MoaPetHeadPara",
+                "Pets",
+                None,
+                "companion",
+                Some(30),
+            ),
+            (
+                "Pets.json",
+                "/Lotus/Types/Friendly/Pets/ZanukaPets/ZanukaPetParts/ZanukaPetPartHeadA",
+                "Pets",
+                None,
+                "companion",
+                Some(30),
+            ),
+            (
+                "Pets.json",
+                "/Lotus/Types/Friendly/Pets/CreaturePets/VulpineInfestedCatbrowPetPowerSuit",
+                "Pets",
+                None,
+                "companion",
+                Some(30),
+            ),
+            (
+                "Melee.json",
+                "/Lotus/Weapons/Test/Tip",
+                "Zaw Component",
+                Some(40),
+                "modular",
+                None,
+            ),
+            (
+                "Misc.json",
+                "/Lotus/Weapons/Test/Chamber",
+                "Kitgun Component",
+                None,
+                "modular",
+                Some(30),
+            ),
+            (
+                "Misc.json",
+                "/Lotus/Types/Vehicles/Test/Deck",
+                "K-Drive Component",
+                None,
+                "kdrive",
+                Some(30),
+            ),
+            (
+                "Misc.json",
+                "/Lotus/Types/Test/Future",
+                "Unknown",
+                None,
+                "unsupported",
+                None,
+            ),
+            (
+                "SentinelWeapons.json",
+                "/Lotus/Types/Friendly/Pets/ZanukaPets/ZanukaPetMeleeWeaponPS",
+                "Companion Weapon",
+                None,
+                "companion_weapon",
+                Some(30),
+            ),
+            (
+                "SentinelWeapons.json",
+                "/Lotus/Weapons/Test/Laser",
+                "Companion Weapon",
+                None,
+                "companion_weapon",
+                Some(30),
+            ),
+            (
+                "Archwing.json",
+                "/Lotus/Powersuits/Archwing/Test",
+                "Archwing",
+                None,
+                "archwing",
+                Some(30),
+            ),
+            (
+                "Arch-Gun.json",
+                "/Lotus/Weapons/Test/ArchGun",
+                "Arch-Gun",
+                Some(40),
+                "archgun",
+                Some(40),
+            ),
+            (
+                "Arch-Melee.json",
+                "/Lotus/Weapons/Test/ArchMelee",
+                "Arch-Melee",
+                None,
+                "archmelee",
+                Some(30),
+            ),
+        ];
+        for (document, game_ref, item_type, cap, category, rank) in cases {
+            let item = WfcdMasteryItem {
+                unique_name: game_ref.into(),
+                name: "Test".into(),
+                masterable: true,
+                item_type: Some(item_type.into()),
+                image_name: None,
+                max_level_cap: cap,
+            };
+            assert_eq!(
+                mastery_category_and_rank(&item, mastery_document_category(document).unwrap()),
+                (category.into(), rank),
+                "{game_ref}"
+            );
+        }
+    }
+
+    #[test]
+    fn mastery_catalog_fills_exact_export_gaps_without_gilding_other_parts() {
+        let mut definitions = BTreeMap::new();
+        add_missing_mastery_definitions(&mut definitions);
+        assert_eq!(
+            definitions
+                .values()
+                .filter(|item| item.category == "amp")
+                .count(),
+            9
+        );
+        assert_eq!(
+            definitions
+                .values()
+                .filter(|item| item.category == "plexus")
+                .count(),
+            1
+        );
+        assert!(definitions.values().all(|item| item.max_rank == Some(30)));
+        assert!(
+            !definitions
+                .keys()
+                .any(|key| key.contains("/Grip/") || key.contains("/Chassis/"))
+        );
+        parse_mastery_items(br#"[
+            {"uniqueName":"/Lotus/Powersuits/Khora/Kavat/KhoraKavatPowerSuit","name":"Venari","type":"Warframe","masterable":false},
+            {"uniqueName":"/Lotus/Weapons/Infested/Pistols/InfKitGun/Barrels/InfBarrelEgg/InfModularBarrelEggPart","name":"Sporelacer","type":"Pistol","masterable":false},
+            {"uniqueName":"/Lotus/Other","name":"Other","type":"Pistol","masterable":false}
+        ]"#, "Misc.json", &mut definitions).unwrap();
+        assert_eq!(definitions.len(), 12);
+        assert_eq!(
+            definitions["/Lotus/Powersuits/Khora/Kavat/KhoraKavatPowerSuit"].category,
+            "companion"
+        );
+        assert_eq!(definitions["/Lotus/Weapons/Infested/Pistols/InfKitGun/Barrels/InfBarrelEgg/InfModularBarrelEggPart"].category, "modular");
     }
 
     #[test]

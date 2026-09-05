@@ -35,6 +35,7 @@
   import ResourceConverter from "./ResourceConverter.svelte";
   import OpportunityPlanner from "./OpportunityPlanner.svelte";
   import RelicBrowser from "./RelicBrowser.svelte";
+  import MasteryBadge from "./MasteryBadge.svelte";
   import {
     loadInsightsViewPreferences,
     saveInsightsViewPreferences,
@@ -821,6 +822,7 @@
                 <div>
                   <p class="set-context">{vaultLabel(row.definition.vaultStatus, $locale)}</p>
                   <h2>{row.displayName}</h2>
+                  <MasteryBadge gameRef={row.definition.setGameRef} />
                 </div>
               </div>
               {#if activeMode === "sell_sets"}

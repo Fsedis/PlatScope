@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import MasteryBadge from "./MasteryBadge.svelte";
   import { formatPlatinum, type LivePricingResult } from "./market";
   import { refinementLabel, setOpportunity, setPriceComparison, type InsightsView, type SetInsightRow } from "./insights";
   import { planCompletionBudget, planSetAcquisition, saleEstimate, type OpportunityGoal } from "./opportunityPlan";
@@ -103,6 +104,7 @@
     <aside class="panel selected-plan" aria-label="План выбранного сета">
       {#if selected && opportunity && acquisition && sale}
         <p class="eyebrow">Выбранный сет</p><h3>{selected.displayName}</h3>
+        <MasteryBadge gameRef={selected.definition.setGameRef} />
         <p>{opportunity.completeSets > 0 ? `Уже есть полных сетов: ${opportunity.completeSets}. План ниже — для следующего.` : "Сравни способы получить недостающие детали."}</p>
         <div class="sale-line"><span>{sale.buyer ? "Заявка покупателя за сет" : "Оценка продажи сета"}</span><strong>{money(sale.price)}</strong></div>
         {#if sale.volume !== null}<p class="muted">Закрытых сделок в данных: {sale.volume}. Это показатель спроса, не срок продажи.</p>{/if}

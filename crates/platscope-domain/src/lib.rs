@@ -332,6 +332,19 @@ pub struct GameItemDefinition {
     pub mastery_requirement: u8,
 }
 
+/// Осваиваемый предмет игры, независимо от наличия в торговом каталоге.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MasteryItemDefinition {
+    pub game_ref: String,
+    pub display_name_en: String,
+    pub display_name_ru: Option<String>,
+    pub category: String,
+    pub image_url: Option<String>,
+    /// Неизвестный предел не подменяется обычным максимальным рангом.
+    pub max_rank: Option<u8>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GameItemLocalization {
@@ -420,6 +433,8 @@ pub struct GameMetadataSnapshot {
     pub riven_dispositions: Vec<RivenDispositionDefinition>,
     #[serde(default)]
     pub item_definitions: Vec<GameItemDefinition>,
+    #[serde(default)]
+    pub mastery_items: Vec<MasteryItemDefinition>,
     #[serde(default)]
     pub item_localizations: Vec<GameItemLocalization>,
     #[serde(default)]
