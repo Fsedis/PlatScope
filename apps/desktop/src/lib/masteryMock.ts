@@ -15,6 +15,7 @@ export function makeMasteryMock(scenario: string | null): MasteryView {
   ];
   // Те же карточки сетов и наград во всех состояниях, без изменения торговых данных.
   if (scenario === "progress") Object.assign(seeds[0], { xp: 93_000, masteryRank: 9, status: "progress", reason: "history_partial" });
+  if (scenario === "not-mastered") Object.assign(seeds[0], { xp: null, masteryRank: null, status: "progress", reason: "history_absent" });
   if (scenario === "unknown") Object.assign(seeds[0], { xp: null, masteryRank: null, status: "unknown", reason: "no_record" });
   if (scenario === "unmapped") seeds.shift();
   const items = scenario === "large"

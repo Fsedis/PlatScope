@@ -10,6 +10,13 @@ vi.mock("./i18n", async importOriginal => ({
 }));
 
 describe("разметка отметки освоения", () => {
+  it("пишет не освоено для предмета, отсутствующего в загруженной истории", () => {
+    const { body } = render(MasteryStatus, { props: { item: makeMasteryMock("not-mastered").items[0], historyAvailable: true } });
+    expect(body).toContain("Не освоено");
+    expect(body).not.toContain("нет данных");
+    expect(body).not.toContain('class="mastered-icon');
+    expect(body).not.toContain("0/30");
+  });
   it("сохраняет видимые подписи во всех состояниях, венок — только при освоении", () => {
     for (const item of makeMasteryMock(null).items) {
       const { body } = render(MasteryStatus, { props: { item, historyAvailable: true } });

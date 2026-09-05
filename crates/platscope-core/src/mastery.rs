@@ -308,8 +308,7 @@ fn build_view(
                 let xp = history
                     .and_then(|history| history.entries.get(&item.game_ref))
                     .copied();
-                let equipment = history.and_then(|history| history.equipment.get(&item.game_ref));
-                let (status, reason) = mastery_status(item, xp, equipment);
+                let (status, reason) = account_mastery_status(item, history);
                 MasteryItemView {
                     game_ref: item.game_ref.clone(),
                     display_name: item
@@ -347,6 +346,28 @@ fn build_view(
         catalog_available: metadata.is_some_and(|metadata| !metadata.mastery_items.is_empty()),
         items,
     }
+}
+
+fn account_mastery_status(
+    item: &MasteryItemDefinition,
+    history: Option<&AccountHistory>,
+) -> (&'static str, &'static str) {
+    let xp = history
+        .and_then(|history| history.entries.get(&item.game_ref))
+        .copied();
+    let equipment = history.and_then(|history| history.equipment.get(&item.game_ref));
+    let result = mastery_status(item, xp, equipment);
+    // Отсутствие предмета в успешно полученной истории аккаунта — неосвоение.
+    // Дата отдельного экземпляра не доказывает, что XPInfo был получен.
+    // Сохранённое подтверждение освоения имеет приоритет даже без записи XPInfo.
+    if result == ("unknown", "no_record")
+        && history.is_some_and(|history| history.observed_at.is_some())
+        && matches!(item.max_rank, Some(30 | 40))
+        && affinity_multiplier(item).is_some()
+    {
+        return ("progress", "history_absent");
+    }
+    result
 }
 
 fn mastery_status(
@@ -480,6 +501,96 @@ mod tests {
             image_url: None,
             max_rank,
         }
+    }
+
+    #[test]
+    fn absent_item_in_loaded_account_history_is_not_mastered() {
+        let history = AccountHistory {
+            observed_at: Some(Utc::now()),
+            entries: BTreeMap::from([("/Lotus/Other".into(), 450_000)]),
+            ..Default::default()
+        };
+        assert_eq!(
+            account_mastery_status(&weapon(Some(30)), Some(&history)),
+            ("progress", "history_absent")
+        );
+        assert_eq!(
+            account_mastery_status(&weapon(Some(40)), Some(&history)),
+            ("progress", "history_absent")
+        );
+        // Ошибка обновления не стирает результат последнего успешного снимка.
+        let stale = AccountHistory {
+            refresh_failed: true,
+            ..history
+        };
+        assert_eq!(
+            account_mastery_status(&weapon(Some(30)), Some(&stale)),
+            ("progress", "history_absent")
+        );
+    }
+
+    #[test]
+    fn missing_history_or_unsupported_item_does_not_become_unmastered() {
+        let item = weapon(Some(30));
+        assert_eq!(
+            account_mastery_status(&item, None),
+            ("unknown", "no_record")
+        );
+        let equipment_only = AccountHistory {
+            equipment_observed_at: Some(Utc::now()),
+            ..Default::default()
+        };
+        assert_eq!(
+            account_mastery_status(&item, Some(&equipment_only)),
+            ("unknown", "no_record")
+        );
+        let history = AccountHistory {
+            observed_at: Some(Utc::now()),
+            ..Default::default()
+        };
+        for cap in [None, Some(50)] {
+            assert_eq!(
+                account_mastery_status(&weapon(cap), Some(&history)).0,
+                "unknown"
+            );
+        }
+        let unsupported = MasteryItemDefinition {
+            category: "other".into(),
+            ..item
+        };
+        assert_eq!(
+            account_mastery_status(&unsupported, Some(&history)).0,
+            "unknown"
+        );
+    }
+
+    #[test]
+    fn account_history_absence_never_overrides_saved_mastery_or_progress() {
+        let mut history = AccountHistory {
+            observed_at: Some(Utc::now()),
+            equipment: BTreeMap::from([(
+                "/Lotus/Test".into(),
+                EquipmentEvidence {
+                    polarized: 1,
+                    ..Default::default()
+                },
+            )]),
+            ..Default::default()
+        };
+        assert_eq!(
+            account_mastery_status(&weapon(Some(30)), Some(&history)),
+            ("mastered", "equipment_confirmed")
+        );
+        history.equipment.clear();
+        history.entries.insert("/Lotus/Test".into(), 450_000);
+        assert_eq!(
+            account_mastery_status(&weapon(Some(30)), Some(&history)),
+            ("mastered", "history_confirmed")
+        );
+        assert_eq!(
+            account_mastery_status(&weapon(Some(40)), Some(&history)),
+            ("progress", "history_partial")
+        );
     }
 
     #[test]

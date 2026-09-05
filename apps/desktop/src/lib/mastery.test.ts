@@ -58,6 +58,15 @@ describe("освоение аккаунта", () => {
 });
 
 describe("видимые отметки освоения у сетов и наград", () => {
+  it("показывает отсутствие предмета в загруженной истории как неосвоение без выдуманного ранга", () => {
+    const item = makeMasteryMock("not-mastered").items[0];
+    const mark = masteryAnnotation(item, { historyAvailable: true });
+    expect(mark.text).toBe("Не освоено");
+    expect(mark.mastered).toBe(false);
+    expect(mark.title).toContain("Предмет не освоен");
+    expect(filterMasteryItems([item], "", "all", "progress")).toEqual([item]);
+    expect(masteryAnnotation(item, { stale: true }).text).toBe("Не освоено · сохранено");
+  });
   it("показывает игровой венок только для подтверждённого освоения", () => {
     for (const item of source().items) {
       const mark = masteryAnnotation(item, { historyAvailable: true });

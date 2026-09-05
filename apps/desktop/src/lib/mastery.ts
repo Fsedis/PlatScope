@@ -14,7 +14,7 @@ export interface MasteryItemView {
   xp: number | null;
   masteryRank?: number | null;
   status: MasteryStatus;
-  reason: "equipment_confirmed" | "history_confirmed" | "history_partial" | "no_record" | "unsupported";
+  reason: "equipment_confirmed" | "history_confirmed" | "history_partial" | "history_absent" | "no_record" | "unsupported";
   setSlugs: string[];
 }
 export interface MasteryView {
@@ -40,6 +40,7 @@ export function masteryStatusLabel(status: MasteryStatus, locale: UiLocale = "ru
 /** Отсутствие подтверждения не подменяем нулевым прогрессом. */
 export function masteryExplanation(item: MasteryItemView, locale: UiLocale = "ru"): string {
   const t = (ru: string, en: string) => locale === "ru" ? ru : en;
+  if (item.reason === "history_absent") return t("Предмет не освоен: в загруженной истории аккаунта нет записи о его освоении.", "The item is not mastered: the loaded account history has no mastery record for it.");
   if (item.reason === "unsupported") return t("Для этого снаряжения особые правила освоения. Автоматический статус пока не определяем.", "This equipment has special mastery rules. An automatic status is not available yet.");
   if (item.reason === "no_record") return t("В полученной истории нет записи об этом предмете. Его освоение пока неизвестно, а не равно нулю.", "The received history has no entry for this item. Its mastery is unknown, not zero.");
   if (item.status === "progress") return t("Максимальный ранг ещё не достигнут. Показано освоение готового предмета за всё время, а не текущий ранг отдельной копии.", "The maximum rank has not been reached. This is lifetime mastery of the built item, not the current rank of an individual copy.");
