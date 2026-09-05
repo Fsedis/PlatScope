@@ -12,6 +12,9 @@
   import { revealCompactDetail, revealElement } from "./detailNavigation";
   import { localeCode, useLocale } from "./i18n";
   import MasteryScreen from "./MasteryScreen.svelte";
+  import InventoryAutoRefresh from "./InventoryAutoRefresh.svelte";
+  import { inventoryScanErrorMessage } from "./inventoryRefresh";
+  let refreshingInBackground = false;
   import { masteryStore } from "./mastery";
   import {
     accountActionErrorMessage,
@@ -252,8 +255,8 @@
       await invoke("scan_read_only_inventory");
       await Promise.all([loadSellNow(), masteryStore.refresh()]);
       onInventoryChange?.();
-    } catch {
-      errorMessage = c.scanError;
+    } catch (error) {
+      errorMessage = inventoryScanErrorMessage(error, c.scanError, $locale === "ru");
     } finally {
       scanning = false;
     }
@@ -557,7 +560,8 @@
     <p class="empty-panel__label">{c.notImported}</p>
     <h2 id="sell-now-empty-heading">{c.addSnapshot}</h2>
     <p>{c.addSnapshotBody}</p>
-    <button type="button" onclick={scanWarframe} disabled={scanning}>{scanning ? c.scanningInventory : c.openInventory}</button>
+    <InventoryAutoRefresh onBusy={(busy) => refreshingInBackground = busy} />
+    <button type="button" onclick={scanWarframe} disabled={scanning || refreshingInBackground}>{scanning || refreshingInBackground ? c.scanningInventory : c.openInventory}</button>
   </section>
 {:else if view}
   <section class="inventory-command-bar" aria-label={c.inventoryUpdated}>
@@ -571,7 +575,8 @@
         <option value="0">0</option><option value="1">1</option><option value="2">2</option>
       </select>
     </label>
-    <button type="button" onclick={scanWarframe} disabled={loading || scanning}>{scanning ? c.scanningInventory : c.scanInventory}</button>
+    <InventoryAutoRefresh onBusy={(busy) => refreshingInBackground = busy} />
+    <button type="button" onclick={scanWarframe} disabled={loading || scanning || refreshingInBackground}>{scanning || refreshingInBackground ? c.scanningInventory : c.scanInventory}</button>
   </section>
 
   <section class="sell-summary" aria-labelledby="sell-summary-heading">

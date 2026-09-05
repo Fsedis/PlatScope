@@ -35,7 +35,13 @@ impl Drop for SessionInfo {
 
 pub fn find_wf_pid() -> Option<u32> {
     let mut sys = System::new();
-    sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+    // Фоновому наблюдателю нужны только имя и путь, а не CPU/память/дисковая
+    // статистика всех процессов каждые несколько секунд.
+    sys.refresh_processes_specifics(
+        sysinfo::ProcessesToUpdate::All,
+        true,
+        sysinfo::ProcessRefreshKind::new().with_exe(sysinfo::UpdateKind::OnlyIfNotSet),
+    );
     for (pid, process) in sys.processes() {
         if matches_warframe(process) {
             return Some(pid.as_u32());

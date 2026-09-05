@@ -1492,6 +1492,16 @@ impl ResourceConverterService {
         Ok(())
     }
 
+    /// Читает сохранённый ассортимент, включая срок фактической ротации.
+    ///
+    /// # Errors
+    /// Возвращает [`CoreError`] при недоступной БД или повреждённом кэше.
+    pub fn load_nightwave_vendor(
+        database: &Mutex<Database>,
+    ) -> Result<Option<NightwaveVendorSnapshot>, CoreError> {
+        Ok(lock_database(database)?.get_setting(NIGHTWAVE_VENDOR_CACHE_KEY)?)
+    }
+
     async fn daily_state(&self) -> Result<DailyMarketState, CoreError> {
         let mut cache = self.cache.lock().await;
         if let Some((stored_at, state)) = cache.as_ref()

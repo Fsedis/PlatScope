@@ -84,7 +84,7 @@
       showLess: "Свернуть список",
       noArcaneActions: "Лишних мистификаторов для сравнения не найдено.",
       methodology: "Что вошло в расчёт",
-      methodologyBody: "Прямая продажа учитывается только при свежей цене и доступном количестве. Ассортимент Норы подтверждается во время обновления инвентаря из Warframe и учитывается до конца текущей ротации. Если получить его не удалось, вариант Ночной волны не входит в итог. Восфор считается по ожидаемой цене лучшего набора Лойда. Если для мистификатора есть только ордера продавцов без завершённых сделок, их цена уменьшается на 30%, чтобы не завышать результат.",
+      methodologyBody: "Прямая продажа учитывается только при свежей цене и доступном количестве. Ассортимент Норы загружается отдельно при смене ротации и сохраняется до её окончания. Для загрузки нужна запущенная Warframe; автообновление включается в «Моих предметах». Если получить ассортимент не удалось, вариант Ночной волны не входит в итог. Восфор считается по ожидаемой цене лучшего набора Лойда. Если для мистификатора есть только ордера продавцов без завершённых сделок, их цена уменьшается на 30%, чтобы не завышать результат.",
       inventoryDate: "Инвентарь",
       marketDate: "Рынок",
       worldstateDate: "Продавцы",
@@ -131,7 +131,7 @@
       showLess: "Collapse list",
       noArcaneActions: "No spare Arcanes were found for comparison.",
       methodology: "What is included",
-      methodologyBody: "Direct sales are included only with a fresh price and available quantity. Nora’s stock is confirmed during a Warframe inventory refresh and remains valid until the current rotation ends. If it cannot be retrieved, Nightwave is excluded from the total. Vosfor is based on the expected value of Loid’s best pack. Sell-only Arcane prices without completed trades receive a 30% haircut so the result is not overstated.",
+      methodologyBody: "Direct sales are included only with a fresh price and available quantity. Nora’s stock is fetched separately when its rotation changes and is cached until it ends. Warframe must be running; automatic updates can be enabled in My items. If the stock cannot be retrieved, Nightwave is excluded from the total. Vosfor is based on the expected value of Loid’s best pack. Sell-only Arcane prices without completed trades receive a 30% haircut so the result is not overstated.",
       inventoryDate: "Inventory",
       marketDate: "Market",
       worldstateDate: "Vendors",
@@ -168,7 +168,7 @@
       no_accessible_priced_mod: "Нет доступного мода с подтверждённой ценой или не хватает 25 000 репутации.",
       nightwave_stock_confirmed: "Ассортимент Норы и рыночная цена подтверждены.",
       weekly_purchase_limit: "Учтён недельный лимит: одна покупка ротационной награды.",
-      refresh_nightwave_stock: "Обновите инвентарь из Warframe, чтобы подтвердить ассортимент Норы.",
+      refresh_nightwave_stock: "Ассортимент этой ротации ещё не получен. При включённом автообновлении загрузим его из запущенной Warframe.",
       no_priced_offer: "На доступный баланс не найден товар с подтверждённой ценой.",
       no_currency: "Текущих кредитов Ночной волны в инвентаре нет.",
       currency_not_resolved: "Не удалось определить валюту текущего сезона.",
@@ -250,7 +250,7 @@
     let disposed = false;
     const cleanups: UnlistenFn[] = [];
     void loadConverter();
-    for (const event of ["game-metadata-updated", "market-data-updated", "inventory-updated", "trade-reconciled"]) {
+    for (const event of ["game-metadata-updated", "market-data-updated", "inventory-updated", "nightwave-vendor-updated", "trade-reconciled"]) {
       void listen(event, () => void loadConverter()).then((cleanup) => {
         if (disposed) cleanup();
         else cleanups.push(cleanup);

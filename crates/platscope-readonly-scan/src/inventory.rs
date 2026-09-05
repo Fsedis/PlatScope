@@ -2,6 +2,7 @@
 //! call `inventory.php` with them.
 
 use std::collections::BTreeMap;
+use std::io::Read;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -19,6 +20,26 @@ const INVENTORY_URL: &str = "https://api.warframe.com/api/inventory.php";
 const NIGHTWAVE_STATE_URL: &str = "https://api.warframestat.us/pc/nightwave?language=en";
 const VENDOR_INFO_URL: &str = "https://api.warframe.com/api/getVendorInfo.php";
 const MAX_VENDOR_RESPONSE_BYTES: u64 = 4 * 1024 * 1024;
+const MAX_INVENTORY_RESPONSE_BYTES: u64 = 8 * 1024 * 1024;
+
+fn bounded_response(response: reqwest::blocking::Response, limit: u64) -> Result<Vec<u8>> {
+    if !response.status().is_success()
+        || response
+            .content_length()
+            .is_some_and(|length| length > limit)
+    {
+        bail!("endpoint returned an unsuccessful or oversized response");
+    }
+    let mut bytes = Vec::new();
+    response
+        .take(limit + 1)
+        .read_to_end(&mut bytes)
+        .context("reading response")?;
+    if bytes.is_empty() || bytes.len() as u64 > limit {
+        bail!("response exceeds allowed size");
+    }
+    Ok(bytes)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NightwaveVendorScanStatus {
@@ -44,13 +65,13 @@ impl NightwaveVendorScanStatus {
 pub struct ReadOnlyScanResult {
     pub inventory_bytes: Vec<u8>,
     pub session: SessionInfo,
-    pub nightwave_vendor: Option<NightwaveVendorSnapshot>,
-    pub nightwave_status: NightwaveVendorScanStatus,
 }
 
 #[derive(Debug, Deserialize)]
 struct NightwavePublicState {
     tag: String,
+    #[serde(default)]
+    expiry: Option<DateTime<Utc>>,
 }
 
 fn game_client(info: &SessionInfo) -> Result<Client> {
@@ -84,17 +105,11 @@ fn fetch_inventory_for_session(
         .query(&params)
         .send()
         .context("inventory request failed")?;
-    let status = resp.status();
-    let bytes = resp.bytes().context("reading inventory response")?;
-    if !status.is_success() || bytes.len() < 1024 {
-        let preview = String::from_utf8_lossy(&bytes[..bytes.len().min(400)]);
-        bail!(
-            "Inventory endpoint returned HTTP {status} ({} bytes).\nBody:\n{preview}\n\n\
-             If the response was small or 4xx, DE may have rotated something.",
-            bytes.len()
-        );
+    let bytes = bounded_response(resp, MAX_INVENTORY_RESPONSE_BYTES)?;
+    if bytes.len() < 1024 {
+        bail!("inventory response is incomplete");
     }
-    Ok(bytes.to_vec())
+    Ok(bytes)
 }
 
 fn fetch_game_data(pid: Option<u32>, platform_tag: Option<String>) -> Result<ReadOnlyScanResult> {
@@ -110,32 +125,11 @@ fn fetch_game_data(pid: Option<u32>, platform_tag: Option<String>) -> Result<Rea
     let info = scan_session(pid).context("memory scan failed")?;
     let client = game_client(&info)?;
 
-    // После единственного прохода памяти два независимых сетевых чтения идут
-    // одновременно: получение магазина Норы не должно замедлять инвентарь.
-    let (inventory_result, nightwave_result) = std::thread::scope(|scope| {
-        let info_ref = &info;
-        let platform_tag_ref = platform_tag.as_deref();
-        let inventory_client = client.clone();
-        let inventory = scope.spawn(move || {
-            fetch_inventory_for_session(&inventory_client, info_ref, platform_tag_ref)
-        });
-        let vendor_client = client.clone();
-        let vendor = scope.spawn(move || fetch_nightwave_vendor(&vendor_client, info_ref));
-        let inventory_result = inventory
-            .join()
-            .map_err(|_| anyhow!("inventory request thread stopped unexpectedly"))
-            .and_then(|result| result);
-        let nightwave_result = vendor
-            .join()
-            .unwrap_or((None, NightwaveVendorScanStatus::ResponseInvalid));
-        (inventory_result, nightwave_result)
-    });
-    let inventory_bytes = inventory_result?;
+    // Магазин Норы имеет собственную ротацию и загружается отдельным заданием.
+    let inventory_bytes = fetch_inventory_for_session(&client, &info, platform_tag.as_deref())?;
     Ok(ReadOnlyScanResult {
         inventory_bytes,
         session: info,
-        nightwave_vendor: nightwave_result.0,
-        nightwave_status: nightwave_result.1,
     })
 }
 
@@ -145,7 +139,9 @@ fn fetch_nightwave_vendor(
 ) -> (Option<NightwaveVendorSnapshot>, NightwaveVendorScanStatus) {
     let public_state = match client.get(NIGHTWAVE_STATE_URL).send() {
         Ok(response) if response.status().is_success() => {
-            match response.json::<NightwavePublicState>() {
+            match bounded_response(response, MAX_VENDOR_RESPONSE_BYTES).and_then(|bytes| {
+                serde_json::from_slice::<NightwavePublicState>(&bytes).map_err(Into::into)
+            }) {
                 Ok(state) => state,
                 Err(_) => return (None, NightwaveVendorScanStatus::PublicStateUnavailable),
             }
@@ -169,18 +165,20 @@ fn fetch_nightwave_vendor(
         Ok(response) if response.status().is_success() => response,
         _ => return (None, NightwaveVendorScanStatus::VendorUnavailable),
     };
-    if response
-        .content_length()
-        .is_some_and(|length| length > MAX_VENDOR_RESPONSE_BYTES)
-    {
-        return (None, NightwaveVendorScanStatus::ResponseInvalid);
-    }
-    let bytes = match response.bytes() {
-        Ok(bytes) if !bytes.is_empty() && bytes.len() as u64 <= MAX_VENDOR_RESPONSE_BYTES => bytes,
+    let bytes = match bounded_response(response, MAX_VENDOR_RESPONSE_BYTES) {
+        Ok(bytes) => bytes,
         _ => return (None, NightwaveVendorScanStatus::ResponseInvalid),
     };
     match parse_nightwave_vendor(&bytes, &public_state.tag, &vendor_type) {
-        Ok(snapshot) => (Some(snapshot), NightwaveVendorScanStatus::Captured),
+        Ok(mut snapshot) => {
+            if let Some(expiry) = public_state.expiry {
+                snapshot.expires_at = snapshot.expires_at.min(expiry);
+            }
+            if snapshot.expires_at <= snapshot.observed_at {
+                return (None, NightwaveVendorScanStatus::ResponseInvalid);
+            }
+            (Some(snapshot), NightwaveVendorScanStatus::Captured)
+        }
         Err(_) => (None, NightwaveVendorScanStatus::ResponseInvalid),
     }
 }
@@ -217,9 +215,11 @@ fn parse_nightwave_vendor(
     let vendor_type = vendor
         .get("TypeName")
         .and_then(Value::as_str)
-        .filter(|value| value.starts_with("/Lotus/Types/Game/VendorManifests/Events/RadioLegion"))
         .unwrap_or(expected_vendor_type)
         .to_owned();
+    if vendor_type != expected_vendor_type {
+        bail!("vendor response belongs to a different season");
+    }
     let items = vendor
         .get("ItemManifest")
         .and_then(Value::as_array)
@@ -228,6 +228,13 @@ fn parse_nightwave_vendor(
         bail!("ItemManifest exceeds the safe item limit");
     }
     let observed_at = Utc::now();
+    if vendor
+        .get("Expiry")
+        .and_then(mongo_date)
+        .is_some_and(|expiry| expiry <= observed_at)
+    {
+        bail!("vendor rotation has already expired");
+    }
     let expires_at = vendor
         .get("Expiry")
         .and_then(mongo_date)
@@ -348,6 +355,26 @@ impl InventoryScanner {
         };
         fetch_game_data(pid, platform_tag).map_err(ScanError::Failed)
     }
+
+    /// Отдельное чтение ассортимента; вызывается только по истечении кэша ротации.
+    /// Сессионные данные живут только до завершения этого вызова.
+    ///
+    /// # Errors
+    /// Возвращает ошибку при занятом сканере, недоступной игре или ответе сервера.
+    pub fn scan_nightwave(
+        &self,
+        pid: u32,
+    ) -> std::result::Result<NightwaveVendorSnapshot, ScanError> {
+        let _guard = match self.scan_lock.try_lock() {
+            Ok(guard) => guard,
+            Err(std::sync::TryLockError::WouldBlock) => return Err(ScanError::Busy),
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+        };
+        let info = scan_session(pid).map_err(ScanError::Failed)?;
+        let client = game_client(&info).map_err(ScanError::Failed)?;
+        let (snapshot, status) = fetch_nightwave_vendor(&client, &info);
+        snapshot.ok_or_else(|| ScanError::Failed(anyhow!(status.code())))
+    }
 }
 
 #[cfg(test)]
@@ -395,5 +422,78 @@ mod tests {
             "/Lotus/Upgrades/Mods/Aura/EnemyArmorReductionAuraMod"
         );
         assert_eq!(snapshot.offers[0].cred_cost, 20);
+    }
+
+    fn vendor_fixture() -> Value {
+        serde_json::json!({"VendorInfo": {
+            "TypeName": "expected-vendor",
+            "Expiry": {"$date": {"$numberLong": "4102444800000"}},
+            "ItemManifest": [{
+                "StoreItem": "/Lotus/StoreItems/Upgrades/Mods/Aura/EnemyArmorReductionAuraMod",
+                "ItemPrices": [{"ItemType": "/Lotus/Types/Items/MiscItems/NoraIntermissionSixteenCreds", "ItemCount": 20}]
+            }]
+        }})
+    }
+
+    #[test]
+    fn expired_rotation_cannot_be_extended_by_a_future_item() {
+        let mut raw = vendor_fixture();
+        raw["VendorInfo"]["Expiry"] = serde_json::json!({"$date": {"$numberLong": "1000"}});
+        raw["VendorInfo"]["ItemManifest"][0]["Expiry"] =
+            serde_json::json!({"$date": {"$numberLong": "4102444800000"}});
+        assert!(
+            parse_nightwave_vendor(
+                &serde_json::to_vec(&raw).unwrap(),
+                "season",
+                "expected-vendor"
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn wrong_season_missing_expiry_and_empty_offers_are_not_success() {
+        let mut raw = vendor_fixture();
+        assert!(
+            parse_nightwave_vendor(
+                &serde_json::to_vec(&raw).unwrap(),
+                "season",
+                "another-vendor"
+            )
+            .is_err()
+        );
+        raw["VendorInfo"].as_object_mut().unwrap().remove("Expiry");
+        assert!(
+            parse_nightwave_vendor(
+                &serde_json::to_vec(&raw).unwrap(),
+                "season",
+                "expected-vendor"
+            )
+            .is_err()
+        );
+        raw = vendor_fixture();
+        raw["VendorInfo"]["ItemManifest"] = serde_json::json!([]);
+        assert!(
+            parse_nightwave_vendor(
+                &serde_json::to_vec(&raw).unwrap(),
+                "season",
+                "expected-vendor"
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn earliest_actual_item_expiry_bounds_the_snapshot() {
+        let mut raw = vendor_fixture();
+        raw["VendorInfo"]["ItemManifest"][0]["Expiry"] =
+            serde_json::json!({"$date": {"$numberLong": "4000000000000"}});
+        let result = parse_nightwave_vendor(
+            &serde_json::to_vec(&raw).unwrap(),
+            "season",
+            "expected-vendor",
+        )
+        .unwrap();
+        assert_eq!(result.expires_at.timestamp_millis(), 4_000_000_000_000);
     }
 }

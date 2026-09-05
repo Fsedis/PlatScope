@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { inventoryScanErrorMessage } from "./inventoryRefresh";
   import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { onMount, tick } from "svelte";
@@ -135,8 +136,8 @@
       await invoke("scan_read_only_inventory");
       await loadInventory();
       onInventoryChange?.();
-    } catch {
-      errorMessage = c.scanError;
+    } catch (error) {
+      errorMessage = inventoryScanErrorMessage(error, c.scanError, $locale === "ru");
     } finally {
       scanning = false;
     }

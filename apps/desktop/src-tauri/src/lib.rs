@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod inventory_refresh;
 mod trade_log;
 
 use std::collections::{HashMap, HashSet};
@@ -47,6 +48,8 @@ struct AppState {
     reward_database: Mutex<Database>,
     // Сводка читает справочники независимо от длительного обновления рынка и OCR.
     world_database: Mutex<Database>,
+    inventory_database: Mutex<Database>,
+    inventory_refresh: inventory_refresh::InventoryRefreshService,
     market_data_service: MarketDataService,
     live_pricing_service: LivePricingService,
     history_service: HistoryService,
@@ -413,14 +416,15 @@ fn write_safe_diagnostics_report(
 
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)] // Tauri owns command state and app handle.
-async fn scan_read_only_inventory(
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<InventoryView, String> {
-    let scanner = Arc::clone(&state.read_only_inventory_scanner);
-    let scan_result = tauri::async_runtime::spawn_blocking(move || scanner.scan(None, None))
-        .await
-        .map_err(|error| format!("scan task failed to run: {error}"))?
+async fn scan_read_only_inventory(app: AppHandle) -> Result<InventoryView, String> {
+    inventory_refresh::InventoryRefreshService::manual(&app).await
+}
+
+fn perform_inventory_scan(app: &AppHandle, pid: u32, epoch: u64) -> Result<InventoryView, String> {
+    let state = app.state::<AppState>();
+    let scan_result = state
+        .read_only_inventory_scanner
+        .scan(Some(pid), None)
         .map_err(|error| match error {
             platscope_readonly_scan::error::ScanError::Busy => {
                 "inventory scan is already running; wait for it to finish".to_owned()
@@ -432,27 +436,34 @@ async fn scan_read_only_inventory(
     let ReadOnlyScanResult {
         inventory_bytes: bytes,
         session: scan_info,
-        nightwave_vendor,
-        nightwave_status,
     } = scan_result;
+    if platscope_readonly_scan::scan::find_wf_pid() != Some(pid)
+        || !state.inventory_refresh.session_is_current(pid, epoch)
+    {
+        return Err("inventory_session_changed".into());
+    }
     let response_bytes = bytes.len();
     let raw_json = String::from_utf8(bytes)
         .map_err(|_| "Digital Extremes returned non-UTF-8 inventory JSON".to_owned())?;
     let settings = state
-        .database
+        .inventory_database
         .lock()
         .map_err(|_| "database state is unavailable".to_owned())?
         .get_setting::<AppSettings>(SETTINGS_KEY)
         .map_err(|error| error.to_string())?
         .unwrap_or_default();
     let view = localize_inventory_images(
-        InventoryService::import_read_only_scan_json(&state.database, &raw_json, &settings)
-            .map_err(|error| error.to_string())?,
+        InventoryService::import_read_only_scan_json(
+            &state.inventory_database,
+            &raw_json,
+            &settings,
+        )
+        .map_err(|error| error.to_string())?,
     );
     // История не блокирует торговый инвентарь. Привязка к checksum не даст
     // показать старый аккаунт при смене снимка или неудачной записи кэша.
     if MasteryService::capture(
-        &state.database,
+        &state.inventory_database,
         &raw_json,
         &scan_info.account_id,
         &view.metadata.checksum_sha256,
@@ -464,20 +475,6 @@ async fn scan_read_only_inventory(
             "mastery history was not cached"
         );
     }
-    let nightwave_offer_count = nightwave_vendor.as_ref().map_or(0, |snapshot| {
-        let count = snapshot.offers.len();
-        if let Err(error) =
-            ResourceConverterService::cache_nightwave_vendor(&state.database, snapshot)
-        {
-            tracing::warn!(
-                event = "nightwave_vendor_cache_failed",
-                error = %error,
-                "exact Nightwave vendor snapshot was not cached"
-            );
-            return 0;
-        }
-        count
-    });
     tracing::info!(
         event = "read_only_inventory_scan_finished",
         build = scan_info.build.as_deref().unwrap_or("unknown"),
@@ -488,8 +485,6 @@ async fn scan_read_only_inventory(
         source_rows = view.metadata.item_count,
         resolved_rows = view.summary.resolved_rows,
         attention_rows = view.summary.attention_rows,
-        nightwave_status = nightwave_status.code(),
-        nightwave_offer_count,
         "read-only Warframe inventory scan imported"
     );
     app.emit("inventory-updated", ())
@@ -3524,10 +3519,15 @@ fn spawn_reward_log_watcher(app_handle: AppHandle) {
         // Дочитываем текущий EE.log с начала; стабильный fingerprint выше не даст
         // повторно добавить те же сделки после перезапуска приложения.
         let mut reward_live_from = None;
+        let mut log_created = None;
         loop {
             interval.tick().await;
             let Ok(metadata) = fs::metadata(&path) else {
+                if offset.is_some() {
+                    app_handle.state::<AppState>().inventory_refresh.reset_log();
+                }
                 offset = None;
+                log_created = None;
                 reward_live_from = None;
                 tail.clear();
                 trade_machine = trade_log::TradeMachine::default();
@@ -3537,6 +3537,7 @@ fn spawn_reward_log_watcher(app_handle: AppHandle) {
             let file_len = metadata.len();
             let Some(current_offset) = offset else {
                 offset = Some(0);
+                log_created = metadata.created().ok();
                 reward_live_from = Some(file_len);
                 tracing::info!(
                     event = "trade_log_backfill_started",
@@ -3545,7 +3546,9 @@ fn spawn_reward_log_watcher(app_handle: AppHandle) {
                 );
                 continue;
             };
-            if file_len < current_offset {
+            if file_len < current_offset || metadata.created().ok() != log_created {
+                app_handle.state::<AppState>().inventory_refresh.reset_log();
+                log_created = metadata.created().ok();
                 offset = Some(0);
                 reward_live_from = Some(0);
                 tail.clear();
@@ -3582,6 +3585,10 @@ fn spawn_reward_log_watcher(app_handle: AppHandle) {
                     .unwrap_or(usize::MAX)
                     .min(chunk.len());
                 if let Some(live_chunk) = chunk.get(skip..) {
+                    app_handle
+                        .state::<AppState>()
+                        .inventory_refresh
+                        .feed(live_chunk);
                     handle_reward_markers(
                         &app_handle,
                         live_chunk,
@@ -3881,6 +3888,9 @@ pub fn run() {
             let database = Database::open(&database_path)?;
             let reward_database = Database::open(&database_path)?;
             let world_database = Database::open(&database_path)?;
+            let inventory_database = Database::open(&database_path)?;
+            let inventory_refresh =
+                inventory_refresh::InventoryRefreshService::new(&inventory_database);
             let market_data_service = MarketDataService::production()?;
             let live_pricing_service = LivePricingService::production()?;
             let history_service = HistoryService::production()?;
@@ -3906,6 +3916,8 @@ pub fn run() {
                 database: Mutex::new(database),
                 reward_database: Mutex::new(reward_database),
                 world_database: Mutex::new(world_database),
+                inventory_database: Mutex::new(inventory_database),
+                inventory_refresh,
                 market_data_service,
                 live_pricing_service,
                 history_service,
@@ -3929,6 +3941,7 @@ pub fn run() {
             spawn_market_refresh_scheduler(app.handle().clone());
             spawn_pending_trade_reconciliation(app.handle().clone());
             spawn_reward_log_watcher(app.handle().clone());
+            inventory_refresh::spawn(app.handle().clone());
             spawn_reward_realtime_watcher(app.handle().clone());
             Ok(())
         })
@@ -3964,6 +3977,8 @@ pub fn run() {
             market_history,
             bootstrap_history,
             scan_read_only_inventory,
+            inventory_refresh::inventory_refresh_status,
+            inventory_refresh::set_inventory_auto_refresh,
             load_inventory,
             load_mastery,
             set_inventory_keep_copies,

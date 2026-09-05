@@ -4,7 +4,7 @@ fn main() {
     let scanner = InventoryScanner::new();
     match scanner.scan(None, None) {
         Ok(result) => println!(
-            "scan_ok bytes={} rows={} build={} credential_hits={} distinct_credentials={} nightwave={} offers={}",
+            "scan_ok bytes={} rows={} build={} credential_hits={} distinct_credentials={}",
             result.inventory_bytes.len(),
             platscope_inventory::parse_read_only_scan_json(
                 std::str::from_utf8(&result.inventory_bytes)
@@ -15,12 +15,7 @@ fn main() {
             .item_count,
             result.session.build.as_deref().unwrap_or("unknown"),
             result.session.cred_hits,
-            result.session.distinct_creds,
-            result.nightwave_status.code(),
-            result
-                .nightwave_vendor
-                .as_ref()
-                .map_or(0, |snapshot| snapshot.offers.len())
+            result.session.distinct_creds
         ),
         Err(_) => {
             eprintln!("scan_failed; session credentials were discarded");

@@ -331,6 +331,7 @@ function connectedDemoAccount(): AccountView {
 
 export async function installMarketBrowserMock(): Promise<void> {
   const mockOptions = new URLSearchParams(window.location.search);
+  let inventoryRefreshEnabled = true;
   if (mockOptions.get("mockInsights") === "1") {
     account = { ...connectedDemoAccount(), orders: [] };
   }
@@ -842,6 +843,19 @@ export async function installMarketBrowserMock(): Promise<void> {
     }
     if (command === "resource_converter") {
       return makeResourceConverterView();
+    }
+    if (command === "inventory_refresh_status" || command === "set_inventory_auto_refresh") {
+      if (mockOptions.get("mockInventoryRefresh") === "settings-error") throw new Error("test setting unavailable");
+      if (command === "set_inventory_auto_refresh" && mockOptions.get("mockInventoryRefresh") === "toggle-error") throw new Error("test setting write failed");
+      if (command === "set_inventory_auto_refresh") inventoryRefreshEnabled = (args as { enabled: boolean }).enabled;
+      const scenario = mockOptions.get("mockInventoryRefresh");
+      return {
+        enabled: inventoryRefreshEnabled,
+        running: scenario === "running" ? "inventory" : scenario === "nora" ? "nightwave" : null,
+        waitingForGame: scenario === "offline",
+        inventoryError: scenario === "error",
+        nightwaveError: scenario === "nora-error",
+      };
     }
     if (command === "bounty_hunter") {
       return makeBountyHunterView();
