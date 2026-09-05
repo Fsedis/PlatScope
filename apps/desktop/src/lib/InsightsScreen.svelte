@@ -15,18 +15,14 @@
     filterAndSortOpportunitySets,
     formatPercent,
     formatRatio,
-    rankRelicsToOpen,
     reservePublishedSetListings,
-    refinementLabel,
     safeOverviewSetPrice,
     setLiveMinimumPrice,
     setLiveSellOrders,
     setOpportunity,
     setPriceComparison,
-    setRelicSupport,
     vaultLabel,
     type InsightsView,
-    type RelicOverviewScenario,
     type SetInsightRow,
     type SetSaleMode,
   } from "./insights";
@@ -38,6 +34,7 @@
   } from "./market";
   import ResourceConverter from "./ResourceConverter.svelte";
   import OpportunityPlanner from "./OpportunityPlanner.svelte";
+  import RelicBrowser from "./RelicBrowser.svelte";
   import {
     loadInsightsViewPreferences,
     saveInsightsViewPreferences,
@@ -414,12 +411,10 @@
   let loading = true;
   let errorMessage = "";
   let activeMode: InsightsViewMode = loadInsightsViewPreferences().mode;
-  let relicScenario: RelicOverviewScenario = "solo";
+  let plannerSetSlug = "";
   let setQuery = "";
-  let showAllRankedRelics = false;
   let showAllSetRows = false;
   let showAllDucats = false;
-  let expandedRelicSet = "";
   let marketStatus = "";
   let marketStatusSlug = "";
   let marketBusySlug = "";
@@ -447,14 +442,11 @@
   ));
   $: allBuyRows = filterAndSortOpportunitySets(marketSets, view?.relics ?? [], "buy", "", $locale);
   $: allReadyRows = filterAndSortOpportunitySets(marketSets, view?.relics ?? [], "ready", "", $locale);
-  $: relicRows = activeMode === "relics" ? filterAndSortOpportunitySets(marketSets, view?.relics ?? [], "relics", setQuery, $locale) : [];
   $: buyRows = filterAndSortOpportunitySets(marketSets, view?.relics ?? [], "buy", setQuery, $locale);
   $: readyRows = filterAndSortOpportunitySets(marketSets, view?.relics ?? [], "ready", setQuery, $locale);
   $: buyOpportunityCount = allBuyRows.length;
   $: readyOpportunityCount = allReadyRows.length;
-  $: setRows = activeMode === "relics"
-    ? relicRows
-    : activeMode === "complete_sets"
+  $: setRows = activeMode === "complete_sets"
       ? buyRows
       : activeMode === "sell_sets"
         ? readyRows
@@ -465,33 +457,17 @@
     .filter((row) => row.sellableQuantity > 0 && row.efficiency.credible);
   $: visibleDucatRows = showAllDucats ? ducatRows : ducatRows.slice(0, DUCAT_PAGE_SIZE);
   $: remainingDucatRows = Math.max(0, ducatRows.length - visibleDucatRows.length);
-  $: rankedRelics = rankRelicsToOpen(view?.relics ?? [], marketSets, {
-    availableTraces: view?.voidTraces,
-    squadSize: relicScenario === "solo" ? 1 : 4,
-  });
-  $: visibleRankedRelics = showAllRankedRelics ? rankedRelics : rankedRelics.slice(0, 5);
-  $: ownedRelicCount = (view?.relics ?? []).reduce((sum, relic) => sum + relic.ownedQuantity, 0);
+  $: relicTypeCount = new Set((view?.relics ?? []).filter(row => row.ownedQuantity > 0).map(row => row.definition.relicSlug)).size;
   $: listedSetItemIds = new Set(
     (accountView?.orders ?? []).filter((order) => order.type === "sell").map((order) => order.itemId),
   );
   $: listingRow = marketSets.find((row) => row.definition.setSlug === listingSlug) ?? null;
 
-  function formatProbability(value: number): string {
-    return `${value.toLocaleString(localeCode($locale), { maximumFractionDigits: 1 })}%`;
-  }
-
-  function scenarioProbability(value: number): number {
-    const solo = Math.min(100, Math.max(0, Number.isFinite(value) ? value : 0));
-    return relicScenario === "solo"
-      ? solo
-      : 100 * (1 - (1 - solo / 100) ** 4);
-  }
-
   function selectMode(mode: InsightsViewMode): void {
     activeMode = mode;
     saveInsightsViewPreferences({ mode });
     setQuery = "";
-    expandedRelicSet = "";
+    plannerSetSlug = "";
     expandedLiveSetSlug = "";
     listingSlug = "";
     listingError = "";
@@ -501,17 +477,8 @@
     showAllDucats = false;
   }
 
-  function selectRelicScenario(scenario: RelicOverviewScenario): void {
-    relicScenario = scenario;
-    showAllRankedRelics = false;
-  }
-
   function availableSetQuantity(row: SetInsightRow): number {
     return setOpportunity(row).sellableCompleteSets;
-  }
-
-  function relicValue(row: { expectedPlatinum: number | null; squadExpectedPlatinum: number | null }): number | null {
-    return relicScenario === "solo" ? row.expectedPlatinum : row.squadExpectedPlatinum;
   }
 
   async function loadInsights(): Promise<void> {
@@ -721,7 +688,7 @@
         {$locale === "ru" ? "Мои сеты" : "My sets"}
       </button>
       <button type="button" aria-pressed={activeMode === "relics"} onclick={() => selectMode("relics")}>
-        {c.relicMode}<span>{rankedRelics.length}</span>
+        {c.relicMode}<span>{relicTypeCount}</span>
       </button>
       <button type="button" aria-pressed={activeMode === "resources" || activeMode === "ducats"} onclick={() => selectMode("resources")}>
         {c.resourcesMode}
@@ -774,7 +741,7 @@
     <div class="action-status sr-only" role="status" aria-live="polite">{marketStatus}</div>
 
     {#if activeMode === "overview"}
-      <OpportunityPlanner {view} sets={marketSets} quotes={liveSetQuotes} errors={liveSetErrors}
+      <OpportunityPlanner initialSetSlug={plannerSetSlug} {view} sets={marketSets} quotes={liveSetQuotes} errors={liveSetErrors}
         busySlug={liveSetPriceBusySlug} onCheck={(row) => checkLiveSetPrice(row, true)}
         onOpenParts={(row) => { expandedLiveSetSlug = ""; void openMissingParts(row); }} actionStatus={marketBusySlug ? c.openingMarket : expandedLiveSetSlug ? "" : marketStatus}
         onOpenSet={(row) => { selectMode(setOpportunity(row).completeSets > 0 ? "sell_sets" : "complete_sets"); setQuery = row.displayName; }} />
@@ -815,107 +782,10 @@
           </div>
         {/if}
       </section>
+    {:else if activeMode === "relics"}
+      <RelicBrowser {view} sets={marketSets} locale={$locale} onPlanSet={(slug) => { selectMode("overview"); plannerSetSlug = slug; }} />
     {:else}
-      {#if activeMode === "relics"}
-        <section class="relic-ranking" aria-labelledby="relic-ranking-title">
-          <header class="relic-ranking__header">
-            <div>
-              <h2 id="relic-ranking-title">{c.openNowTitle}</h2>
-              <p>{relicScenario === "solo" ? c.openNowBodySolo : c.openNowBodySquad}</p>
-            </div>
-            <div class="relic-ranking__controls">
-              <div class="scenario-switcher" role="group" aria-label={c.relicScenario}>
-                <button type="button" aria-pressed={relicScenario === "solo"} onclick={() => selectRelicScenario("solo")}>{c.soloScenario}</button>
-                <button type="button" aria-pressed={relicScenario === "matching_squad"} onclick={() => selectRelicScenario("matching_squad")}>{c.squadScenario}</button>
-              </div>
-              {#if rankedRelics.length > 5}
-                <button type="button" class="secondary" onclick={() => (showAllRankedRelics = !showAllRankedRelics)}>
-                  {showAllRankedRelics ? c.showTopRanked : c.showAllRanked(rankedRelics.length)}
-                </button>
-              {/if}
-            </div>
-          </header>
-
-          {#if visibleRankedRelics.length > 0}
-            <ol class="relic-ranking__list">
-              {#each visibleRankedRelics as recommendation, index (recommendation.relicSlug)}
-                {#if relicValue(recommendation) === null && (index === 0 || relicValue(visibleRankedRelics[index - 1]) !== null)}
-                  <li class="unrated-heading"><h3>{$locale === "ru" ? "Не хватает цен для оценки" : "Not enough prices to estimate"}</h3></li>
-                {/if}
-                <li class:relic-ranking__item--best={index === 0 && (relicValue(recommendation) ?? 0) > 0} class="relic-ranking__item">
-                  <span class="relic-rank" aria-label={relicValue(recommendation) === null ? c.noNetEstimate : `№ ${index + 1}`}>{relicValue(recommendation) === null ? "—" : index + 1}</span>
-                  <div class="relic-ranking__identity">
-                    {#if recommendation.imageUrl}<img src={recommendation.imageUrl} alt="" loading="lazy" decoding="async" />{/if}
-                    <div>
-                      <h3>{recommendation.displayName}</h3>
-                      <p>{c.ownedRelicCopies(recommendation.totalOwnedQuantity)} · {refinementLabel(recommendation.sourceRefinement, $locale)} ×{recommendation.sourceQuantity}</p>
-                    </div>
-                  </div>
-                  <dl class="relic-ranking__metrics">
-                    <div>
-                      <dt>{relicScenario === "solo" ? c.soloNet : c.publicNet}</dt>
-                      {#if relicValue(recommendation) !== null}
-                        <dd>{formatPlatinum(relicValue(recommendation), $locale)}<small>{relicScenario === "solo" ? c.netAfterCosts : c.bestOfFour} · {c.pricedCoverage(formatProbability(recommendation.pricedChancePercent))}</small></dd>
-                      {:else}
-                        <dd class="metric-unavailable">{c.noNetEstimate}<small>{c.pricedCoverage(formatProbability(recommendation.pricedChancePercent))}</small></dd>
-                      {/if}
-                    </div>
-                    <div>
-                      <dt>{relicScenario === "solo" ? c.finishSetSolo : c.finishSetSquad}</dt>
-                      <dd>{formatProbability(scenarioProbability(recommendation.completionChancePercent))}
-                        <small>
-                          {#if recommendation.completionTargets[0]}
-                            {recommendation.completionTargets[0].displayName}
-                          {:else if recommendation.progressChancePercent > 0}
-                            {c.setProgress}: {formatProbability(scenarioProbability(recommendation.progressChancePercent))}
-                          {:else}
-                            {c.noSetProgress}
-                          {/if}
-                        </small>
-                      </dd>
-                    </div>
-                    <div class="relic-ranking__action">
-                      <dt>{c.preparation}</dt>
-                      <dd>{refinementLabel(recommendation.recommendedRefinement, $locale)}
-                        <small>{recommendation.traceCost > 0 ? c.traces(recommendation.traceCost) : c.alreadyOwned}</small>
-                      </dd>
-                    </div>
-                  </dl>
-                  <p class:relic-ranking__decision--muted={(relicValue(recommendation) ?? 0) <= 0} class="relic-ranking__decision">
-                    {#if relicValue(recommendation) === null}
-                      {c.noRelicPriceAction}
-                    {:else if (relicValue(recommendation) ?? 0) <= 0}
-                      {c.negativeRelicAction}
-                    {:else}
-                      {recommendation.traceCost > 0
-                        ? c.upgradeRefinement(refinementLabel(recommendation.sourceRefinement, $locale), refinementLabel(recommendation.recommendedRefinement, $locale))
-                        : c.openRefinement(refinementLabel(recommendation.recommendedRefinement, $locale))}
-                    {/if}
-                  </p>
-                </li>
-              {/each}
-            </ol>
-          {:else}
-            <p class="relic-ranking__empty">{c.noRankedRelics}</p>
-          {/if}
-
-          <details class="relic-ranking__details">
-            <summary>{c.rankingDetails}</summary>
-            <p>{c.rankingExplanation}</p>
-          </details>
-        </section>
-
-        <section class="mode-heading" aria-labelledby="relic-set-list-title">
-          <div>
-            <h2 id="relic-set-list-title">{c.completableSetsTitle}</h2>
-            <p>{c.modeRelicsHint}</p>
-          </div>
-          <label class="set-search">
-            <span>{c.search}</span>
-            <input bind:value={setQuery} oninput={() => (showAllSetRows = false)} type="search" placeholder={c.searchPlaceholder} />
-          </label>
-        </section>
-      {:else if activeMode === "complete_sets" || activeMode === "sell_sets"}
+      {#if activeMode === "complete_sets" || activeMode === "sell_sets"}
         <section class="mode-heading" aria-labelledby="set-mode-title">
           <div>
             <h2 id="set-mode-title">{activeMode === "complete_sets" ? c.modeCompleteTitle : c.modeReadyTitle}</h2>
@@ -930,7 +800,6 @@
       <div class="set-list">
         {#each visibleSetRows as row (row.definition.setSlug)}
           {@const opportunity = setOpportunity(row)}
-          {@const relicSupport = setRelicSupport(row, view.relics)}
           {@const availableSets = availableSetQuantity(row)}
           {@const liveQuote = liveSetQuotes.get(row.definition.setSlug)}
           {@const liveOrders = setLiveSellOrders(liveQuote?.orders ?? [])}
@@ -964,19 +833,7 @@
             </header>
 
             <dl class="set-metrics">
-              {#if activeMode === "relics"}
-                <div><dt>{opportunity.availableCompleteSets > 0 ? c.missingNextSet : c.missing}</dt><dd>{opportunity.missingQuantity}</dd></div>
-                <div><dt>{c.ownedRelics}</dt><dd>{relicSupport.ownedRelicCount}</dd></div>
-                <div><dt>{c.usefulChance}</dt><dd>{formatProbability(relicSupport.aggregateChancePercent)}<small>{c.chanceHint}</small></dd></div>
-                <div class:positive={(opportunity.setPremiumValue ?? 0) > 0}>
-                  <dt>{c.setPremium}</dt>
-                  {#if opportunity.setPremiumValue !== null}
-                    <dd>{formatPlatinum(opportunity.setPremiumValue, $locale)}{#if opportunity.setPremiumPercent !== null}<small>{formatPercent(opportunity.setPremiumPercent, $locale)} · {c.setPremiumHint}</small>{/if}</dd>
-                  {:else}
-                    <dd class="metric-unavailable">{c.priceUnavailable}</dd>
-                  {/if}
-                </div>
-              {:else if activeMode === "complete_sets"}
+              {#if activeMode === "complete_sets"}
                 <div><dt>{opportunity.availableCompleteSets > 0 ? c.missingNextSet : c.missing}</dt><dd>{opportunity.missingQuantity}</dd></div>
                 <div>
                   <dt>{c.buyFor}</dt>
@@ -1015,11 +872,7 @@
               {/if}
             </dl>
 
-            {#if activeMode === "relics"}
-              <p class="decision-copy">
-                {relicSupport.allMissingPartsCovered ? c.allPartsCovered : c.somePartsCovered(relicSupport.coveredPartCount, relicSupport.missingPartCount)}
-              </p>
-            {:else if activeMode === "complete_sets" && (opportunity.completionCost === null || opportunity.completionRevenue === null || opportunity.completionProfit === null)}
+            {#if activeMode === "complete_sets" && (opportunity.completionCost === null || opportunity.completionRevenue === null || opportunity.completionProfit === null)}
               <p class="decision-copy">{c.buyUnknown}</p>
             {/if}
 
@@ -1032,14 +885,7 @@
             {/if}
 
             <div class="card-actions">
-              {#if activeMode === "relics"}
-                <button type="button" onclick={() => (expandedRelicSet = expandedRelicSet === row.definition.setSlug ? "" : row.definition.setSlug)}>
-                  {expandedRelicSet === row.definition.setSlug ? c.hideRelics : c.showRelics(relicSupport.matches.length)}
-                </button>
-                <button type="button" class="secondary" disabled={marketBusySlug === row.definition.setSlug} onclick={() => openMissingParts(row)}>
-                  {marketBusySlug === row.definition.setSlug ? c.openingMarket : c.buyMissing(opportunity.missingParts.length)}
-                </button>
-              {:else if activeMode === "complete_sets"}
+              {#if activeMode === "complete_sets"}
                 <button type="button" disabled={marketBusySlug === row.definition.setSlug} onclick={() => openMissingParts(row)}>
                   {marketBusySlug === row.definition.setSlug ? c.openingMarket : c.buyMissing(opportunity.missingParts.length)}
                 </button>
@@ -1099,36 +945,6 @@
               {/if}
             {/if}
 
-            {#if expandedRelicSet === row.definition.setSlug && activeMode === "relics"}
-              <section class="relic-plan" aria-label={c.relicPlan}>
-                <div class="relic-plan__summary">
-                  <span>{c.aggregateChance}</span>
-                  <strong>{formatProbability(relicSupport.aggregateChancePercent)}</strong>
-                  <small>{c.probabilityNote}</small>
-                </div>
-                <div class="relic-list">
-                  {#each relicSupport.matches as match (`${match.relic.definition.relicSlug}:${match.relic.definition.refinement}`)}
-                    <article class="relic-row">
-                      <div class="relic-identity">
-                        {#if match.relic.imageUrl}<img src={match.relic.imageUrl} alt="" loading="lazy" decoding="async" />{/if}
-                        <div><h3>{match.relic.displayName}</h3><p>{refinementLabel(match.relic.definition.refinement, $locale)}</p></div>
-                      </div>
-                      <dl>
-                        <div><dt>{c.owned}</dt><dd>×{match.relic.ownedQuantity}</dd></div>
-                        <div><dt>{c.perOpen}</dt><dd>{formatProbability(match.chancePerRelicPercent)}</dd></div>
-                        <div><dt>{c.fromCopies}</dt><dd>{formatProbability(match.chanceFromOwnedPercent)}</dd></div>
-                      </dl>
-                      <div class="useful-rewards" aria-label={c.usefulDrops}>
-                        {#each match.usefulRewards as reward (reward.slug)}
-                          <span>{#if reward.imageUrl}<img src={reward.imageUrl} alt="" loading="lazy" decoding="async" />{/if}{reward.displayName}<small>{formatProbability(reward.chancePercent)} · {c.needShort} ×{reward.quantityNeeded}</small></span>
-                        {/each}
-                      </div>
-                    </article>
-                  {/each}
-                </div>
-              </section>
-            {/if}
-
             {#if listingSlug === row.definition.setSlug}
               <section class="order-panel" aria-labelledby={`set-order-${row.definition.setSlug}`}>
                 <h3 id={`set-order-${row.definition.setSlug}`}>{listingStage === "edit" ? c.orderTitle : c.confirmTitle}</h3>
@@ -1173,7 +989,7 @@
         {:else}
           <div class="message empty-result">
             <h2>{c.noResults}</h2>
-            <p>{setQuery ? c.noSearchResults : activeMode === "relics" ? c.noRelicResults(ownedRelicCount) : activeMode === "complete_sets" ? c.noBuyResults : c.noReadyResults}</p>
+            <p>{setQuery ? c.noSearchResults : activeMode === "complete_sets" ? c.noBuyResults : c.noReadyResults}</p>
             {#if setQuery}<button type="button" onclick={() => (setQuery = "")}>{c.clearSearch}</button>{/if}
           </div>
         {/each}
@@ -1191,21 +1007,19 @@
   {/if}
 </section>
 
-<style>
+
+  <style>
   .sub-navigation { display:flex; gap:.4rem; flex-wrap:wrap; }
   .sub-navigation button { background:var(--surface-1);color:var(--text); }
   .sub-navigation button[aria-pressed="true"] {background:var(--accent-soft);border-color:var(--accent);color:var(--accent-strong);}
-  .unrated-heading { list-style: none; padding: .7rem; background: var(--surface-2); }
   .opportunities {
     display: grid;
     min-width: 0;
     gap: .65rem;
   }
-
   .resource-mode[hidden] {
     display: none;
   }
-
   .opportunity-navigation {
     position: sticky;
     inset-block-start: -.1rem;
@@ -1217,22 +1031,18 @@
     box-shadow: var(--shadow-sm);
     backdrop-filter: blur(.65rem);
   }
-
   .mode-switcher {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: .2rem;
   }
-
-  .mode-switcher button,
-  .scenario-switcher button {
+  .mode-switcher button {
     min-width: 0;
     border-color: transparent;
     background: transparent;
     color: var(--text-muted);
     transition: background-color 120ms ease-out, border-color 120ms ease-out, color 120ms ease-out;
   }
-
   .mode-switcher button {
     min-height: 2rem;
     overflow: hidden;
@@ -1242,22 +1052,17 @@
     white-space: nowrap;
     text-overflow: ellipsis;
   }
-
-  .mode-switcher button:hover,
-  .scenario-switcher button:hover {
+  .mode-switcher button:hover {
     border-color: var(--border);
     background: var(--surface-2);
     color: var(--text);
   }
-
-  .mode-switcher button[aria-pressed="true"],
-  .scenario-switcher button[aria-pressed="true"] {
+  .mode-switcher button[aria-pressed="true"] {
     border-color: var(--accent);
     background: var(--accent-soft);
     color: var(--accent-strong);
     box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--accent) 26%, transparent);
   }
-
   .mode-switcher span {
     display: inline-grid;
     place-items: center;
@@ -1269,14 +1074,12 @@
     font-size: .75rem;
     font-variant-numeric: tabular-nums;
   }
-
   .data-status {
     min-height: 1rem;
     padding-inline: .15rem;
     color: var(--text-muted);
     font-size: .75rem;
   }
-
   .message {
     border: 1px solid var(--border);
     border-radius: .75rem;
@@ -1284,45 +1087,36 @@
     background: var(--surface-2);
     box-shadow: var(--shadow-sm);
   }
-
   .message h2,
   .message p {
     margin: 0;
   }
-
   .message h2 {
     font-size: 1rem;
   }
-
   .message p {
     max-width: 68ch;
     margin-block-start: .25rem;
     color: var(--text-muted);
     font-size: .8rem;
   }
-
   .message button {
     margin-block-start: .65rem;
   }
-
   .message--error {
     border-color: var(--danger);
     background: var(--danger-soft);
   }
-
   .message--action {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: .75rem;
   }
-
   .message--action button {
     flex: none;
     margin: 0;
   }
-
-  .relic-ranking,
   .mode-heading,
   .set-card,
   .ducat-panel {
@@ -1332,13 +1126,9 @@
     background: var(--surface-1);
     box-shadow: var(--shadow-sm);
   }
-
-  .relic-ranking,
   .ducat-panel {
     overflow: hidden;
   }
-
-
   .mode-heading {
     display: flex;
     align-items: end;
@@ -1346,23 +1136,19 @@
     gap: .8rem;
     padding: .68rem .75rem;
   }
-
   .mode-heading h2,
   .mode-heading p {
     margin: 0;
   }
-
   .mode-heading h2 {
     font-size: .98rem;
   }
-
   .mode-heading p {
     max-width: 72ch;
     margin-block-start: .18rem;
     color: var(--text-muted);
     font-size: .75rem;
   }
-
   .set-search {
     display: grid;
     flex: 0 1 18rem;
@@ -1371,7 +1157,6 @@
     font-size: .75rem;
     font-weight: 700;
   }
-
   .set-search input {
     min-height: 2.1rem;
     width: 100%;
@@ -1381,205 +1166,15 @@
     background: oklch(0.995 0.004 84);
     color: var(--text);
   }
-
-  .relic-ranking__header {
-    display: flex;
-    align-items: start;
-    justify-content: space-between;
-    gap: .75rem;
-    padding: .72rem .8rem;
-    background: var(--surface-2);
-  }
-
-  .relic-ranking__header h2,
-  .relic-ranking__header p {
-    margin: 0;
-  }
-
-  .relic-ranking__header h2 {
-    font-size: 1rem;
-  }
-
-  .relic-ranking__header p {
-    max-width: 70ch;
-    margin-block-start: .18rem;
-    color: var(--text-muted);
-    font-size: .75rem;
-  }
-
-  .relic-ranking__controls {
-    display: flex;
-    flex: none;
-    align-items: center;
-    gap: .4rem;
-  }
-
-  .scenario-switcher {
-    display: flex;
-    gap: .15rem;
-    border: 1px solid var(--border);
-    border-radius: .5rem;
-    padding: .15rem;
-    background: var(--surface-1);
-  }
-
-  .scenario-switcher button {
-    min-height: 1.9rem;
-    border-radius: .36rem;
-    padding: .3rem .48rem;
-    font-size: .75rem;
-  }
-
-  .relic-ranking__list {
-    display: grid;
-    margin: 0;
-    padding: 0;
-    list-style: none;
-  }
-
-  .relic-ranking__item {
-    display: grid;
-    grid-template-columns: 1.55rem minmax(10rem, 1fr) minmax(20rem, 1.5fr) minmax(8rem, auto);
-    align-items: center;
-    gap: .55rem;
-    min-width: 0;
-    padding: .52rem .72rem;
-    border-block-start: 1px solid var(--border);
-  }
-
-  .relic-ranking__item--best {
-    background: var(--accent-soft);
-    box-shadow: inset .2rem 0 0 var(--accent);
-  }
-
-  .relic-rank {
-    display: grid;
-    place-items: center;
-    width: 1.4rem;
-    height: 1.4rem;
-    border-radius: 999px;
-    background: var(--surface-2);
-    color: var(--accent-strong);
-    font-size: .75rem;
-    font-weight: 800;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .relic-ranking__item--best .relic-rank {
-    background: var(--accent);
-    color: oklch(0.985 0.009 84);
-  }
-
-  .relic-ranking__identity {
-    display: flex;
-    align-items: center;
-    min-width: 0;
-    gap: .48rem;
-  }
-
-  .relic-ranking__identity img {
-    flex: none;
-    width: 2.55rem;
-    height: 2.55rem;
-    border-radius: .35rem;
-    object-fit: contain;
-    outline: 1px solid oklch(0 0 0 / .1);
-    outline-offset: -1px;
-  }
-
-  .relic-ranking__identity h3,
-  .relic-ranking__identity p {
-    margin: 0;
-  }
-
-  .relic-ranking__identity h3 {
-    font-size: .84rem;
-    line-height: 1.25;
-  }
-
-  .relic-ranking__identity p {
-    margin-block-start: .1rem;
-    color: var(--text-muted);
-    font-size: .75rem;
-  }
-
-  .relic-ranking__metrics {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: .3rem;
-    margin: 0;
-  }
-
-  .relic-ranking__metrics > div {
-    min-width: 0;
-    border-inline-start: 1px solid var(--border);
-    padding-inline: .5rem;
-  }
-
-  .relic-ranking__metrics dd {
-    font-size: .88rem;
-  }
-
-  .relic-ranking__metrics small {
-    overflow-wrap: anywhere;
-  }
-
-  .relic-ranking__action dd {
-    color: var(--accent-strong);
-  }
-
-  .relic-ranking__decision {
-    min-width: 8.5rem;
-    max-width: 12rem;
-    margin: 0;
-    border: 1px solid var(--accent);
-    border-radius: .45rem;
-    padding: .35rem .48rem;
-    background: var(--surface-1);
-    color: var(--accent-strong);
-    font-size: .75rem;
-    font-weight: 750;
-    line-height: 1.25;
-    text-align: center;
-  }
-
-  .relic-ranking__decision--muted {
-    border-color: var(--border);
-    background: var(--surface-2);
-    color: var(--text-muted);
-  }
-
-  .relic-ranking__details {
-    border-block-start: 1px solid var(--border);
-    padding-inline: .8rem;
-  }
-
-  .relic-ranking__details p {
-    max-width: 80ch;
-    margin: 0 0 .65rem;
-    color: var(--text-muted);
-    font-size: .75rem;
-  }
-
-  .relic-ranking__empty {
-    margin: 0;
-    border-block-start: 1px solid var(--border);
-    padding: .8rem;
-    color: var(--text-muted);
-    font-size: .78rem;
-  }
-
   .set-list {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(min(100%, 32rem), 1fr));
     align-items: start;
     gap: .65rem;
   }
-
   .set-card {
     padding: .68rem;
   }
-
   .set-card__header {
     display: flex;
     align-items: start;
@@ -1587,14 +1182,12 @@
     gap: .65rem;
     margin-block-end: .55rem;
   }
-
   .set-identity {
     display: flex;
     align-items: center;
     min-width: 0;
     gap: .58rem;
   }
-
   .set-image {
     flex: none;
     width: 3rem;
@@ -1604,20 +1197,17 @@
     outline: 1px solid oklch(0 0 0 / .1);
     outline-offset: -1px;
   }
-
   .set-context {
     margin: 0 0 .08rem;
     color: var(--text-muted);
     font-size: .75rem;
   }
-
   .set-identity h2 {
     margin: 0;
     overflow-wrap: anywhere;
     font-size: .98rem;
     line-height: 1.25;
   }
-
   .sale-route {
     flex: none;
     border: 1px solid var(--border);
@@ -1629,45 +1219,38 @@
     font-weight: 750;
     white-space: nowrap;
   }
-
   .sale-route--set {
     border-color: color-mix(in oklch, var(--success) 55%, var(--border));
     background: var(--success-soft);
     color: oklch(0.34 0.08 145);
   }
-
   .sale-route--parts {
     border-color: color-mix(in oklch, var(--gold) 55%, var(--border));
     background: var(--accent-soft);
     color: var(--accent-strong);
   }
-
   .set-metrics {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: .35rem;
     margin: 0;
   }
-
   .set-metrics > div {
     min-width: 0;
     border-radius: .48rem;
     padding: .46rem;
     background: var(--surface-2);
   }
-
   dt {
     color: var(--text-muted);
     font-size: .75rem;
   }
-
   dd {
     margin: .12rem 0 0;
     font-size: .96rem;
     font-weight: 780;
     font-variant-numeric: tabular-nums;
   }
-
   dd small {
     display: block;
     margin-block-start: .08rem;
@@ -1676,30 +1259,25 @@
     font-weight: 650;
     line-height: 1.25;
   }
-
   dd.metric-unavailable {
     color: var(--text-muted);
     font-size: .75rem;
     line-height: 1.25;
   }
-
   .positive dd {
     color: oklch(0.37 0.08 145);
   }
-
   .decision-copy {
     margin: .52rem 0 0;
     color: var(--text-muted);
     font-size: .75rem;
   }
-
   .missing-parts {
     display: flex;
     flex-wrap: wrap;
     gap: .32rem;
     margin-block-start: .5rem;
   }
-
   .missing-parts span {
     border-radius: 999px;
     padding: .2rem .45rem;
@@ -1707,12 +1285,10 @@
     color: var(--accent-strong);
     font-size: .75rem;
   }
-
   .missing-parts strong {
     margin-inline-start: .3rem;
     font-variant-numeric: tabular-nums;
   }
-
   .card-actions,
   .order-actions {
     display: flex;
@@ -1720,18 +1296,15 @@
     gap: .4rem;
     margin-block-start: .58rem;
   }
-
   .card-actions button,
   .order-actions button {
     flex: 0 1 auto;
     transition: scale 120ms ease-out, background-color 120ms ease-out, border-color 120ms ease-out;
   }
-
   .card-actions button:active,
   .order-actions button:active {
     scale: .97;
   }
-
   .card-status,
   .live-set-error {
     margin: .55rem 0 0;
@@ -1740,18 +1313,15 @@
     font-size: .75rem;
     font-weight: 680;
   }
-
   .card-status {
     background: var(--success-soft);
     color: var(--success);
   }
-
   .card-status--error,
   .live-set-error {
     background: var(--danger-soft);
     color: var(--danger);
   }
-
   .live-set-orders {
     margin-block-start: .58rem;
     overflow: hidden;
@@ -1759,7 +1329,6 @@
     background: var(--surface-2);
     box-shadow: 0 0 0 1px var(--border);
   }
-
   .live-set-orders > header {
     display: flex;
     align-items: baseline;
@@ -1767,169 +1336,30 @@
     gap: .7rem;
     padding: .5rem .6rem .32rem;
   }
-
   .live-set-orders h3,
   .live-set-orders p {
     margin: 0;
   }
-
   .live-set-orders h3 {
     font-size: .8rem;
   }
-
   .live-set-orders p {
     color: var(--text-muted);
     font-size: .75rem;
     text-align: end;
   }
-
   .live-set-orders table {
     font-size: .75rem;
   }
-
   .live-set-orders th,
   .live-set-orders td {
     padding: .35rem .6rem;
   }
-
   .live-set-orders tbody strong {
     color: var(--accent-strong);
     font-size: .8rem;
     font-variant-numeric: tabular-nums;
   }
-
-  .relic-plan {
-    margin-block-start: .65rem;
-    border-radius: .6rem;
-    padding: .6rem;
-    background: var(--surface-2);
-  }
-
-  .relic-plan__summary {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    align-items: baseline;
-    gap: .18rem .7rem;
-  }
-
-  .relic-plan__summary span {
-    font-size: .75rem;
-    font-weight: 700;
-  }
-
-  .relic-plan__summary strong {
-    color: var(--accent-strong);
-    font-size: 1.05rem;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .relic-plan__summary small {
-    grid-column: 1 / -1;
-    color: var(--text-muted);
-    font-size: .75rem;
-  }
-
-  .relic-list {
-    display: grid;
-    gap: .45rem;
-    margin-block-start: .55rem;
-  }
-
-  .relic-row {
-    display: grid;
-    grid-template-columns: minmax(11rem, 1.2fr) minmax(12rem, 1fr);
-    gap: .5rem .7rem;
-    border-radius: .5rem;
-    padding: .5rem;
-    background: var(--surface-1);
-    box-shadow: 0 0 0 1px oklch(0 0 0 / .06);
-  }
-
-  .relic-identity {
-    display: flex;
-    align-items: center;
-    min-width: 0;
-    gap: .5rem;
-  }
-
-  .relic-identity img {
-    flex: none;
-    width: 2.55rem;
-    height: 2.55rem;
-    border-radius: .35rem;
-    object-fit: contain;
-    outline: 1px solid oklch(0 0 0 / .1);
-    outline-offset: -1px;
-  }
-
-  .relic-identity h3,
-  .relic-identity p {
-    margin: 0;
-  }
-
-  .relic-identity h3 {
-    font-size: .84rem;
-  }
-
-  .relic-identity p {
-    margin-block-start: .1rem;
-    color: var(--text-muted);
-    font-size: .75rem;
-  }
-
-  .relic-row dl {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: .28rem;
-    margin: 0;
-  }
-
-  .relic-row dl div {
-    min-width: 0;
-    border-radius: .4rem;
-    padding: .35rem;
-    background: var(--surface-2);
-  }
-
-  .relic-row dd {
-    font-size: .82rem;
-  }
-
-  .useful-rewards {
-    grid-column: 1 / -1;
-    display: flex;
-    flex-wrap: wrap;
-    gap: .32rem;
-  }
-
-  .useful-rewards > span {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-    align-items: center;
-    gap: 0 .38rem;
-    border-radius: .42rem;
-    padding: .28rem .42rem;
-    background: var(--success-soft);
-    color: oklch(0.32 0.065 145);
-    font-size: .75rem;
-    font-weight: 700;
-  }
-
-  .useful-rewards img {
-    grid-row: 1 / 3;
-    width: 1.7rem;
-    height: 1.7rem;
-    object-fit: contain;
-    outline: 1px solid oklch(0 0 0 / .1);
-    outline-offset: -1px;
-  }
-
-  .useful-rewards small {
-    color: oklch(0.43 0.05 145);
-    font-size: .75rem;
-    font-weight: 650;
-  }
-
   .order-panel {
     margin-block-start: .62rem;
     border-radius: .6rem;
@@ -1937,41 +1367,34 @@
     background: var(--surface-2);
     box-shadow: 0 0 0 1px var(--border);
   }
-
   .order-panel h3,
   .order-panel p {
     margin: 0;
   }
-
   .order-panel h3 {
     font-size: .88rem;
   }
-
   .order-panel p {
     margin-block-start: .3rem;
     color: var(--text-muted);
     font-size: .76rem;
   }
-
   .order-panel form {
     display: grid;
     gap: .45rem;
     margin-block-start: .45rem;
   }
-
   .order-fields {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: .4rem;
   }
-
   .order-fields label {
     display: grid;
     gap: .22rem;
     font-size: .75rem;
     font-weight: 700;
   }
-
   .order-fields input {
     min-width: 0;
     min-height: 2.15rem;
@@ -1982,7 +1405,6 @@
     background: oklch(0.995 0.004 84);
     color: var(--text);
   }
-
   .order-visible {
     display: flex;
     align-items: center;
@@ -1993,22 +1415,18 @@
     font-weight: 700;
     cursor: pointer;
   }
-
   .order-visible input {
     width: 1.1rem;
     height: 1.1rem;
     accent-color: var(--accent);
   }
-
   .inline-error {
     color: var(--danger) !important;
     font-size: .75rem;
   }
-
   .set-composition {
     margin-block-start: .38rem;
   }
-
   summary {
     min-height: 2rem;
     padding-block: .38rem;
@@ -2017,17 +1435,14 @@
     font-size: .75rem;
     font-weight: 700;
   }
-
   .table-scroll {
     overflow-x: auto;
   }
-
   table {
     width: 100%;
     border-collapse: collapse;
     font-size: .78rem;
   }
-
   th,
   td {
     border-block-end: 1px solid var(--border);
@@ -2035,24 +1450,20 @@
     text-align: start;
     font-variant-numeric: tabular-nums;
   }
-
   thead th {
     color: var(--text-muted);
     font-size: .75rem;
     text-transform: uppercase;
     letter-spacing: .035em;
   }
-
   tbody th {
     font-weight: 680;
   }
-
   .item-name {
     display: inline-flex;
     align-items: center;
     gap: .48rem;
   }
-
   .item-name img {
     flex: none;
     width: 1.9rem;
@@ -2061,7 +1472,6 @@
     outline: 1px solid oklch(0 0 0 / .1);
     outline-offset: -1px;
   }
-
   .ducat-panel > header {
     display: flex;
     align-items: start;
@@ -2070,32 +1480,28 @@
     padding: .72rem .8rem;
     background: var(--surface-2);
   }
-
-  .ducat-panel th:first-child, .set-composition th:first-child { width: 40%; }
-  .ducat-panel tbody th, .set-composition tbody th { font-size: .875rem; letter-spacing: normal; text-transform: none; }
-
+  .ducat-panel th:first-child,
+  .set-composition th:first-child { width: 40%; }
+  .ducat-panel tbody th,
+  .set-composition tbody th { font-size: .875rem; letter-spacing: normal; text-transform: none; }
   .ducat-panel h2,
   .ducat-panel p {
     margin: 0;
   }
-
   .ducat-panel h2 {
     font-size: 1rem;
   }
-
   .ducat-panel header div p {
     margin-block-start: .2rem;
     color: var(--text-muted);
     font-size: .75rem;
   }
-
   .ducat-panel .warning {
     max-width: 28rem;
     color: var(--danger);
     font-size: .75rem;
     text-align: end;
   }
-
   .list-footer {
     display: flex;
     align-items: center;
@@ -2106,7 +1512,6 @@
     color: var(--text-muted);
     font-size: .75rem;
   }
-
   .set-list + .list-footer {
     width: fit-content;
     margin-inline: auto;
@@ -2115,12 +1520,10 @@
     background: var(--surface-1);
     box-shadow: var(--shadow-sm);
   }
-
   .empty-result {
     text-align: center;
   }
-
-  :is(.mode-switcher, .scenario-switcher) button:focus-visible,
+  .mode-switcher button:focus-visible,
   .set-search input:focus-visible,
   summary:focus-visible {
     outline: .15rem solid color-mix(in oklch, var(--accent) 75%, white);
@@ -2128,127 +1531,55 @@
   }
 
   @media (max-width: 70rem) {
-    .mode-switcher {
+  .mode-switcher {
       grid-template-columns: repeat(3, minmax(0, 1fr));
-    }
-
-    .relic-ranking__item {
-      grid-template-columns: 1.55rem minmax(0, 1fr) auto;
-    }
-
-    .relic-ranking__metrics {
-      grid-column: 2 / -1;
-      width: 100%;
-    }
-
-    .relic-ranking__decision {
-      grid-column: 3;
-      grid-row: 1;
     }
   }
 
   @media (max-width: 54rem) {
-    .message--action,
-    .mode-heading,
-    .relic-ranking__header {
+  .message--action,
+  .mode-heading {
       align-items: stretch;
       flex-direction: column;
     }
-
-    .set-search {
+  .set-search {
       flex-basis: auto;
       width: 100%;
     }
-
-    .message--action button {
+  .message--action button {
       align-self: start;
-    }
-
-    .relic-ranking__controls {
-      justify-content: space-between;
-    }
-
-    .relic-row {
-      grid-template-columns: minmax(0, 1fr);
-    }
-
-    .useful-rewards {
-      grid-column: 1;
     }
   }
 
   @media (max-width: 42rem) {
-    .mode-switcher {
+  .mode-switcher {
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
-
-    .relic-ranking__controls {
-      align-items: stretch;
-      flex-direction: column;
-    }
-
-    .scenario-switcher {
-      display: grid;
+  .set-metrics {
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
-
-    .relic-ranking__controls > button {
-      align-self: start;
-    }
-
-    .relic-ranking__item {
-      grid-template-columns: 1.55rem minmax(0, 1fr);
-    }
-
-    .relic-ranking__metrics {
-      grid-column: 1 / -1;
-    }
-
-    .relic-ranking__decision {
-      grid-column: 2;
-      grid-row: auto;
-      justify-self: start;
-      max-width: none;
-    }
-
-    .set-metrics {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-
-    .card-actions button {
+  .card-actions button {
       flex: 1 1 11rem;
     }
-
-    .live-set-orders > header,
-    .ducat-panel > header {
+  .live-set-orders > header,
+  .ducat-panel > header {
       align-items: start;
       flex-direction: column;
     }
-
-    .live-set-orders p,
-    .ducat-panel .warning {
+  .live-set-orders p,
+  .ducat-panel .warning {
       text-align: start;
     }
   }
 
   @media (max-width: 30rem) {
-    .order-fields,
-    .relic-row dl,
-    .relic-ranking__metrics {
+  .order-fields {
       grid-template-columns: minmax(0, 1fr);
     }
-
-    .relic-ranking__metrics > div {
-      border-inline-start: 0;
-      border-block-start: 1px solid var(--border);
-      padding: .35rem 0 0;
-    }
-
-    .set-card {
+  .set-card {
       padding: .6rem;
     }
-
-    .list-footer {
+  .list-footer {
       align-items: stretch;
       flex-direction: column;
       text-align: center;
@@ -2256,22 +1587,18 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .mode-switcher button,
-    .scenario-switcher button,
-    .card-actions button,
-    .order-actions button {
+  .mode-switcher button,
+  .card-actions button,
+  .order-actions button {
       transition: none;
     }
   }
 
   @media (forced-colors: active) {
-    .opportunity-navigation,
-    .set-card,
-    .relic-row,
-    .order-panel,
-    .relic-ranking,
-    .mode-switcher button[aria-pressed="true"],
-    .scenario-switcher button[aria-pressed="true"] {
+  .opportunity-navigation,
+  .set-card,
+  .order-panel,
+  .mode-switcher button[aria-pressed="true"] {
       outline: 1px solid CanvasText;
     }
   }

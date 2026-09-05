@@ -13,10 +13,11 @@
   export let onOpenSet: (row: SetInsightRow) => void;
   export let onOpenParts: (row: SetInsightRow) => void;
   export let actionStatus = "";
+  export let initialSetSlug = "";
   let goal: OpportunityGoal = "profit";
   let budget: number | undefined = 100;
   let openings: number | undefined = 10;
-  let selectedSlug = "";
+  let selectedSlug = initialSetSlug;
   let query = "";
   const money = (value: number | null) => formatPlatinum(value, "ru");
   $: validBudget = budget !== undefined && Number.isInteger(budget) && budget >= 0 && budget <= 1_000_000;

@@ -785,6 +785,40 @@ export async function installMarketBrowserMock(): Promise<void> {
         }
         view.sets.push(extra);
       }
+      if (mockOptions.get("mockRelics") === "1") {
+        const base = view.relics[0];
+        view.voidTraces = mockOptions.has("unknownTraces") ? null : 100;
+        view.relics = Array.from({length:141}, (_,index) => {
+          const relic = structuredClone(base);
+          const names = ["Лит", "Мезо", "Нео", "Акси"];
+          const eras = ["Lith", "Meso", "Neo", "Axi"];
+          const name = `${names[index % 4]} N${index+1}`;
+          const slug = `${eras[index%4].toLowerCase()}_n${index+1}_relic`;
+          relic.displayName = `Реликвия ${name}`;
+          relic.definition = {...relic.definition,relicSlug:slug,displayNameEn:`${eras[index%4]} N${index+1} Relic`,refinement:"intact"};
+          relic.ownedQuantity = index % 21 + 1;
+          relic.relicRecommendation = makeRow(name,slug,2+index%4,20,"high").recommendation;
+          const chances = [25.33,25.33,25.33,11,11,2];
+          relic.rewards = chances.map((chance,j) => {
+            const reward = structuredClone(base.rewards[j%base.rewards.length]);
+            reward.definition = {...reward.definition,chancePercent:chance,rewardGameRef:`/preview/${index}/${j}`};
+            if(j>=base.rewards.length) {
+              reward.displayName = j === 5 ? "Ценная тестовая награда" : "Дополнительная тестовая награда";
+              reward.definition.rewardSlug = `preview_reward_${j}`;
+            }
+            reward.recommendation = index%7 === 0 && j===5 ? null : makeRow(reward.displayName,reward.definition.rewardSlug ?? "preview",j===5 ? 150+index : 3+j,20,"high").recommendation;
+            return reward;
+          });
+          relic.definition.rewards = relic.rewards.map(reward=>reward.definition);
+          return relic;
+        });
+        const upgraded = structuredClone(view.relics[1]);
+        upgraded.definition.refinement = "radiant";
+        upgraded.ownedQuantity = 2;
+        upgraded.rewards.forEach((reward,j)=>reward.definition.chancePercent=[16.67,16.67,16.67,20,20,10][j]);
+        upgraded.definition.rewards = upgraded.rewards.map(reward=>reward.definition);
+        view.relics.push(upgraded);
+      }
       return view;
     }
     if (command === "resource_converter") {
