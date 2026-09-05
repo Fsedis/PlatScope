@@ -19,11 +19,10 @@
     reservePublishedSetListings,
     refinementLabel,
     safeOverviewSetPrice,
-    selectBestOverviewReadySet,
-    selectBestOverviewRelic,
     setLiveMinimumPrice,
     setLiveSellOrders,
     setOpportunity,
+    setPriceComparison,
     setRelicSupport,
     vaultLabel,
     type InsightsView,
@@ -38,6 +37,7 @@
     type LivePricingResult,
   } from "./market";
   import ResourceConverter from "./ResourceConverter.svelte";
+  import OpportunityPlanner from "./OpportunityPlanner.svelte";
   import {
     loadInsightsViewPreferences,
     saveInsightsViewPreferences,
@@ -88,7 +88,7 @@
       overviewMissingCount: (count: number) => `Докупить: ${count} ${russianPartWord(count)}`,
       overviewRelicCopies: (count: number) => `Подходящих копий: ${count}`,
       overviewEstimated: "Цена за сет",
-      overviewProfit: "Выгода",
+      overviewProfit: "Оценка выгоды",
       overviewNet: "Чистая выгода",
       overviewNoReady: "Нет готовых сетов с надёжной ценой, которые стоит продавать комплектом.",
       overviewNoComplete: "Выгодных вариантов для докупки пока нет.",
@@ -123,10 +123,10 @@
       chanceHint: "получить все недостающие детали из имеющихся реликвий",
       buyFor: "Оценка докупки",
       sellSetFor: "Оценка продажи сета",
-      completionProfit: "Выгода после сборки",
+      completionProfit: "Оценка выгоды",
       profitHint: "с учётом цены всех использованных деталей",
       priceUnavailable: "Не хватает текущих цен",
-      setPrice: "Цена сета",
+      setPrice: "Оценка цены сета",
       livePriceHint: "минимальная среди активных ордеров",
       checkLivePrice: "Проверить актуальную цену",
       checkingLivePrice: "Проверяем цену…",
@@ -137,10 +137,12 @@
       liveOrderStatus: "Статус",
       liveOrderQuantityValue: (quantity: number) => `${quantity} шт.`,
       livePriceChecked: (price: string, count: number) => `Минимальная цена ${price}. Показано ордеров: ${count}.`,
-      livePriceUnavailable: "Warframe Market не вернул цену для этого комплекта. Повторите проверку позже.",
+      livePriceUnavailable: "Не удалось получить свежую цену комплекта. Повторите проверку позже.",
       liveSellOrdersUnavailable: "Сейчас нет активных ордеров на продажу этого комплекта.",
       livePriceError: "Не удалось проверить цену. Проверьте подключение и повторите.",
       readySets: "Готово сетов",
+      canList: (count: number) => `Можно выставить: ${count}`,
+      reserved: "Копии сохранены или уже в ордерах",
       partsPrice: "Детали отдельно",
       setPremium: "Премия сета",
       setPremiumHint: "к цене деталей",
@@ -194,7 +196,8 @@
       composition: "Состав сета",
       part: "Деталь",
       oneSetNeeds: "На один сет",
-      ownedForSet: "Для продажи",
+      ownedForSet: "В наличии",
+      saleableParts: "Для продажи",
       missingForSet: "До следующего сета",
       price: "Цена",
       sellSet: "Выставить сет",
@@ -311,6 +314,8 @@
       liveSellOrdersUnavailable: "There are no active sell orders for this set.",
       livePriceError: "Unable to check the price. Check your connection and try again.",
       readySets: "Ready sets",
+      canList: (count: number) => `Available to list: ${count}`,
+      reserved: "Copies are kept or already listed",
       partsPrice: "Parts separately",
       setPremium: "Set premium",
       setPremiumHint: "over the parts price",
@@ -364,7 +369,8 @@
       composition: "Set components",
       part: "Part",
       oneSetNeeds: "One set needs",
-      ownedForSet: "Sellable",
+      ownedForSet: "Owned",
+      saleableParts: "For sale",
       missingForSet: "For the next set",
       price: "Price",
       sellSet: "List set",
@@ -419,7 +425,7 @@
   let marketBusySlug = "";
   let accountView: AccountView | null = null;
   let listingSlug = "";
-  let listingPrice = 1;
+  let listingPrice: number | undefined;
   let listingQuantity = 1;
   let listingVisible = true;
   let listingStage: "edit" | "confirm" = "edit";
@@ -430,21 +436,20 @@
   let liveSetErrors = new Map<string, string>();
   let liveSetPriceBusySlug = "";
   let expandedLiveSetSlug = "";
+  let insightsRequest = 0;
+  let accountRequest = 0;
+  let accountLoaded = false;
 
   $: marketSets = (view?.sets ?? []).map((row) => reservePublishedSetListings(
     row,
     accountView?.orders ?? [],
     view?.sets ?? [],
   ));
-  $: allRelicRows = filterAndSortOpportunitySets(marketSets, view?.relics ?? [], "relics", "", $locale);
   $: allBuyRows = filterAndSortOpportunitySets(marketSets, view?.relics ?? [], "buy", "", $locale);
-  $: allReadyRows = filterAndSortOpportunitySets(marketSets, view?.relics ?? [], "ready", "", $locale)
-    .filter((row) => availableSetQuantity(row) > 0);
-  $: relicRows = filterAndSortOpportunitySets(marketSets, view?.relics ?? [], "relics", setQuery, $locale);
+  $: allReadyRows = filterAndSortOpportunitySets(marketSets, view?.relics ?? [], "ready", "", $locale);
+  $: relicRows = activeMode === "relics" ? filterAndSortOpportunitySets(marketSets, view?.relics ?? [], "relics", setQuery, $locale) : [];
   $: buyRows = filterAndSortOpportunitySets(marketSets, view?.relics ?? [], "buy", setQuery, $locale);
-  $: readyRows = filterAndSortOpportunitySets(marketSets, view?.relics ?? [], "ready", setQuery, $locale)
-    .filter((row) => availableSetQuantity(row) > 0)
-    .sort((left, right) => availableSetQuantity(right) - availableSetQuantity(left));
+  $: readyRows = filterAndSortOpportunitySets(marketSets, view?.relics ?? [], "ready", setQuery, $locale);
   $: buyOpportunityCount = allBuyRows.length;
   $: readyOpportunityCount = allReadyRows.length;
   $: setRows = activeMode === "relics"
@@ -465,9 +470,6 @@
     squadSize: relicScenario === "solo" ? 1 : 4,
   });
   $: visibleRankedRelics = showAllRankedRelics ? rankedRelics : rankedRelics.slice(0, 5);
-  $: bestRelic = selectBestOverviewRelic(rankedRelics, relicScenario);
-  $: bestBuyRow = allBuyRows.find((row) => safeOverviewSetPrice(row) !== null) ?? null;
-  $: bestReadyRow = selectBestOverviewReadySet(allReadyRows);
   $: ownedRelicCount = (view?.relics ?? []).reduce((sum, relic) => sum + relic.ownedQuantity, 0);
   $: listedSetItemIds = new Set(
     (accountView?.orders ?? []).filter((order) => order.type === "sell").map((order) => order.itemId),
@@ -513,21 +515,28 @@
   }
 
   async function loadInsights(): Promise<void> {
-    loading = true;
+    const request = ++insightsRequest;
+    loading = view === null;
     errorMessage = "";
     try {
-      view = await invoke<InsightsView | null>("insights");
+      const result = await invoke<InsightsView | null>("insights");
+      if (request === insightsRequest) view = result;
     } catch {
-      errorMessage = c.loadError;
+      if (request === insightsRequest) errorMessage = c.loadError;
     } finally {
-      loading = false;
+      if (request === insightsRequest) loading = false;
     }
   }
 
   async function loadAccount(): Promise<void> {
+    const request = ++accountRequest;
     try {
-      accountView = await invoke<AccountView>("account_status");
+      const result = await invoke<AccountView>("account_status");
+      if (request !== accountRequest) return;
+      accountView = result;
+      accountLoaded = true;
     } catch {
+      if (request === accountRequest) accountLoaded = false;
       // Сохраняем последнее успешное состояние: временный сетевой сбой не означает отключённый аккаунт.
     }
   }
@@ -548,7 +557,8 @@
     }
   }
 
-  async function checkLiveSetPrice(row: SetInsightRow): Promise<void> {
+  async function checkLiveSetPrice(row: SetInsightRow, allowBuyOrders = false): Promise<void> {
+    if (liveSetPriceBusySlug) return;
     const slug = row.definition.setSlug;
     expandedLiveSetSlug = slug;
     marketStatusSlug = slug;
@@ -572,13 +582,18 @@
         key,
         itemKind: "standard",
       });
-      if (!result) {
+      if (!result || result.quoteState === "stale_cache") {
         liveSetErrors = new Map(liveSetErrors).set(slug, c.livePriceUnavailable);
         marketStatus = c.livePriceUnavailable;
         return;
       }
       const sellOrders = setLiveSellOrders(result.orders);
       if (sellOrders.length === 0) {
+        if (allowBuyOrders && result.orders.some((order) => order.side === "buy" && order.userStatus === "in_game" && order.perTrade === 1 && order.quantity >= 1 && Number.isFinite(order.platinum) && order.platinum > 0)) {
+          liveSetQuotes = new Map(liveSetQuotes).set(slug, result);
+          marketStatus = "";
+          return;
+        }
         liveSetErrors = new Map(liveSetErrors).set(slug, c.liveSellOrdersUnavailable);
         marketStatus = c.liveSellOrdersUnavailable;
         return;
@@ -594,6 +609,8 @@
   }
 
   function startListing(row: SetInsightRow): void {
+    if (!accountLoaded) { onOpenMarketSales(); return; }
+    if (availableSetQuantity(row) < 1) return;
     listingError = "";
     expandedLiveSetSlug = "";
     marketStatus = "";
@@ -609,7 +626,8 @@
     }
     listingSlug = row.definition.setSlug;
     const liveMinimum = setLiveMinimumPrice(liveSetQuotes.get(row.definition.setSlug)?.orders ?? []);
-    listingPrice = Math.max(1, Math.round(liveMinimum ?? row.setRecommendation?.listPrice ?? row.comparison.setFairValue ?? 1));
+    const suggestedPrice = liveMinimum ?? safeOverviewSetPrice(row);
+    listingPrice = suggestedPrice === null ? undefined : Math.max(1, Math.round(suggestedPrice));
     listingQuantity = 1;
     listingVisible = true;
     listingStage = "edit";
@@ -627,7 +645,7 @@
     event.preventDefault();
     listingError = "";
     const availableSets = listingRow ? availableSetQuantity(listingRow) : 0;
-    if (!Number.isInteger(listingPrice) || listingPrice < 1 || !Number.isInteger(listingQuantity)
+    if (listingPrice === undefined || !Number.isInteger(listingPrice) || listingPrice < 1 || !Number.isInteger(listingQuantity)
       || listingQuantity < 1 || listingQuantity > availableSets) {
       listingError = c.invalidOrder;
       return;
@@ -637,7 +655,14 @@
   }
 
   async function createSetListing(): Promise<void> {
-    if (!listingRow?.itemId || !listingConfirmed) return;
+    if (!listingRow?.itemId || !listingConfirmed || listingBusy) return;
+    if (!accountLoaded || listingPrice === undefined || !Number.isInteger(listingPrice) || listingPrice < 1
+      || !Number.isInteger(listingQuantity) || listingQuantity < 1 || listingQuantity > availableSetQuantity(listingRow)) {
+      listingError = c.invalidOrder;
+      listingStage = "edit";
+      listingConfirmed = false;
+      return;
+    }
     listingBusy = true;
     listingError = "";
     const input: CreateListingInput = {
@@ -671,14 +696,16 @@
     const cleanups: UnlistenFn[] = [];
     void loadInsights();
     void loadAccount();
-    for (const event of ["game-metadata-updated", "market-data-updated", "inventory-updated"]) {
-      void listen(event, () => void loadInsights()).then((cleanup) => {
+    for (const event of ["game-metadata-updated", "market-data-updated", "inventory-updated", "trade-detected", "trade-reconciled"]) {
+      void listen(event, () => { void loadInsights(); void loadAccount(); }).then((cleanup) => {
         if (disposed) cleanup();
         else cleanups.push(cleanup);
       });
     }
     return () => {
       disposed = true;
+      ++insightsRequest;
+      ++accountRequest;
       for (const cleanup of cleanups) cleanup();
     };
   });
@@ -688,25 +715,31 @@
   <div class="opportunity-navigation">
     <div class="mode-switcher" role="group" aria-label={c.filters}>
       <button type="button" aria-pressed={activeMode === "overview"} onclick={() => selectMode("overview")}>
-        {c.overviewMode}
+        {$locale === "ru" ? "Мой план" : "My plan"}
       </button>
-      <button type="button" aria-pressed={activeMode === "resources"} onclick={() => selectMode("resources")}>
-        {c.resourcesMode}
+      <button type="button" aria-pressed={activeMode === "complete_sets" || activeMode === "sell_sets"} onclick={() => selectMode("sell_sets")}>
+        {$locale === "ru" ? "Мои сеты" : "My sets"}
       </button>
       <button type="button" aria-pressed={activeMode === "relics"} onclick={() => selectMode("relics")}>
         {c.relicMode}<span>{rankedRelics.length}</span>
       </button>
-      <button type="button" aria-pressed={activeMode === "complete_sets"} onclick={() => selectMode("complete_sets")}>
-        {c.buyMode}<span>{buyOpportunityCount}</span>
-      </button>
-      <button type="button" aria-pressed={activeMode === "sell_sets"} onclick={() => selectMode("sell_sets")}>
-        {c.readyMode}<span>{readyOpportunityCount}</span>
-      </button>
-      <button type="button" aria-pressed={activeMode === "ducats"} onclick={() => selectMode("ducats")}>
-        {c.ducatMode}<span>{ducatRows.length}</span>
+      <button type="button" aria-pressed={activeMode === "resources" || activeMode === "ducats"} onclick={() => selectMode("resources")}>
+        {c.resourcesMode}
       </button>
     </div>
   </div>
+
+  {#if activeMode === "sell_sets" || activeMode === "complete_sets"}
+    <div class="sub-navigation" role="group" aria-label="Состояние сетов">
+      <button type="button" aria-pressed={activeMode === "sell_sets"} onclick={() => selectMode("sell_sets")}>{c.readyMode} · {readyOpportunityCount}</button>
+      <button type="button" aria-pressed={activeMode === "complete_sets"} onclick={() => selectMode("complete_sets")}>{c.buyMode} · {buyOpportunityCount}</button>
+    </div>
+  {:else if activeMode === "resources" || activeMode === "ducats"}
+    <div class="sub-navigation" role="group" aria-label="Использование ресурсов">
+      <button type="button" aria-pressed={activeMode === "resources"} onclick={() => selectMode("resources")}>{$locale === "ru" ? "Обменять на платину" : "Convert to platinum"}</button>
+      <button type="button" aria-pressed={activeMode === "ducats"} onclick={() => selectMode("ducats")}>{c.ducatMode}</button>
+    </div>
+  {/if}
 
   <div class="resource-mode" hidden={activeMode !== "resources"}>
     <ResourceConverter {onOpenSettings} />
@@ -741,69 +774,10 @@
     <div class="action-status sr-only" role="status" aria-live="polite">{marketStatus}</div>
 
     {#if activeMode === "overview"}
-      <section class="opportunity-overview" aria-labelledby="opportunity-overview-title">
-        <header class="overview-heading">
-          <div>
-            <p class="section-kicker">{c.overviewMode}</p>
-            <h2 id="opportunity-overview-title">{c.overviewTitle}</h2>
-            <p>{c.overviewBody}</p>
-          </div>
-        </header>
-
-        {#if bestReadyRow || bestBuyRow || bestRelic}
-        <div class="overview-grid">
-          {#if bestReadyRow}
-          <article class="overview-card">
-            <p class="overview-card__kind">{c.overviewSell}</p>
-              <div class="overview-card__identity">
-                {#if bestReadyRow.imageUrl}<img src={bestReadyRow.imageUrl} alt="" loading="lazy" decoding="async" />{/if}
-                <h3>{bestReadyRow.displayName}</h3>
-              </div>
-              <p class="overview-card__meta">{c.overviewReadyCount(availableSetQuantity(bestReadyRow))}</p>
-              <dl><div><dt>{c.overviewEstimated}</dt><dd>{formatPlatinum(safeOverviewSetPrice(bestReadyRow), $locale)}</dd></div></dl>
-            <button type="button" class="secondary" onclick={() => selectMode("sell_sets")}>{c.showReadySets}</button>
-          </article>
-          {/if}
-
-          {#if bestBuyRow}
-          {@const buyOpportunity = setOpportunity(bestBuyRow)}
-          <article class="overview-card overview-card--accent">
-            <p class="overview-card__kind">{c.overviewComplete}</p>
-              <div class="overview-card__identity">
-                {#if bestBuyRow.imageUrl}<img src={bestBuyRow.imageUrl} alt="" loading="lazy" decoding="async" />{/if}
-                <h3>{bestBuyRow.displayName}</h3>
-              </div>
-              <p class="overview-card__meta">{c.overviewMissingCount(buyOpportunity.missingQuantity)}</p>
-              <dl><div><dt>{c.overviewProfit}</dt><dd>{formatPlatinum(buyOpportunity.completionProfit, $locale)}</dd></div></dl>
-            <button type="button" onclick={() => selectMode("complete_sets")}>{c.showCompleteSets}</button>
-          </article>
-          {/if}
-
-          {#if bestRelic}
-          <article class="overview-card">
-            <p class="overview-card__kind">{c.overviewRelic}</p>
-              <div class="overview-card__identity">
-                {#if bestRelic.imageUrl}<img src={bestRelic.imageUrl} alt="" loading="lazy" decoding="async" />{/if}
-                <h3>{bestRelic.displayName}</h3>
-              </div>
-              <p class="overview-card__meta">
-                {c.overviewRelicCopies(bestRelic.sourceQuantity)} · {refinementLabel(bestRelic.sourceRefinement, $locale)}{#if bestRelic.sourceRefinement !== bestRelic.recommendedRefinement} → {refinementLabel(bestRelic.recommendedRefinement, $locale)}{/if}
-              </p>
-              <dl><div><dt>{c.overviewNet}</dt><dd>{formatPlatinum(relicValue(bestRelic), $locale)}</dd></div></dl>
-            <button type="button" class="secondary" onclick={() => selectMode("relics")}>{c.showRelicRanking}</button>
-          </article>
-          {/if}
-        </div>
-        {/if}
-
-        {#if !bestReadyRow && !bestBuyRow && !bestRelic}
-          <div class="overview-empty">
-            <h3>{$locale === "ru" ? "Пока нет подходящих вариантов" : "No suitable opportunities yet"}</h3>
-            <p>{$locale === "ru" ? "Можно проверить, что доступно за накопленные ресурсы." : "See what you can buy with your resources."}</p>
-            <button type="button" class="secondary" onclick={() => selectMode("resources")}>{$locale === "ru" ? "Посмотреть ресурсы" : "View resources"}</button>
-          </div>
-        {/if}
-      </section>
+      <OpportunityPlanner {view} sets={marketSets} quotes={liveSetQuotes} errors={liveSetErrors}
+        busySlug={liveSetPriceBusySlug} onCheck={(row) => checkLiveSetPrice(row, true)}
+        onOpenParts={(row) => { expandedLiveSetSlug = ""; void openMissingParts(row); }} actionStatus={marketBusySlug ? c.openingMarket : expandedLiveSetSlug ? "" : marketStatus}
+        onOpenSet={(row) => { selectMode(setOpportunity(row).completeSets > 0 ? "sell_sets" : "complete_sets"); setQuery = row.displayName; }} />
 
     {:else if activeMode === "ducats"}
       <section class="ducat-panel" aria-labelledby="ducat-heading">
@@ -962,6 +936,7 @@
           {@const liveOrders = setLiveSellOrders(liveQuote?.orders ?? [])}
           {@const liveMinimum = setLiveMinimumPrice(liveQuote?.orders ?? [])}
           {@const displayedSetPrice = liveMinimum ?? opportunity.setFairValue}
+          {@const saleMode = setPriceComparison(row, liveMinimum)}
           {@const displayedSetPremium = liveMinimum !== null && opportunity.partsFairValue !== null
             ? liveMinimum - opportunity.partsFairValue
             : opportunity.setPremiumValue}
@@ -981,16 +956,16 @@
               </div>
               {#if activeMode === "sell_sets"}
                 <span
-                  class:sale-route--set={row.comparison.recommendedMode === "set"}
-                  class:sale-route--parts={row.comparison.recommendedMode === "parts"}
+                  class:sale-route--set={saleMode === "set"}
+                  class:sale-route--parts={saleMode === "parts"}
                   class="sale-route"
-                >{c.saleAdvice(row.comparison.recommendedMode)}</span>
+                >{c.saleAdvice(saleMode)}</span>
               {/if}
             </header>
 
             <dl class="set-metrics">
               {#if activeMode === "relics"}
-                <div><dt>{availableSets > 0 ? c.missingNextSet : c.missing}</dt><dd>{opportunity.missingQuantity}</dd></div>
+                <div><dt>{opportunity.availableCompleteSets > 0 ? c.missingNextSet : c.missing}</dt><dd>{opportunity.missingQuantity}</dd></div>
                 <div><dt>{c.ownedRelics}</dt><dd>{relicSupport.ownedRelicCount}</dd></div>
                 <div><dt>{c.usefulChance}</dt><dd>{formatProbability(relicSupport.aggregateChancePercent)}<small>{c.chanceHint}</small></dd></div>
                 <div class:positive={(opportunity.setPremiumValue ?? 0) > 0}>
@@ -1002,7 +977,7 @@
                   {/if}
                 </div>
               {:else if activeMode === "complete_sets"}
-                <div><dt>{availableSets > 0 ? c.missingNextSet : c.missing}</dt><dd>{opportunity.missingQuantity}</dd></div>
+                <div><dt>{opportunity.availableCompleteSets > 0 ? c.missingNextSet : c.missing}</dt><dd>{opportunity.missingQuantity}</dd></div>
                 <div>
                   <dt>{c.buyFor}</dt>
                   <dd class:metric-unavailable={opportunity.completionCost === null}>{opportunity.completionCost === null ? c.priceUnavailable : formatPlatinum(opportunity.completionCost, $locale)}</dd>
@@ -1020,7 +995,7 @@
                   {/if}
                 </div>
               {:else}
-                <div><dt>{c.readySets}</dt><dd>{availableSets}</dd></div>
+                <div><dt>{c.readySets}</dt><dd>{opportunity.completeSets}{#if availableSets !== opportunity.completeSets}<small>{c.canList(availableSets)}</small>{/if}</dd></div>
                 <div>
                   <dt>{c.setPrice}</dt>
                   <dd class:metric-unavailable={displayedSetPrice === null}>
@@ -1080,8 +1055,8 @@
                 >
                   {liveSetPriceBusySlug === row.definition.setSlug ? c.checkingLivePrice : c.checkLivePrice}
                 </button>
-                <button type="button" onclick={() => row.itemId && listedSetItemIds.has(row.itemId) ? onOpenMarketSales() : startListing(row)}>
-                  {#if row.itemId && listedSetItemIds.has(row.itemId)}{c.openOrders}{:else if !accountView}{c.openOrders}{:else if !accountView.connected}{c.connectAccount}{:else if !accountView.profile?.verification}{c.verifyAccount}{:else}{c.sellSet}{/if}
+                <button type="button" disabled={!(row.itemId && listedSetItemIds.has(row.itemId)) && availableSets < 1} title={availableSets < 1 ? c.reserved : undefined} onclick={() => row.itemId && listedSetItemIds.has(row.itemId) ? onOpenMarketSales() : startListing(row)}>
+                  {#if row.itemId && listedSetItemIds.has(row.itemId)}{c.openOrders}{:else if !accountLoaded || !accountView}{c.openOrders}{:else if !accountView.connected}{c.connectAccount}{:else if !accountView.profile?.verification}{c.verifyAccount}{:else}{c.sellSet}{/if}
                 </button>
               {/if}
             </div>
@@ -1168,7 +1143,7 @@
                     <div class="order-actions"><button type="submit">{c.reviewOrder}</button><button type="button" class="secondary" onclick={closeListing}>{c.cancel}</button></div>
                   </form>
                 {:else}
-                  <p>{c.confirmSummary(row.displayName, listingQuantity, listingPrice)}</p>
+                  <p>{c.confirmSummary(row.displayName, listingQuantity, listingPrice ?? 0)}</p>
                   <label class="order-visible"><input bind:checked={listingConfirmed} type="checkbox" /><span>{c.confirmCheck}</span></label>
                   <div class="order-actions"><button type="button" disabled={listingBusy || !listingConfirmed} onclick={createSetListing}>{listingBusy ? c.creatingOrder : c.createOrder}</button><button type="button" class="secondary" disabled={listingBusy} onclick={closeListing}>{c.cancel}</button></div>
                 {/if}
@@ -1179,14 +1154,14 @@
               <summary>{c.composition}</summary>
               <div class="table-scroll">
                 <table>
-                  <thead><tr><th>{c.part}</th><th>{c.oneSetNeeds}</th><th>{c.ownedForSet}</th><th>{c.missingForSet}</th><th>{c.price}</th></tr></thead>
+                  <thead><tr><th>{c.part}</th><th>{c.oneSetNeeds}</th><th>{c.ownedForSet}</th><th>{activeMode === "sell_sets" ? c.saleableParts : c.missingForSet}</th><th>{c.price}</th></tr></thead>
                   <tbody>
                     {#each row.components as component (component.definition.slug)}
                       <tr>
                         <th scope="row"><span class="item-name">{#if component.imageUrl}<img src={component.imageUrl} alt="" loading="lazy" decoding="async" />{/if}{component.displayName}</span></th>
                         <td>{component.definition.requiredQuantity}</td>
-                        <td>{component.sellableQuantity}</td>
-                        <td>{Math.max(0, component.definition.requiredQuantity * (opportunity.sellableCompleteSets + 1) - component.sellableQuantity)}</td>
+                        <td>{component.tradeableQuantity}</td>
+                        <td>{activeMode === "sell_sets" ? component.sellableQuantity : opportunity.missingParts.find((part) => part.slug === component.definition.slug)?.quantity ?? 0}</td>
                         <td>{formatPlatinum(component.recommendation?.fairPrice ?? null, $locale)}</td>
                       </tr>
                     {/each}
@@ -1217,8 +1192,9 @@
 </section>
 
 <style>
-  .overview-empty { padding: 1rem; }
-  .overview-empty p { color: var(--text-muted); margin: .5rem 0 .75rem; }
+  .sub-navigation { display:flex; gap:.4rem; flex-wrap:wrap; }
+  .sub-navigation button { background:var(--surface-1);color:var(--text); }
+  .sub-navigation button[aria-pressed="true"] {background:var(--accent-soft);border-color:var(--accent);color:var(--accent-strong);}
   .unrated-heading { list-style: none; padding: .7rem; background: var(--surface-2); }
   .opportunities {
     display: grid;
@@ -1244,7 +1220,7 @@
 
   .mode-switcher {
     display: grid;
-    grid-template-columns: repeat(6, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: .2rem;
   }
 
@@ -1346,7 +1322,6 @@
     margin: 0;
   }
 
-  .opportunity-overview,
   .relic-ranking,
   .mode-heading,
   .set-card,
@@ -1358,125 +1333,11 @@
     box-shadow: var(--shadow-sm);
   }
 
-  .opportunity-overview,
   .relic-ranking,
   .ducat-panel {
     overflow: hidden;
   }
 
-  .overview-heading {
-    padding: .72rem .8rem;
-    border-block-end: 1px solid var(--border);
-    background: var(--surface-2);
-  }
-
-  .overview-heading h2,
-  .overview-heading p,
-  .overview-card h3,
-  .overview-card p {
-    margin: 0;
-  }
-
-  .overview-heading h2 {
-    font-size: 1.02rem;
-    line-height: 1.25;
-  }
-
-  .overview-heading > div > p:last-child {
-    max-width: 72ch;
-    margin-block-start: .2rem;
-    color: var(--text-muted);
-    font-size: .76rem;
-  }
-
-  .section-kicker,
-  .overview-card__kind {
-    color: var(--accent-strong);
-    font-size: .75rem;
-    font-weight: 800;
-    letter-spacing: .055em;
-    text-transform: uppercase;
-  }
-
-  .section-kicker {
-    margin-block-end: .14rem !important;
-  }
-
-  .overview-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
-    gap: .55rem;
-    padding: .65rem;
-  }
-
-  .overview-card {
-    display: grid;
-    grid-template-rows: auto auto auto 1fr auto;
-    align-content: start;
-    min-width: 0;
-    gap: .35rem;
-    border: 1px solid var(--border);
-    border-radius: .65rem;
-    padding: .68rem;
-    background: var(--surface-2);
-  }
-
-  .overview-card--accent {
-    border-color: color-mix(in oklch, var(--accent) 55%, var(--border));
-    background: color-mix(in oklch, var(--accent-soft) 68%, var(--surface-1));
-    box-shadow: inset .2rem 0 0 var(--accent);
-  }
-
-  .overview-card h3 {
-    overflow-wrap: anywhere;
-    font-size: .94rem;
-    line-height: 1.25;
-  }
-
-  .overview-card__identity {
-    display: flex;
-    align-items: center;
-    min-width: 0;
-    gap: .5rem;
-  }
-
-  .overview-card__identity img {
-    flex: none;
-    width: 2.5rem;
-    height: 2.5rem;
-    border-radius: .4rem;
-    object-fit: contain;
-    background: var(--surface-1);
-    outline: 1px solid oklch(0 0 0 / .1);
-    outline-offset: -1px;
-  }
-
-  .overview-card__meta {
-    color: var(--text-muted);
-    font-size: .75rem;
-  }
-
-  .overview-card dl {
-    align-self: end;
-    margin: .12rem 0 0;
-  }
-
-  .overview-card dl div {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: .5rem;
-  }
-
-  .overview-card dl dd {
-    color: var(--accent-strong);
-    font-size: 1.18rem;
-  }
-
-  .overview-card button {
-    justify-self: start;
-    margin-block-start: .25rem;
-  }
 
   .mode-heading {
     display: flex;
@@ -2405,7 +2266,6 @@
 
   @media (forced-colors: active) {
     .opportunity-navigation,
-    .overview-card,
     .set-card,
     .relic-row,
     .order-panel,

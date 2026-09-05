@@ -56,6 +56,10 @@ export interface SetComponentInsight {
   displayName: string;
   imageUrl?: string | null;
   ownedQuantity: number;
+  /** Передаваемые детали до пользовательского резерва. */
+  tradeableQuantity: number;
+  /** Остаток после ордеров, но до резерва «Оставлять копий». */
+  availableQuantity?: number;
   sellableQuantity: number;
   recommendation: PriceRecommendation | null;
 }
@@ -85,6 +89,7 @@ export function setLiveSellOrders(orders: readonly LiveOrderView[]): SetLiveSell
   return orders
     .flatMap((order): SetLiveSellOrder[] => {
       if (order.side !== "sell" || order.userStatus !== "in_game" || order.platinum <= 0
+        || !Number.isFinite(order.platinum) || !Number.isInteger(order.quantity) || !Number.isInteger(order.perTrade)
         || order.quantity <= 0 || order.perTrade <= 0) return [];
       const quantity = order.quantity - order.quantity % order.perTrade;
       if (quantity <= 0) return [];
@@ -130,6 +135,7 @@ export interface MissingSetPart {
 
 export interface SetOpportunity {
   completeSets: number;
+  availableCompleteSets: number;
   sellableCompleteSets: number;
   missingParts: MissingSetPart[];
   missingQuantity: number;
@@ -393,9 +399,8 @@ export function rankRelicsToOpen(
         : 0,
     }))
     .sort((left, right) =>
-      right.priorityScore - left.priorityScore
-      || nullableOpportunity(right.squadExpectedPlatinum) - nullableOpportunity(left.squadExpectedPlatinum)
-      || nullableOpportunity(right.expectedPlatinum) - nullableOpportunity(left.expectedPlatinum)
+      nullableOpportunity(squadSize > 1 ? right.squadExpectedPlatinum : right.expectedPlatinum)
+        - nullableOpportunity(squadSize > 1 ? left.squadExpectedPlatinum : left.expectedPlatinum)
       || left.displayName.localeCompare(right.displayName, "ru-RU")
     );
 }
@@ -548,14 +553,15 @@ function expectedBestOf(
 }
 
 function credibleFairPrice(recommendation: PriceRecommendation | null | undefined): number | null {
-  if (!recommendation || (recommendation.confidence !== "high" && recommendation.confidence !== "medium")) {
+  if (!recommendation || (recommendation.confidence !== "high" && recommendation.confidence !== "medium")
+    || (recommendation.freshness !== "fresh" && recommendation.freshness !== "aging")) {
     return null;
   }
   const price = recommendation.fairPrice;
   return price !== null && Number.isFinite(price) && price > 0 ? price : null;
 }
 
-function chanceAtRefinement(
+export function chanceAtRefinement(
   chancePercent: number,
   currentRefinement: RelicRefinement,
   targetRefinement: RelicRefinement,
@@ -573,16 +579,19 @@ function refinementIndex(refinement: RelicRefinement): number {
 }
 
 export function setOpportunity(row: SetInsightRow): SetOpportunity {
-  const sellableCompleteSets = row.components
+  const countSets = (quantity: (component: SetComponentInsight) => number): number => row.components
     .filter((component) => component.definition.requiredQuantity > 0)
     .reduce<number | null>((count, component) => {
-      const componentSets = Math.floor(component.sellableQuantity / component.definition.requiredQuantity);
+      const componentSets = Math.floor(stockQuantity(quantity(component)) / component.definition.requiredQuantity);
       return count === null ? componentSets : Math.min(count, componentSets);
     }, null) ?? 0;
-  const targetSetCount = sellableCompleteSets + 1;
+  const completeSets = countSets((component) => component.tradeableQuantity);
+  const availableCompleteSets = countSets(componentAvailableQuantity);
+  const sellableCompleteSets = countSets((component) => Math.min(component.sellableQuantity, componentAvailableQuantity(component)));
+  const targetSetCount = availableCompleteSets + 1;
   const missingParts = row.components.flatMap((component): MissingSetPart[] => {
     const targetQuantity = component.definition.requiredQuantity * targetSetCount;
-    const quantity = Math.max(0, targetQuantity - component.sellableQuantity);
+    const quantity = Math.max(0, targetQuantity - componentAvailableQuantity(component));
     if (quantity === 0) return [];
     const fairPrice = component.recommendation?.fairPrice ?? null;
     const executable = estimatedBuyPrice(component.recommendation, quantity);
@@ -599,8 +608,9 @@ export function setOpportunity(row: SetInsightRow): SetOpportunity {
   const completionCost = missingParts.length > 0 && missingParts.every((part) => part.estimatedCost !== null)
     ? missingParts.reduce((sum, part) => sum + (part.estimatedCost ?? 0), 0)
     : null;
-  const setFairValue = row.comparison.setFairValue;
-  const partsFairValue = row.comparison.partsFairValue;
+  const setFairValue = credibleFairPrice(row.setRecommendation) === null ? null : row.comparison.setFairValue;
+  const partsFairValue = row.components.every((part) => credibleFairPrice(part.recommendation) !== null)
+    ? row.comparison.partsFairValue : null;
   const setPremiumValue = setFairValue !== null && partsFairValue !== null
     ? setFairValue - partsFairValue
     : null;
@@ -608,8 +618,8 @@ export function setOpportunity(row: SetInsightRow): SetOpportunity {
   const completionRevenue = credibleListingPrice(row.setRecommendation);
   const ownedPartsOpportunityValue = row.components.reduce<number | null>((total, component) => {
     if (total === null) return null;
-    const allocatedToCompleteSets = sellableCompleteSets * component.definition.requiredQuantity;
-    const availableForNextSet = Math.max(0, component.sellableQuantity - allocatedToCompleteSets);
+    const allocatedToCompleteSets = availableCompleteSets * component.definition.requiredQuantity;
+    const availableForNextSet = Math.max(0, componentAvailableQuantity(component) - allocatedToCompleteSets);
     const usedForNextSet = Math.min(component.definition.requiredQuantity, availableForNextSet);
     if (usedForNextSet === 0) return total;
     const price = credibleFairPrice(component.recommendation);
@@ -620,9 +630,12 @@ export function setOpportunity(row: SetInsightRow): SetOpportunity {
     && ownedPartsOpportunityValue !== null
     ? completionRevenue - completionCost - ownedPartsOpportunityValue
     : null;
-  const quickToComplete = missingParts.length > 0 && missingParts.length <= 2 && missingQuantity <= 3;
+  const hasPartialSet = row.components.some((component) => componentAvailableQuantity(component)
+    > availableCompleteSets * component.definition.requiredQuantity);
+  const quickToComplete = hasPartialSet && missingParts.length > 0 && missingParts.length <= 2 && missingQuantity <= 3;
   return {
-    completeSets: row.comparison.completeSets,
+    completeSets,
+    availableCompleteSets,
     sellableCompleteSets,
     missingParts,
     missingQuantity,
@@ -630,7 +643,8 @@ export function setOpportunity(row: SetInsightRow): SetOpportunity {
     setFairValue,
     partsFairValue,
     setPremiumValue,
-    setPremiumPercent: row.comparison.setPremiumPercent,
+    setPremiumPercent: setPremiumValue !== null && partsFairValue !== null && partsFairValue > 0
+      ? setPremiumValue / partsFairValue * 100 : null,
     completionRevenue,
     ownedPartsOpportunityValue,
     completionProfit,
@@ -639,6 +653,14 @@ export function setOpportunity(row: SetInsightRow): SetOpportunity {
       && completionProfit !== null
       && completionProfit > 0,
   };
+}
+
+function stockQuantity(value: number): number {
+  return Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : 0;
+}
+
+export function componentAvailableQuantity(component: SetComponentInsight): number {
+  return stockQuantity(component.availableQuantity ?? component.tradeableQuantity);
 }
 
 /**
@@ -659,8 +681,18 @@ export function safeOverviewSetPrice(row: SetInsightRow): number | null {
 }
 
 function isRecommendedSetSale(row: SetInsightRow): boolean {
-  return row.comparison.recommendedMode === "set"
-    || row.comparison.recommendedMode === "equivalent";
+  return setPriceComparison(row) === "set" || setPriceComparison(row) === "equivalent";
+}
+
+/** Сравнение тех же цен, которые показаны на карточке, без скрытого множителя ликвидности. */
+export function setPriceComparison(row: SetInsightRow, livePrice: number | null = null): SetSaleMode {
+  const opportunity = setOpportunity(row);
+  const price = livePrice ?? opportunity.setFairValue;
+  const parts = opportunity.partsFairValue;
+  if (price === null || parts === null || !Number.isFinite(price) || price <= 0 || parts <= 0) return "insufficient_pricing";
+  if (price > parts * 1.05) return "set";
+  if (parts > price * 1.05) return "parts";
+  return "equivalent";
 }
 
 function compareReadySetRows(left: SetInsightRow, right: SetInsightRow): number {
@@ -718,7 +750,8 @@ export function reservePublishedSetListings(
   orders: readonly SetSellReservation[],
   knownSets: readonly SetInsightRow[] = [row],
 ): SetInsightRow {
-  const published = orders.filter((order) => order.visible && order.type === "sell");
+  // Скрытый ордер также обещает эти экземпляры: его можно включить в любой момент.
+  const published = orders.filter((order) => order.type === "sell");
   const exactBaseVariant = (order: SetSellReservation): boolean =>
     order.rank === null
       && order.charges === null
@@ -731,7 +764,7 @@ export function reservePublishedSetListings(
       .filter((order) => set.itemId != null
         && order.itemId === set.itemId
         && exactBaseVariant(order))
-      .reduce((sum, order) => sum + order.quantity, 0);
+      .reduce((sum, order) => sum + stockQuantity(order.quantity), 0);
     if (reservedSets === 0) continue;
     for (const component of set.components) {
       reservedSetComponents.set(
@@ -746,25 +779,19 @@ export function reservePublishedSetListings(
       .filter((order) => component.itemId != null
         && order.itemId === component.itemId
         && exactBaseVariant(order))
-      .reduce((sum, order) => sum + order.quantity, 0);
+      .reduce((sum, order) => sum + stockQuantity(order.quantity), 0);
     const reservedForSets = reservedSetComponents.get(component.definition.slug) ?? 0;
     return {
       ...component,
+      availableQuantity: Math.max(0, stockQuantity(component.tradeableQuantity) - directlyReserved - reservedForSets),
       sellableQuantity: Math.max(
         0,
         component.sellableQuantity - directlyReserved - reservedForSets,
       ),
     };
   });
-  const completeSets = components
-    .filter((component) => component.definition.requiredQuantity > 0)
-    .reduce<number | null>((count, component) => {
-      const available = Math.floor(component.sellableQuantity / component.definition.requiredQuantity);
-      return count === null ? available : Math.min(count, available);
-    }, null) ?? 0;
   return {
     ...row,
-    comparison: { ...row.comparison, completeSets },
     components,
   };
 }
@@ -801,7 +828,7 @@ export function adjustDucatsForMarketReservations(
   });
 }
 
-function estimatedBuyPrice(
+export function estimatedBuyPrice(
   recommendation: PriceRecommendation | null | undefined,
   quantity: number,
 ): { unitPrice: number; basis: MissingSetPart["costBasis"] } | null {
@@ -826,7 +853,8 @@ function estimatedBuyPrice(
 }
 
 function credibleListingPrice(recommendation: PriceRecommendation | null | undefined): number | null {
-  if (!recommendation || (recommendation.confidence !== "high" && recommendation.confidence !== "medium")) {
+  if (!recommendation || (recommendation.confidence !== "high" && recommendation.confidence !== "medium")
+    || (recommendation.freshness !== "fresh" && recommendation.freshness !== "aging")) {
     return null;
   }
   const price = recommendation.listPrice ?? recommendation.fairPrice;
@@ -836,9 +864,12 @@ function credibleListingPrice(recommendation: PriceRecommendation | null | undef
 export function setRelicSupport(
   row: SetInsightRow,
   relics: RelicInsightRow[],
+  requiredSlugs?: ReadonlySet<string>,
 ): SetRelicSupport {
   const opportunity = setOpportunity(row);
-  const missingBySlug = new Map(opportunity.missingParts.map((part) => [part.slug, part]));
+  const missingBySlug = new Map(opportunity.missingParts
+    .filter((part) => !requiredSlugs || requiredSlugs.has(part.slug))
+    .map((part) => [part.slug, part]));
   const coveredSlugs = new Set<string>();
   const openings: RelicOpeningDistribution[] = [];
 
@@ -979,20 +1010,31 @@ export function filterAndSortOpportunitySets(
   locale: UiLocale = "ru",
 ): SetInsightRow[] {
   const normalizedQuery = query.trim().toLocaleLowerCase(localeCode(locale));
+  const opportunities = new Map<SetInsightRow, SetOpportunity>();
+  const supports = new Map<SetInsightRow, SetRelicSupport>();
+  const opportunityFor = (row: SetInsightRow): SetOpportunity => {
+    if (!opportunities.has(row)) opportunities.set(row, setOpportunity(row));
+    return opportunities.get(row)!;
+  };
+  const supportFor = (row: SetInsightRow): SetRelicSupport => {
+    if (!supports.has(row)) supports.set(row, setRelicSupport(row, relics));
+    return supports.get(row)!;
+  };
   return rows
-    .filter((row) => row.displayName.toLocaleLowerCase(localeCode(locale)).includes(normalizedQuery))
+    .filter((row) => `${row.displayName} ${row.definition.displayNameEn} ${row.definition.setSlug}`
+      .toLocaleLowerCase(localeCode(locale)).includes(normalizedQuery))
     .filter((row) => {
-      const opportunity = setOpportunity(row);
-      if (mode === "ready") return opportunity.sellableCompleteSets > 0;
+      const opportunity = opportunityFor(row);
+      if (mode === "ready") return opportunity.completeSets > 0;
       if (mode === "buy") return opportunity.profitableToComplete;
-      return opportunity.missingParts.length > 0 && setRelicSupport(row, relics).matches.length > 0;
+      return opportunity.missingParts.length > 0 && supportFor(row).matches.length > 0;
     })
     .sort((left, right) => {
-      const leftOpportunity = setOpportunity(left);
-      const rightOpportunity = setOpportunity(right);
+      const leftOpportunity = opportunityFor(left);
+      const rightOpportunity = opportunityFor(right);
       if (mode === "relics") {
-        const leftRelics = setRelicSupport(left, relics);
-        const rightRelics = setRelicSupport(right, relics);
+        const leftRelics = supportFor(left);
+        const rightRelics = supportFor(right);
         return Number(rightRelics.allMissingPartsCovered) - Number(leftRelics.allMissingPartsCovered)
           || rightRelics.coveredPartCount - leftRelics.coveredPartCount
           || rightRelics.aggregateChancePercent - leftRelics.aggregateChancePercent
@@ -1026,7 +1068,7 @@ export function filterAndSortSets(
     .filter((row) => {
       const opportunity = setOpportunity(row);
       if (mode === "finish") return opportunity.profitableToComplete;
-      if (mode === "ready") return opportunity.sellableCompleteSets > 0;
+      if (mode === "ready") return opportunity.completeSets > 0;
       return true;
     })
     .sort((left, right) => {

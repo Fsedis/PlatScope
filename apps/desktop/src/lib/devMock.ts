@@ -329,6 +329,9 @@ function connectedDemoAccount(): AccountView {
 
 export async function installMarketBrowserMock(): Promise<void> {
   const mockOptions = new URLSearchParams(window.location.search);
+  if (mockOptions.get("mockInsights") === "1") {
+    account = { ...connectedDemoAccount(), orders: [] };
+  }
   if (mockOptions.get("mockTradeShift") === "1") {
     account = connectedDemoAccount();
     if (mockOptions.get("mockOrders") === "27") {
@@ -769,7 +772,20 @@ export async function installMarketBrowserMock(): Promise<void> {
       return makeSellNowView();
     }
     if (command === "insights") {
-      return makeInsightsView();
+      const view = makeInsightsView();
+      if (mockOptions.get("mockInsights") === "1") {
+        const extra = structuredClone(view.sets[0]);
+        extra.definition.setSlug = "preview_prime_set";
+        extra.itemId = "preview_prime_set";
+        extra.displayName = "Тестовый Прайм: Комплект для проверки количества";
+        for (const part of extra.components) {
+          part.ownedQuantity += 2;
+          part.tradeableQuantity += 2;
+          part.sellableQuantity = Math.max(0, part.tradeableQuantity - inventory.keepCopies);
+        }
+        view.sets.push(extra);
+      }
+      return view;
     }
     if (command === "resource_converter") {
       return makeResourceConverterView();
@@ -1143,7 +1159,8 @@ function makeInsightsView(): InsightsView {
       displayName: marketComponent?.displayName ?? component.slug,
       imageUrl: marketComponent?.imageUrl,
       ownedQuantity: component.ownedQuantity,
-      sellableQuantity: component.ownedQuantity,
+      tradeableQuantity: component.ownedQuantity,
+      sellableQuantity: Math.max(0, component.ownedQuantity - inventory.keepCopies),
       recommendation: scopedRecommendation(component.slug),
     };
   });

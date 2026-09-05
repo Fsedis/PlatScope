@@ -21,7 +21,11 @@ fn main() -> wry::Result<()> {
         .build(&event_loop)
         .expect("Не удалось создать тестовое окно");
     let _main_webview = wry::WebViewBuilder::new_with_web_context(&mut context)
-        .with_url("http://127.0.0.1:1420/?mock=1&mockTradeShift=1&mockOrders=27")
+        .with_url(if std::env::args().any(|arg| arg == "--insights") {
+            "http://127.0.0.1:1420/?mock=1&mockInsights=1"
+        } else {
+            "http://127.0.0.1:1420/?mock=1&mockTradeShift=1&mockOrders=27"
+        })
         .build(&main)?;
     let overlay = WindowBuilder::new()
         .with_title("PlatScope — проверка карточек")

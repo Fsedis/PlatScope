@@ -222,6 +222,8 @@ pub struct SetComponentInsight {
     pub display_name: String,
     pub image_url: Option<String>,
     pub owned_quantity: u32,
+    /// Передаваемые детали до пользовательского резерва «Оставлять копий».
+    pub tradeable_quantity: u32,
     pub sellable_quantity: u32,
     pub recommendation: Option<PriceRecommendation>,
 }
@@ -3857,6 +3859,7 @@ fn build_set_components(
                     .clone()
                     .or_else(|| insight_image_url(&component.slug, inventory, catalog)),
                 owned_quantity: owned_quantity(inventory, &component.slug),
+                tradeable_quantity: set_component_quantity(inventory, &component.slug),
                 sellable_quantity: sellable_quantity(inventory, &component.slug),
                 recommendation: price_slug(
                     database,
@@ -3899,7 +3902,7 @@ fn build_set_insights(
             .map(|component| SetPartInput {
                 slug: &component.definition.slug,
                 required_quantity: component.definition.required_quantity,
-                sellable_quantity: component.sellable_quantity,
+                sellable_quantity: component.tradeable_quantity,
                 fair_price: component
                     .recommendation
                     .as_ref()
@@ -4117,6 +4120,27 @@ fn owned_quantity(inventory: &[InventoryViewItem], slug: &str) -> u32 {
         .filter(|item| item.key.as_ref().is_some_and(|key| key.slug == slug))
         .fold(0_u32, |total, item| {
             total.saturating_add(item.owned_quantity)
+        })
+}
+
+// Для рыночного комплекта подходят только распознанные передаваемые детали
+// базового варианта. Сохранение копий для себя не меняет их наличия.
+fn set_component_quantity(inventory: &[InventoryViewItem], slug: &str) -> u32 {
+    inventory
+        .iter()
+        .filter(|item| {
+            item.resolution == InventoryResolution::Resolved
+                && item.key.as_ref().is_some_and(|key| {
+                    key.slug == slug
+                        && key.rank.is_none()
+                        && key.charges.is_none()
+                        && key.subtype.is_none()
+                        && key.amber_stars.is_none()
+                        && key.cyan_stars.is_none()
+                })
+        })
+        .fold(0_u32, |total, item| {
+            total.saturating_add(item.tradeable_quantity)
         })
 }
 
@@ -6240,6 +6264,48 @@ mod tests {
             sellable_quantity: 0,
             resolution: InventoryResolution::ExactVariantUnavailable,
         }));
+    }
+
+    #[test]
+    fn set_stock_uses_tradeable_base_parts_independently_of_keep_copies() {
+        let mut snapshot = nightwave_inventory_fixture(Utc::now());
+        let item = &mut snapshot.items[0];
+        item.key = Some(MarketVariantKey {
+            slug: "test_prime_blueprint".into(),
+            platform: Platform::Pc,
+            rank: None,
+            charges: None,
+            subtype: None,
+            amber_stars: None,
+            cyan_stars: None,
+        });
+        item.resolution = InventoryResolution::Resolved;
+        item.owned_quantity = 8;
+        item.tradeable_quantity = 3;
+        item.untradeable_quantity = 4;
+        item.unknown_quantity = 1;
+        item.sellable_quantity = 3;
+        for keep in [0, 1, 2, 10] {
+            let view =
+                inventory_view_from_snapshot(&snapshot, Language::Russian, Platform::Pc, keep);
+            assert_eq!(
+                set_component_quantity(&view.items, "test_prime_blueprint"),
+                3
+            );
+            assert_eq!(owned_quantity(&view.items, "test_prime_blueprint"), 8);
+        }
+        let mut view = inventory_view_from_snapshot(&snapshot, Language::Russian, Platform::Pc, 0);
+        view.items[0].resolution = InventoryResolution::ExactVariantUnavailable;
+        assert_eq!(
+            set_component_quantity(&view.items, "test_prime_blueprint"),
+            0
+        );
+        view.items[0].resolution = InventoryResolution::Resolved;
+        view.items[0].key.as_mut().unwrap().rank = Some(1);
+        assert_eq!(
+            set_component_quantity(&view.items, "test_prime_blueprint"),
+            0
+        );
     }
 
     #[test]

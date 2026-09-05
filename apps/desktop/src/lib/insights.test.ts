@@ -17,6 +17,7 @@ import {
   setLiveSellOrders,
   setModeLabel,
   setOpportunity,
+  setPriceComparison,
   setRelicSupport,
   type DucatInsightRow,
   type RelicInsightRow,
@@ -213,6 +214,7 @@ function setRow(
         displayName: `${name} A`,
         definition: { slug: `${slug}_a`, gameRef: "/Lotus/A", requiredQuantity: 1, ducats: 45 },
         ownedQuantity: completeSets + (missing === 0 ? 1 : 0),
+        tradeableQuantity: completeSets + (missing === 0 ? 1 : 0),
         sellableQuantity: completeSets + (missing === 0 ? 1 : 0),
         recommendation: recommendation(`${slug}_a`, 30),
       },
@@ -221,6 +223,7 @@ function setRow(
         displayName: `${name} B`,
         definition: { slug: `${slug}_b`, gameRef: "/Lotus/B", requiredQuantity: 1, ducats: 45 },
         ownedQuantity: completeSets + (missing < 2 ? 1 : 0),
+        tradeableQuantity: completeSets + (missing < 2 ? 1 : 0),
         sellableQuantity: completeSets + (missing < 2 ? 1 : 0),
         recommendation: recommendation(`${slug}_b`, 50),
       },
@@ -251,6 +254,73 @@ function ducatRow(slug: string, sellableQuantity: number): DucatInsightRow {
 }
 
 describe("insights presentation", () => {
+  it("keeps set counts, missing parts and relic plans independent of keep-copies", () => {
+    const original = setRow("Physical Stock", 1, 2);
+    const relics = [relicRow(original.components[0].definition.slug)];
+    const expected = setOpportunity(original);
+    for (const keep of [0, 1, 2, 10]) {
+      const row = structuredClone(original);
+      for (const part of row.components) part.sellableQuantity = Math.max(0, part.tradeableQuantity - keep);
+      const actual = setOpportunity(row);
+      expect(actual.completeSets).toBe(2);
+      expect(actual.sellableCompleteSets).toBe(Math.max(0, 2 - keep));
+      expect(actual.missingParts).toEqual(expected.missingParts);
+      expect(actual.completionProfit).toBe(expected.completionProfit);
+      expect(filterAndSortOpportunitySets([row], relics, "ready")).toEqual([row]);
+      expect(filterAndSortOpportunitySets([row], relics, "buy")).toEqual([row]);
+      expect(setRelicSupport(row, relics)).toEqual(setRelicSupport(original, relics));
+      expect(rankRelicsToOpen(relics, [row])).toEqual(rankRelicsToOpen(relics, [original]));
+    }
+  });
+
+  it("does not suggest buying a full set from scratch or after an exact complete set", () => {
+    for (const row of [setRow("Empty", 2), setRow("Exact", 0)]) {
+      expect(setOpportunity(row).profitableToComplete).toBe(false);
+      expect(filterAndSortOpportunitySets([row], [], "buy")).toEqual([]);
+    }
+  });
+
+  it("counts recipes with duplicate parts from physical stock, not the reserve", () => {
+    const row = setRow("Double", 0);
+    row.components[0].definition.requiredQuantity = 2;
+    row.components[0].tradeableQuantity = 5;
+    row.components[0].sellableQuantity = 4;
+    row.components[1].tradeableQuantity = 3;
+    row.components[1].sellableQuantity = 2;
+    expect(setOpportunity(row)).toMatchObject({ completeSets: 2, sellableCompleteSets: 2, missingQuantity: 1 });
+    row.components[0].sellableQuantity = 1;
+    expect(setOpportunity(row)).toMatchObject({ completeSets: 2, sellableCompleteSets: 0, missingQuantity: 1 });
+  });
+
+  it("reserves hidden sell orders but keeps factual complete sets visible", () => {
+    const row = setRow("Hidden Order", 0);
+    const reserved = reservePublishedSetListings(row, [{
+      itemId: row.itemId!, type: "sell", quantity: 1, visible: false,
+      rank: null, charges: null, subtype: null, amberStars: null, cyanStars: null,
+    }]);
+    expect(setOpportunity(reserved)).toMatchObject({ completeSets: 1, availableCompleteSets: 0, sellableCompleteSets: 0, profitableToComplete: false });
+    expect(reserved.components[0].tradeableQuantity).toBe(1);
+    expect(row.components[0].sellableQuantity).toBe(1);
+  });
+
+  it("does not calculate profit or relic income from stale prices", () => {
+    const row = setRow("Stale Completion", 1);
+    row.setRecommendation!.freshness = "stale";
+    expect(setOpportunity(row)).toMatchObject({ completionRevenue: null, completionProfit: null, setPremiumValue: null, profitableToComplete: false });
+    const relic = pricedRelicRow("Stale Relic", "intact", "rare");
+    relic.relicRecommendation!.freshness = "stale";
+    expect(rankRelicsToOpen([relic], [], { availableTraces: 0 })[0].expectedPlatinum).toBeNull();
+  });
+
+  it("updates sale advice with the displayed live price and rejects missing part prices", () => {
+    const row = setRow("Live comparison", 0, 1, 100, 80);
+    expect(setPriceComparison(row)).toBe("set");
+    expect(setPriceComparison(row, 60)).toBe("parts");
+    expect(setPriceComparison(row, 80)).toBe("equivalent");
+    row.components[0].recommendation!.freshness = "stale";
+    expect(setPriceComparison(row, 100)).toBe("insufficient_pricing");
+  });
+
   it("uses the five cheapest executable sell orders for a live set price", () => {
     const orders: LiveOrderView[] = [
       { side: "sell", platinum: 25, quantity: 1, perTrade: 1, userStatus: "in_game" },
@@ -403,7 +473,7 @@ describe("insights presentation", () => {
     expect(setOpportunity(partiallyReserved).sellableCompleteSets).toBe(1);
     expect(setOpportunity(fullyReserved).sellableCompleteSets).toBe(0);
     expect(filterAndSortOpportunitySets([fullyReserved, partiallyReserved], [], "ready"))
-      .toEqual([partiallyReserved]);
+      .toEqual([partiallyReserved, fullyReserved]);
     expect(selectBestOverviewReadySet([fullyReserved, partiallyReserved])).toBe(partiallyReserved);
   });
 
@@ -455,7 +525,7 @@ describe("insights presentation", () => {
     const harder = setRow("Hard Set", 2);
     const ready = setRow("Ready Set", 0, 1, 70, 80);
     expect(filterAndSortSets([harder, ready, easy], "finish").map((row) => row.displayName))
-      .toEqual(["Easy Set", "Hard Set"]);
+      .toEqual(["Easy Set"]);
     expect(filterAndSortSets([easy, ready], "ready")).toEqual([ready]);
   });
 
@@ -464,16 +534,17 @@ describe("insights presentation", () => {
     for (const component of ready.components) component.sellableQuantity = 0;
 
     const opportunity = setOpportunity(ready);
-    expect(opportunity.completeSets).toBe(1);
+    expect(opportunity.completeSets).toBe(2);
     expect(opportunity.sellableCompleteSets).toBe(0);
     expect(opportunity.missingQuantity).toBe(2);
     expect(opportunity.ownedPartsOpportunityValue).toBe(0);
-    expect(filterAndSortOpportunitySets([ready], [], "ready")).toEqual([]);
+    expect(filterAndSortOpportunitySets([ready], [], "ready")).toEqual([ready]);
   });
 
-  it("never presents protected or untradeable parts as free set-completion stock", () => {
+  it("never presents untradeable parts as set-completion stock", () => {
     const row = setRow("Protected Profit Set", 1, 0, 100, 80);
     row.components[1].ownedQuantity = 1;
+    row.components[1].tradeableQuantity = 0;
     row.components[1].sellableQuantity = 0;
 
     const opportunity = setOpportunity(row);

@@ -145,6 +145,7 @@
   let actionStatus = "";
   let openingSlug = "";
   let showAllArcanes = false;
+  let requestSequence = 0;
 
   $: arcaneCount = view
     ? view.arcanes.sell.length + view.arcanes.dissolve.length + view.arcanes.hold.length
@@ -219,14 +220,16 @@
   }
 
   async function loadConverter(): Promise<void> {
-    loading = true;
+    const request = ++requestSequence;
+    loading = view === null;
     errorMessage = "";
     try {
-      view = await invoke<ResourceConverterView | null>("resource_converter");
+      const result = await invoke<ResourceConverterView | null>("resource_converter");
+      if (request === requestSequence) view = result;
     } catch {
-      errorMessage = c.loadError;
+      if (request === requestSequence) errorMessage = c.loadError;
     } finally {
-      loading = false;
+      if (request === requestSequence) loading = false;
     }
   }
 
@@ -247,7 +250,7 @@
     let disposed = false;
     const cleanups: UnlistenFn[] = [];
     void loadConverter();
-    for (const event of ["game-metadata-updated", "market-data-updated", "inventory-updated"]) {
+    for (const event of ["game-metadata-updated", "market-data-updated", "inventory-updated", "trade-reconciled"]) {
       void listen(event, () => void loadConverter()).then((cleanup) => {
         if (disposed) cleanup();
         else cleanups.push(cleanup);
@@ -255,6 +258,7 @@
     }
     return () => {
       disposed = true;
+      ++requestSequence;
       for (const cleanup of cleanups) cleanup();
     };
   });
