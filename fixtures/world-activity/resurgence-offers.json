@@ -1,0 +1,578 @@
+[
+  {
+    "gameRef": "/Lotus/Types/StoreItems/Packages/MegaPrimeVault/MPVBansheePrimeSinglePack",
+    "displayName": "Набор «Банши Прайм»",
+    "displayNameEn": "M P V Banshee Prime Single Pack",
+    "kind": "other",
+    "ducats": 6,
+    "credits": null,
+    "masteryRef": null,
+    "setSlug": null,
+    "relicSlug": null,
+    "equipmentCategory": null,
+    "imageUrl": null,
+    "rewards": []
+  },
+  {
+    "gameRef": "/Lotus/Types/StoreItems/Packages/MegaPrimeVault/MPVBansheeMiragePrimeDualPack",
+    "displayName": "Двойной набор: Банши Прайм и Мираж Прайм",
+    "displayNameEn": "M P V Banshee Mirage Prime Dual Pack",
+    "kind": "other",
+    "ducats": 10,
+    "credits": null,
+    "masteryRef": null,
+    "setSlug": null,
+    "relicSlug": null,
+    "equipmentCategory": null,
+    "imageUrl": null,
+    "rewards": []
+  },
+  {
+    "gameRef": "/Lotus/Types/StoreItems/Packages/MegaPrimeVault/MPVMiragePrimeSinglePack",
+    "displayName": "Набор «Мираж Прайм»",
+    "displayNameEn": "M P V Mirage Prime Single Pack",
+    "kind": "other",
+    "ducats": 6,
+    "credits": null,
+    "masteryRef": null,
+    "setSlug": null,
+    "relicSlug": null,
+    "equipmentCategory": null,
+    "imageUrl": null,
+    "rewards": []
+  },
+  {
+    "gameRef": "/Lotus/Powersuits/Banshee/BansheePrime",
+    "displayName": "Банши Прайм",
+    "displayNameEn": "Banshee Prime",
+    "kind": "equipment",
+    "ducats": 3,
+    "credits": null,
+    "masteryRef": "/Lotus/Powersuits/Banshee/BansheePrime",
+    "setSlug": "banshee_prime_set",
+    "relicSlug": null,
+    "equipmentCategory": "warframe",
+    "imageUrl": "https://cdn.warframestat.us/img/BansheePrime.png",
+    "rewards": []
+  },
+  {
+    "gameRef": "/Lotus/Upgrades/Skins/Scarves/PrimeScarfF",
+    "displayName": "Сандана: Капелла Прайм",
+    "displayNameEn": "Prime Scarf F",
+    "kind": "other",
+    "ducats": 2,
+    "credits": null,
+    "masteryRef": null,
+    "setSlug": null,
+    "relicSlug": null,
+    "equipmentCategory": null,
+    "imageUrl": null,
+    "rewards": []
+  },
+  {
+    "gameRef": "/Lotus/Types/StoreItems/Packages/MegaPrimeVault/MPVIctusPrimeSentAccessories",
+    "displayName": "Аксессуары стража: Иктус Прайм",
+    "displayNameEn": "M P V Ictus Prime Sent Accessories",
+    "kind": "other",
+    "ducats": 1,
+    "credits": null,
+    "masteryRef": null,
+    "setSlug": null,
+    "relicSlug": null,
+    "equipmentCategory": null,
+    "imageUrl": null,
+    "rewards": []
+  },
+  {
+    "gameRef": "/Lotus/Types/Sentinels/SentinelPowersuits/PrimeHeliosPowerSuit",
+    "displayName": "Гелиос Прайм",
+    "displayNameEn": "Helios Prime",
+    "kind": "equipment",
+    "ducats": 2,
+    "credits": null,
+    "masteryRef": "/Lotus/Types/Sentinels/SentinelPowersuits/PrimeHeliosPowerSuit",
+    "setSlug": "helios_prime_set",
+    "relicSlug": null,
+    "equipmentCategory": "companion",
+    "imageUrl": "https://cdn.warframestat.us/img/HeliosPrime.png",
+    "rewards": []
+  },
+  {
+    "gameRef": "/Lotus/Weapons/Tenno/Pistols/AllNew1hSG/AllNew1hSG",
+    "displayName": "Юфона Прайм",
+    "displayNameEn": "Euphona Prime",
+    "kind": "equipment",
+    "ducats": 2,
+    "credits": null,
+    "masteryRef": "/Lotus/Weapons/Tenno/Pistols/AllNew1hSG/AllNew1hSG",
+    "setSlug": "euphona_prime_set",
+    "relicSlug": null,
+    "equipmentCategory": "secondary",
+    "imageUrl": "https://cdn.warframestat.us/img/EuphonaPrime.png",
+    "rewards": []
+  },
+  {
+    "gameRef": "/Lotus/Powersuits/Harlequin/MiragePrime",
+    "displayName": "Мираж Прайм",
+    "displayNameEn": "Mirage Prime",
+    "kind": "equipment",
+    "ducats": 3,
+    "credits": null,
+    "masteryRef": "/Lotus/Powersuits/Harlequin/MiragePrime",
+    "setSlug": "mirage_prime_set",
+    "relicSlug": null,
+    "equipmentCategory": "warframe",
+    "imageUrl": "https://cdn.warframestat.us/img/MiragePrime.png",
+    "rewards": []
+  },
+  {
+    "gameRef": "/Lotus/Types/StoreItems/Packages/MegaPrimeVault/MPVAtavistPrimeArmorSet",
+    "displayName": "Набор брони: Атавист Прайм",
+    "displayNameEn": "M P V Atavist Prime Armor Set",
+    "kind": "other",
+    "ducats": 2,
+    "credits": null,
+    "masteryRef": null,
+    "setSlug": null,
+    "relicSlug": null,
+    "equipmentCategory": null,
+    "imageUrl": null,
+    "rewards": []
+  },
+  {
+    "gameRef": "/Lotus/Upgrades/Skins/Scarves/PrimeScarfG",
+    "displayName": "Сандана: Аббера Прайм",
+    "displayNameEn": "Prime Scarf G",
+    "kind": "other",
+    "ducats": 2,
+    "credits": null,
+    "masteryRef": null,
+    "setSlug": null,
+    "relicSlug": null,
+    "equipmentCategory": null,
+    "imageUrl": null,
+    "rewards": []
+  },
+  {
+    "gameRef": "/Lotus/Weapons/Tenno/Melee/PrimeKogake/KogakePrimeKnuckles",
+    "displayName": "Когаке Прайм",
+    "displayNameEn": "Kogake Prime",
+    "kind": "equipment",
+    "ducats": 2,
+    "credits": null,
+    "masteryRef": "/Lotus/Weapons/Tenno/Melee/PrimeKogake/KogakePrimeKnuckles",
+    "setSlug": "kogake_prime_set",
+    "relicSlug": null,
+    "equipmentCategory": "melee",
+    "imageUrl": "https://cdn.warframestat.us/img/KogakePrime.png",
+    "rewards": []
+  },
+  {
+    "gameRef": "/Lotus/Weapons/Tenno/Pistols/PrimeAkbolto/PrimeAkBoltoWeapon",
+    "displayName": "Акболто Прайм",
+    "displayNameEn": "Akbolto Prime",
+    "kind": "equipment",
+    "ducats": 2,
+    "credits": null,
+    "masteryRef": "/Lotus/Weapons/Tenno/Pistols/PrimeAkbolto/PrimeAkBoltoWeapon",
+    "setSlug": "akbolto_prime_set",
+    "relicSlug": null,
+    "equipmentCategory": "secondary",
+    "imageUrl": "https://cdn.warframestat.us/img/AkboltoPrime.png",
+    "rewards": []
+  },
+  {
+    "gameRef": "/Lotus/Types/Items/ShipDecos/BansheePrimeBobbleHead",
+    "displayName": "Фигурка: Банши Прайм",
+    "displayNameEn": "Banshee Prime Bobble Head",
+    "kind": "other",
+    "ducats": 1,
+    "credits": null,
+    "masteryRef": null,
+    "setSlug": null,
+    "relicSlug": null,
+    "equipmentCategory": null,
+    "imageUrl": null,
+    "rewards": []
+  },
+  {
+    "gameRef": "/Lotus/Types/Items/ShipDecos/MiragePrimeBobbleHead",
+    "displayName": "Фигурка: Мираж Прайм",
+    "displayNameEn": "Mirage Prime Bobble Head",
+    "kind": "other",
+    "ducats": 1,
+    "credits": null,
+    "masteryRef": null,
+    "setSlug": null,
+    "relicSlug": null,
+    "equipmentCategory": null,
+    "imageUrl": null,
+    "rewards": []
+  },
+  {
+    "gameRef": "/Lotus/Types/Game/Projections/T1VoidProjectionBansheeMirageVaultABronze",
+    "displayName": "Реликвия Лит K5",
+    "displayNameEn": "Lith K5",
+    "kind": "relic",
+    "ducats": null,
+    "credits": 1,
+    "masteryRef": null,
+    "setSlug": null,
+    "relicSlug": "lith_k5_relic",
+    "equipmentCategory": null,
+    "imageUrl": null,
+    "rewards": [
+      {
+        "gameRef": "/Lotus/Types/Recipes/Weapons/WeaponParts/AkboltoPrimeBarrel",
+        "displayName": "Акболто Прайм: Ствол",
+        "chancePercent": 11.0,
+        "equipmentRefs": [
+          "/Lotus/Weapons/Tenno/Pistols/PrimeAkbolto/PrimeAkBoltoWeapon"
+        ]
+      },
+      {
+        "gameRef": "/Lotus/Types/Recipes/WarframeRecipes/BansheePrimeSystemsBlueprint",
+        "displayName": "Банши Прайм: Система · чертёж",
+        "chancePercent": 11.0,
+        "equipmentRefs": [
+          "/Lotus/Powersuits/Banshee/BansheePrime"
+        ]
+      },
+      {
+        "gameRef": "/Lotus/Types/Recipes/Components/FormaBlueprint",
+        "displayName": "Чертёж: Форма",
+        "chancePercent": 25.33,
+        "equipmentRefs": []
+      },
+      {
+        "gameRef": "/Lotus/Types/Recipes/Weapons/WeaponParts/PrimeHeliosCarapace",
+        "displayName": "Гелиос Прайм: Панцирь",
+        "chancePercent": 25.33,
+        "equipmentRefs": [
+          "/Lotus/Types/Sentinels/SentinelPowersuits/PrimeHeliosPowerSuit"
+        ]
+      },
+      {
+        "gameRef": "/Lotus/Types/Recipes/Weapons/WeaponParts/KogakePrimeGauntlet",
+        "displayName": "Когаке Прайм: Перчатка",
+        "chancePercent": 2.0,
+        "equipmentRefs": [
+          "/Lotus/Weapons/Tenno/Melee/PrimeKogake/KogakePrimeKnuckles"
+        ]
+      },
+      {
+        "gameRef": "/Lotus/Types/Recipes/WarframeRecipes/MiragePrimeChassisBlueprint",
+        "displayName": "Мираж Прайм: Каркас · чертёж",
+        "chancePercent": 25.33,
+        "equipmentRefs": [
+          "/Lotus/Powersuits/Harlequin/MiragePrime"
+        ]
+      }
+    ]
+  },
+  {
+    "gameRef": "/Lotus/Types/Game/Projections/T1VoidProjectionBansheeMirageVaultBBronze",
+    "displayName": "Реликвия Лит M7",
+    "displayNameEn": "Lith M7",
+    "kind": "relic",
+    "ducats": null,
+    "credits": 1,
+    "masteryRef": null,
+    "setSlug": null,
+    "relicSlug": "lith_m7_relic",
+    "equipmentCategory": null,
+    "imageUrl": null,
+    "rewards": [
+      {
+        "gameRef": "/Lotus/Types/Recipes/Components/FormaBlueprint",
+        "displayName": "Чертёж: Форма ×2",
+        "chancePercent": 11.0,
+        "equipmentRefs": []
+      },
+      {
+        "gameRef": "/Lotus/Types/Recipes/Weapons/AkboltoPrimeBlueprint",
+        "displayName": "Акболто Прайм · чертёж",
+        "chancePercent": 25.33,
+        "equipmentRefs": [
+          "/Lotus/Weapons/Tenno/Pistols/PrimeAkbolto/PrimeAkBoltoWeapon"
+        ]
+      },
+      {
+        "gameRef": "/Lotus/Types/Recipes/WarframeRecipes/BansheePrimeHelmetBlueprint",
+        "displayName": "Банши Прайм: Нейрооптика · чертёж",
+        "chancePercent": 25.33,
+        "equipmentRefs": [
+          "/Lotus/Powersuits/Banshee/BansheePrime"
+        ]
+      },
+      {
+        "gameRef": "/Lotus/Types/Recipes/Weapons/WeaponParts/Prime1HShotgunBarrel",
+        "displayName": "Юфона Прайм: Ствол",
+        "chancePercent": 11.0,
+        "equipmentRefs": [
+          "/Lotus/Weapons/Tenno/Pistols/AllNew1hSG/AllNew1hSG"
+        ]
+      },
+      {
+        "gameRef": "/Lotus/Types/Recipes/Weapons/WeaponParts/KogakePrimeBoot",
+        "displayName": "Когаке Прайм: Ступня",
+        "chancePercent": 25.33,
+        "equipmentRefs": [
+          "/Lotus/Weapons/Tenno/Melee/PrimeKogake/KogakePrimeKnuckles"
+        ]
+      },
+      {
+        "gameRef": "/Lotus/Types/Recipes/WarframeRecipes/MiragePrimeBlueprint",
+        "displayName": "Мираж Прайм · чертёж",
+        "chancePercent": 2.0,
+        "equipmentRefs": [
+          "/Lotus/Powersuits/Harlequin/MiragePrime"
+        ]
+      }
+    ]
+  },
+  {
+    "gameRef": "/Lotus/Types/Game/Projections/T2VoidProjectionBansheeMirageVaultABronze",
+    "displayName": "Реликвия Мезо E5",
+    "displayNameEn": "Meso E5",
+    "kind": "relic",
+    "ducats": null,
+    "credits": 1,
+    "masteryRef": null,
+    "setSlug": null,
+    "relicSlug": "meso_e5_relic",
+    "equipmentCategory": null,
+    "imageUrl": null,
+    "rewards": [
+      {
+        "gameRef": "/Lotus/Types/Recipes/WarframeRecipes/BansheePrimeBlueprint",
+        "displayName": "Банши Прайм · чертёж",
+        "chancePercent": 11.0,
+        "equipmentRefs": [
+          "/Lotus/Powersuits/Banshee/BansheePrime"
+        ]
+      },
+      {
+        "gameRef": "/Lotus/Types/Recipes/Weapons/WeaponParts/Prime1HShotgunReceiver",
+        "displayName": "Юфона Прайм: Приёмник",
+        "chancePercent": 2.0,
+        "equipmentRefs": [
+          "/Lotus/Weapons/Tenno/Pistols/AllNew1hSG/AllNew1hSG"
+        ]
+      },
+      {
+        "gameRef": "/Lotus/Types/Recipes/Components/FormaBlueprint",
+        "displayName": "Чертёж: Форма",
+        "chancePercent": 25.33,
+        "equipmentRefs": []
+      },
+      {
+        "gameRef": "/Lotus/Types/Recipes/SentinelRecipes/PrimeHeliosSentinelBlueprint",
+        "displayName": "Гелиос Прайм · чертёж",
+        "chancePercent": 11.0,
+        "equipmentRefs": [
+          "/Lotus/Types/Sentinels/SentinelPowersuits/PrimeHeliosPowerSuit"
+        ]
+      },
+      {
+        "gameRef": "/Lotus/Types/Recipes/Weapons/WeaponParts/PrimeHeliosCarapace",
+        "displayName": "Гелиос Прайм: Панцирь",
+        "chancePercent": 25.33,
+        "equipmentRefs": [
+          "/Lotus/Types/Sentinels/SentinelPowersuits/PrimeHeliosPowerSuit"
+        ]
+      },
+      {
+        "gameRef": "/Lotus/Types/Recipes/WarframeRecipes/MiragePrimeHelmetBlueprint",
+        "displayName": "Мираж Прайм: Нейрооптика · чертёж",
+        "chancePercent": 25.33,
+        "equipmentRefs": [
+          "/Lotus/Powersuits/Harlequin/MiragePrime"
+        ]
+      }
+    ]
+  },
+  {
+    "gameRef": "/Lotus/Types/Game/Projections/T3VoidProjectionBansheeMirageVaultABronze",
+    "displayName": "Реликвия Нео B6",
+    "displayNameEn": "Neo B6",
+    "kind": "relic",
+    "ducats": null,
+    "credits": 1,
+    "masteryRef": null,
+    "setSlug": null,
+    "relicSlug": "neo_b6_relic",
+    "equipmentCategory": null,
+    "imageUrl": null,
+    "rewards": [
+      {
+        "gameRef": "/Lotus/Types/Recipes/Weapons/WeaponParts/AkboltoPrimeLink",
+        "displayName": "Акболто Прайм: Связь",
+        "chancePercent": 11.0,
+        "equipmentRefs": [
+          "/Lotus/Weapons/Tenno/Pistols/PrimeAkbolto/PrimeAkBoltoWeapon"
+        ]
+      },
+      {
+        "gameRef": "/Lotus/Types/Recipes/WarframeRecipes/BansheePrimeChassisBlueprint",
+        "displayName": "Банши Прайм: Каркас · чертёж",
+        "chancePercent": 2.0,
+        "equipmentRefs": [
+          "/Lotus/Powersuits/Banshee/BansheePrime"
+        ]
+      },
+      {
+        "gameRef": "/Lotus/Types/Recipes/Weapons/Prime1HShotgunBlueprint",
+        "displayName": "Юфона Прайм · чертёж",
+        "chancePercent": 25.33,
+        "equipmentRefs": [
+          "/Lotus/Weapons/Tenno/Pistols/AllNew1hSG/AllNew1hSG"
+        ]
+      },
+      {
+        "gameRef": "/Lotus/Types/Recipes/Components/FormaBlueprint",
+        "displayName": "Чертёж: Форма",
+        "chancePercent": 25.33,
+        "equipmentRefs": []
+      },
+      {
+        "gameRef": "/Lotus/Types/Recipes/Weapons/KogakePrimeBlueprint",
+        "displayName": "Когаке Прайм · чертёж",
+        "chancePercent": 11.0,
+        "equipmentRefs": [
+          "/Lotus/Weapons/Tenno/Melee/PrimeKogake/KogakePrimeKnuckles"
+        ]
+      },
+      {
+        "gameRef": "/Lotus/Types/Recipes/WarframeRecipes/MiragePrimeHelmetBlueprint",
+        "displayName": "Мираж Прайм: Нейрооптика · чертёж",
+        "chancePercent": 25.33,
+        "equipmentRefs": [
+          "/Lotus/Powersuits/Harlequin/MiragePrime"
+        ]
+      }
+    ]
+  },
+  {
+    "gameRef": "/Lotus/Types/Game/Projections/T4VoidProjectionBansheeMirageVaultABronze",
+    "displayName": "Реликвия Акси H5",
+    "displayNameEn": "Axi H5",
+    "kind": "relic",
+    "ducats": null,
+    "credits": 1,
+    "masteryRef": null,
+    "setSlug": null,
+    "relicSlug": "axi_h5_relic",
+    "equipmentCategory": null,
+    "imageUrl": null,
+    "rewards": [
+      {
+        "gameRef": "/Lotus/Types/Recipes/Components/FormaBlueprint",
+        "displayName": "Чертёж: Форма ×2",
+        "chancePercent": 11.0,
+        "equipmentRefs": []
+      },
+      {
+        "gameRef": "/Lotus/Types/Recipes/Weapons/AkboltoPrimeBlueprint",
+        "displayName": "Акболто Прайм · чертёж",
+        "chancePercent": 25.33,
+        "equipmentRefs": [
+          "/Lotus/Weapons/Tenno/Pistols/PrimeAkbolto/PrimeAkBoltoWeapon"
+        ]
+      },
+      {
+        "gameRef": "/Lotus/Types/Recipes/WarframeRecipes/BansheePrimeHelmetBlueprint",
+        "displayName": "Банши Прайм: Нейрооптика · чертёж",
+        "chancePercent": 25.33,
+        "equipmentRefs": [
+          "/Lotus/Powersuits/Banshee/BansheePrime"
+        ]
+      },
+      {
+        "gameRef": "/Lotus/Types/Recipes/Weapons/Prime1HShotgunBlueprint",
+        "displayName": "Юфона Прайм · чертёж",
+        "chancePercent": 25.33,
+        "equipmentRefs": [
+          "/Lotus/Weapons/Tenno/Pistols/AllNew1hSG/AllNew1hSG"
+        ]
+      },
+      {
+        "gameRef": "/Lotus/Types/Recipes/Weapons/WeaponParts/PrimeHeliosCerebrum",
+        "displayName": "Гелиос Прайм: Мозг",
+        "chancePercent": 2.0,
+        "equipmentRefs": [
+          "/Lotus/Types/Sentinels/SentinelPowersuits/PrimeHeliosPowerSuit"
+        ]
+      },
+      {
+        "gameRef": "/Lotus/Types/Recipes/WarframeRecipes/MiragePrimeSystemsBlueprint",
+        "displayName": "Мираж Прайм: Система · чертёж",
+        "chancePercent": 11.0,
+        "equipmentRefs": [
+          "/Lotus/Powersuits/Harlequin/MiragePrime"
+        ]
+      }
+    ]
+  },
+  {
+    "gameRef": "/Lotus/Types/Game/Projections/T4VoidProjectionBansheeMirageVaultBBronze",
+    "displayName": "Реликвия Акси A12",
+    "displayNameEn": "Axi A12",
+    "kind": "relic",
+    "ducats": null,
+    "credits": 1,
+    "masteryRef": null,
+    "setSlug": null,
+    "relicSlug": "axi_a12_relic",
+    "equipmentCategory": null,
+    "imageUrl": null,
+    "rewards": [
+      {
+        "gameRef": "/Lotus/Types/Recipes/Weapons/WeaponParts/AkboltoPrimeReceiver",
+        "displayName": "Акболто Прайм: Приёмник",
+        "chancePercent": 2.0,
+        "equipmentRefs": [
+          "/Lotus/Weapons/Tenno/Pistols/PrimeAkbolto/PrimeAkBoltoWeapon"
+        ]
+      },
+      {
+        "gameRef": "/Lotus/Types/Recipes/WarframeRecipes/BansheePrimeBlueprint",
+        "displayName": "Банши Прайм · чертёж",
+        "chancePercent": 11.0,
+        "equipmentRefs": [
+          "/Lotus/Powersuits/Banshee/BansheePrime"
+        ]
+      },
+      {
+        "gameRef": "/Lotus/Types/Recipes/Components/FormaBlueprint",
+        "displayName": "Чертёж: Форма",
+        "chancePercent": 25.33,
+        "equipmentRefs": []
+      },
+      {
+        "gameRef": "/Lotus/Types/Recipes/Weapons/WeaponParts/PrimeHeliosSystems",
+        "displayName": "Гелиос Прайм: Система",
+        "chancePercent": 11.0,
+        "equipmentRefs": [
+          "/Lotus/Types/Sentinels/SentinelPowersuits/PrimeHeliosPowerSuit"
+        ]
+      },
+      {
+        "gameRef": "/Lotus/Types/Recipes/Weapons/WeaponParts/KogakePrimeBoot",
+        "displayName": "Когаке Прайм: Ступня",
+        "chancePercent": 25.33,
+        "equipmentRefs": [
+          "/Lotus/Weapons/Tenno/Melee/PrimeKogake/KogakePrimeKnuckles"
+        ]
+      },
+      {
+        "gameRef": "/Lotus/Types/Recipes/WarframeRecipes/MiragePrimeChassisBlueprint",
+        "displayName": "Мираж Прайм: Каркас · чертёж",
+        "chancePercent": 25.33,
+        "equipmentRefs": [
+          "/Lotus/Powersuits/Harlequin/MiragePrime"
+        ]
+      }
+    ]
+  }
+]

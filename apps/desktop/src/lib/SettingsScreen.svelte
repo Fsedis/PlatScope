@@ -17,6 +17,7 @@
   import type { GameMetadataRefreshOutcome, InsightsView } from "./insights";
   import type { RelicRewardScanView } from "./relicRewards";
   import AppUpdatePanel from "./AppUpdatePanel.svelte";
+  import { worldActivityStore } from "./worldActivityStore";
 
   export let onSettingsSaved: (settings: AppSettings) => void;
   export let onMarketRefreshed: (outcome: MarketRefreshOutcome) => void;
@@ -361,6 +362,7 @@
     refreshErrorMessage = "";
     try {
       const outcome = await invoke<MarketRefreshOutcome>("refresh_market_data");
+      worldActivityStore.invalidate();
       marketDataDate = outcome.snapshot.sourceDate;
       onMarketRefreshed(outcome);
       try {
@@ -392,6 +394,7 @@
     refreshErrorMessage = "";
     try {
       const outcome = await invoke<GameMetadataRefreshOutcome>("refresh_game_metadata");
+      worldActivityStore.invalidate();
       itemDataDate = outcome.metadata.fetchedAt.slice(0, 10);
       if (outcome.stale || outcome.usedLkg) {
         refreshErrorMessage = c.itemsNotUpdated(itemDataDate);

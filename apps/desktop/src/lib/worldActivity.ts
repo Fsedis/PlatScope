@@ -6,6 +6,8 @@ export interface ActivityOffer {
   gameRef: string; displayName: string; displayNameEn: string;
   kind: "equipment" | "relic" | "other"; ducats: number | null; credits: number | null;
   masteryRef: string | null; setSlug: string | null; relicSlug: string | null;
+  equipmentCategory: string | null; imageUrl: string | null;
+  rewards: { gameRef: string; displayName: string; chancePercent: number; equipmentRefs: string[] }[];
 }
 export interface WorldActivityView {
   fetchedAt: string; sourceAt: string; refreshFailed: boolean; catalogAvailable: boolean;
@@ -70,6 +72,7 @@ export function sectionStale(view: WorldActivityView, key: string, now: number):
 }
 export function nextWorldRefresh(view: WorldActivityView, now: number): number {
   if (view.refreshFailed || view.unavailableSections.length || sectionStale(view, "", now)) return now + 45_000;
+  if (!view.catalogAvailable) return now + 15_000;
   if ((periodState(view.baro, now) === "active" && (!view.baroOffers.length || view.baro?.inventoryIncomplete))
     || (periodState(view.resurgence, now) === "active" && (!view.resurgenceOffers.length || view.resurgence?.inventoryIncomplete))) return now + 45_000;
   const periods = [...view.cycles, view.baro, view.resurgence, view.steelPath, view.sortie];

@@ -53,4 +53,36 @@ describe("экран «Сейчас в игре»", () => {
     expect(cached).toContain("Показываем сохранённые данные");
     expect(cached).toContain("Банши Прайм");
   });
+  it("не прячет варфреймов и реликвии внутри общего магазина", () => {
+    const body = show(null);
+    expect(body).toContain("Варфреймы этой ротации");
+    expect(body).toContain("Оружие и спутники");
+    expect(body).toContain("Реликвии за Ая");
+    expect(body).toContain("Лит K5");
+    expect(body).toContain("Банши Прайм: Каркас");
+    expect(body).toContain("Все награды и шансы");
+    expect(body).not.toContain("Реликвии и товары Варзии");
+    expect(body.indexOf("Лит K5")).toBeLessThan(body.indexOf("Готовые предметы, наборы и украшения"));
+  });
+  it("даже без справочника оставляет полученные реликвии на виду", () => {
+    const body = show("catalog");
+    expect(body).toContain("Справочник предметов ещё не загружен");
+    expect(body).toContain("Лит K5");
+    expect(body).not.toContain("Показать реликвии: Банши");
+  });
+  it("на настоящем ассортименте разделяет шесть реликвий и пятнадцать платных товаров", () => {
+    const body = show("real");
+    expect(body).toContain("Показать реликвии: Банши Прайм");
+    expect(body).toContain("Показать реликвии: Мираж Прайм");
+    expect(body).toContain("Банши Прайм: Система · чертёж");
+    expect(body).toContain("Чертёж: Форма ×2");
+    expect(body).toContain("Готовые предметы, наборы и украшения · 15");
+    expect(body).not.toContain("Справочник предметов ещё не загружен");
+  });
+  it("пустой ассортимент объясняет одним сообщением, а не нулевыми списками", () => {
+    const body = show("empty");
+    expect(body).toContain("Ассортимент этой ротации ещё не получен");
+    expect(body).not.toContain("Реликвии за Ая");
+    expect(body).not.toContain("Варфреймы этой ротации");
+  });
 });

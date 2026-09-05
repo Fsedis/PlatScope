@@ -1,4 +1,5 @@
 import { CYCLES, type ActivityOffer, type WorldActivityView } from "./worldActivity";
+import realResurgenceOffers from "../../../../fixtures/world-activity/resurgence-offers.json";
 
 /** Только демонстрационные данные фонового браузера, не настройки игрока. */
 export function makeWorldActivityMock(scenario: string | null, now = Date.now()): WorldActivityView {
@@ -6,6 +7,7 @@ export function makeWorldActivityMock(scenario: string | null, now = Date.now())
   const gear = (name: string, nameEn: string, ref: string, cost: number): ActivityOffer => ({
     gameRef: ref, displayName: name, displayNameEn: nameEn, kind: "equipment",
     ducats: cost, credits: null, masteryRef: ref, setSlug: null, relicSlug: null,
+    equipmentCategory: /Banshee|Mirage/.test(ref) ? "warframe" : "secondary", imageUrl: null, rewards: [],
   });
   const offers: ActivityOffer[] = [
     gear("Банши Прайм", "Banshee Prime", "/Lotus/Demo/World/Banshee", 3),
@@ -14,9 +16,20 @@ export function makeWorldActivityMock(scenario: string | null, now = Date.now())
     gear("Гелиос Прайм", "Helios Prime", "/Lotus/Demo/World/Helios", 2),
     gear("Когаке Прайм", "Kogake Prime", "/Lotus/Demo/World/Kogake", 2),
     gear("Юфона Прайм", "Euphona Prime", "/Lotus/Demo/World/Euphona", 2),
-    ...["Лит B12", "Лит M10", "Мезо K8", "Нео H7", "Акси A12", "Акси E3"].map((name, index): ActivityOffer => ({
+    ...["Лит K5", "Лит M7", "Мезо E5", "Нео B6", "Акси H5", "Акси A12"].map((name, index): ActivityOffer => ({
       gameRef: `/Lotus/Demo/Relic/${index}`, displayName: `Реликвия ${name}`, displayNameEn: `Relic ${index}`,
       kind: "relic", ducats: null, credits: 1, masteryRef: null, setSlug: null, relicSlug: null,
+      equipmentCategory: null, imageUrl: null,
+      rewards: [
+        { gameRef: `/Lotus/Demo/Reward/${index}/frame`, displayName: `${index % 2 ? "Мираж" : "Банши"} Прайм: ${["Каркас", "Нейрооптика", "Система"][index % 3]}`,
+          chancePercent: 11, equipmentRefs: [`/Lotus/Demo/World/${index % 2 ? "Mirage" : "Banshee"}`] },
+        { gameRef: `/Lotus/Demo/Reward/${index}/weapon`, displayName: "Акболто Прайм: Ствол", chancePercent: 2, equipmentRefs: ["/Lotus/Demo/World/Akbolto"] },
+        { gameRef: `/Lotus/Demo/Reward/${index}/other`, displayName: "Когаке Прайм: Чертёж", chancePercent: 11, equipmentRefs: ["/Lotus/Demo/World/Kogake"] },
+        ...["Чертёж: Форма", "Лекс Прайм: Ствол", "Бронко Прайм: Приёмник"].map((displayName, rewardIndex) => ({
+          gameRef: `/Lotus/Demo/Reward/${index}/${rewardIndex}`, displayName,
+          chancePercent: rewardIndex === 2 ? 25.34 : 25.33, equipmentRefs: [],
+        })),
+      ],
     })),
   ];
   const view: WorldActivityView = {
@@ -36,6 +49,8 @@ export function makeWorldActivityMock(scenario: string | null, now = Date.now())
     sortie: { activation: date(-300), expiry: date(1100) },
     events: [{ id: "dog-days", name: "Дог Дэйз", activation: date(-600), expiry: date(4500) }],
   };
+  // Публичный ассортимент Варзии, обогащённый настоящим справочником в тесте ядра.
+  if (scenario === "real") view.resurgenceOffers = structuredClone(realResurgenceOffers) as ActivityOffer[];
   if (scenario === "upcoming") { view.baro!.activation = date(4500); view.baro!.expiry = date(7380); view.baroOffers = []; }
   if (scenario === "expired") {
     view.cycles.forEach(cycle => { cycle.expiry = date(-1); });
@@ -43,7 +58,7 @@ export function makeWorldActivityMock(scenario: string | null, now = Date.now())
   }
   if (scenario === "stale") { view.refreshFailed = true; view.sourceAt = date(-90); }
   if (scenario === "partial") { view.unavailableSections = ["vallis", "resurgence"]; view.cycles = view.cycles.filter(cycle => cycle.key !== "vallis"); view.resurgence = null; }
-  if (scenario === "catalog") { view.catalogAvailable = false; view.resurgenceOffers = []; }
+  if (scenario === "catalog") { view.catalogAvailable = false; view.resurgenceOffers = offers.filter(offer => offer.kind === "relic").map(offer => ({ ...offer, rewards: [] })); }
   if (scenario === "empty") { view.baroOffers = []; view.resurgenceOffers = []; view.events = []; }
   return view;
 }

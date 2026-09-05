@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
   import MasteryBadge from "./MasteryBadge.svelte";
+  import PrimeResurgence from "./PrimeResurgence.svelte";
   import WorldActivityIcon from "./WorldActivityIcon.svelte";
   import { ALERT_NAMES, CYCLES, alertStates, countdown, nextReset, nextState, offerCost, periodState,
     sectionStale, stateName, steelReward, traderLocation,
@@ -25,15 +26,12 @@
   let saving = false;
   let message = "";
   let baroQuery = "";
-  let resurgenceQuery = "";
   $: view = $worldActivityStore.view;
   $: now = $worldNow;
   $: activeRules = $worldPreferences.rules.filter(rule => rule.enabled);
   $: baroState = periodState(view?.baro, now);
   $: resurgenceState = periodState(view?.resurgence, now);
   $: baroOffers = view?.baroOffers.filter(offer => matches(offer.displayName, offer.displayNameEn, baroQuery)) ?? [];
-  $: resurgenceOffers = view?.resurgenceOffers.filter(offer => matches(offer.displayName, offer.displayNameEn, resurgenceQuery)) ?? [];
-  $: equipment = view?.resurgenceOffers.filter(offer => offer.kind === "equipment") ?? [];
   $: dailyReset = nextReset(now);
   $: weeklyReset = nextReset(now, true);
 
@@ -195,19 +193,10 @@
             <div class="vendor-status"><span>Ротация сменится <b>{new Date(view.resurgence.expiry).toLocaleDateString("ru-RU", { day: "numeric", month: "long" })}</b></span>
               <span title={dateLabel(view.resurgence.expiry)}>Через <b>{countdown(view.resurgence.expiry, now)}</b></span></div>
             {#if sectionStale(view, "resurgence", now)}<p class="stale-note">Сохранённая ротация · не удалось подтвердить обновление</p>{/if}
-            {#if equipment.length}<ul class="prime-equipment">{#each equipment as offer}
-              <li><strong>{offer.displayName}</strong>{#if offer.masteryRef}<MasteryBadge gameRef={offer.masteryRef} />{/if}</li>
-            {/each}</ul>{/if}
-            {#if !view.catalogAvailable}<p class="subtle">Для игровых названий и отметок освоения нужен справочник предметов. <button type="button" class="text-action" onclick={onOpenSettings}>Открыть настройки</button></p>{/if}
+            <PrimeResurgence offers={view.resurgenceOffers} catalogAvailable={view.catalogAvailable}
+              incomplete={view.resurgence.inventoryIncomplete} {onOpenSettings} />
             <div class="card-actions"><button type="button" class="secondary" onclick={() => onOpenInsights("relics")}>Открыть мои реликвии</button>
               <button type="button" class="secondary" onclick={() => onOpenInsights("complete_sets")}>Найти, что дособрать</button></div>
-            <details class="offer-details"><summary>Реликвии и товары Варзии · {view.resurgenceOffers.length}</summary>
-              <p class="subtle">Реликвии — за Ая. Готовое снаряжение и украшения — за Королевскую Ая.</p>
-              <label class="offer-search">Найти товар<input type="search" bind:value={resurgenceQuery} placeholder="Реликвия или предмет" /></label>
-              {#if view.resurgence.inventoryIncomplete}<p class="stale-note">Источник передал неполный список товаров.</p>{/if}
-              <ul class="offer-list">{#each resurgenceOffers as offer}<li><strong>{offer.displayName}</strong><span>{offerCost(offer, true)}</span></li>
-                {:else}<li>{resurgenceQuery ? "Ничего не найдено. Попробуйте другое название." : "Источник ещё не передал товары этой ротации."}</li>{/each}</ul>
-            </details>
           {:else}<p class="subtle">{resurgenceState === "upcoming" && view.resurgence ? `Начнётся ${dateLabel(view.resurgence.activation)}.` : !view.resurgence ? "Источник пока не передал текущую ротацию Варзии." : "Ротация обновляется. Покажем товары, когда источник подтвердит новый список."}</p>{/if}
         </article>
 
@@ -293,10 +282,8 @@
   input[type="search"],select { min-width:0; width:100%; background:var(--surface-1); border:1px solid var(--border-strong); border-radius:.45rem; padding:.5rem .6rem; color:var(--text); }
   .offer-list { padding:0; margin:.6rem 0 0; list-style:none; max-height:24rem; overflow:auto; overscroll-behavior:contain; }
   .offer-list li { display:flex; justify-content:space-between; align-items:baseline; gap:1rem; padding:.7rem .2rem; font-size:.78rem; border-bottom:1px solid var(--border); }
-  .offer-list li > div,.offer-list li > strong { min-width:0; overflow-wrap:anywhere; }
+  .offer-list li > div { min-width:0; overflow-wrap:anywhere; }
   .offer-list li > span { font-size:.72rem; color:var(--text-muted); text-align:right; flex:0 0 40%; }
-  .prime-equipment { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:.7rem; list-style:none; margin:1rem 0 0; padding:0; }
-  .prime-equipment li { background:var(--surface-2); padding:.65rem .75rem; border-radius:.5rem; font-size:.85rem; overflow-wrap:anywhere; }
   .cycles-panel { overflow:hidden; } .cycles-panel > header { margin:0; padding:1.1rem 1.2rem .9rem; }
   .cycle-row { display:flex; align-items:flex-start; gap:.8rem; padding:1rem 1.1rem; border-top:1px solid var(--border); }
   .cycle-icon { width:2.4rem; height:2.4rem; padding:.4rem; flex-shrink:0; color:var(--gold); background:var(--surface-2); border-radius:.6rem; }
@@ -341,6 +328,5 @@
   @container (max-width: 36rem) {
     .cycle-list { grid-template-columns:minmax(0,1fr); } .cycle-row:nth-child(even) { border-left:0; }
     .resets-panel { grid-template-columns:minmax(0,1fr); } .reset-cell + .reset-cell { border-left:0; border-top:1px solid var(--border); }
-    .prime-equipment { grid-template-columns:minmax(0,1fr); }
   }
 </style>

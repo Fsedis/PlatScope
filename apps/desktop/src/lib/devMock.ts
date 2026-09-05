@@ -776,7 +776,7 @@ export async function installMarketBrowserMock(): Promise<void> {
     if (command === "load_mastery") {
       if (mockOptions.get("mockMastery") === "error") throw new Error("test mastery unavailable");
       const result = makeMasteryMock(mockOptions.get("mockMastery"));
-      const worldGear = makeWorldActivityMock(null).resurgenceOffers.filter(offer => offer.masteryRef);
+      const worldGear = makeWorldActivityMock(new URLSearchParams(window.location.search).get("mockWorld")).resurgenceOffers.filter(offer => offer.masteryRef);
       result.items.push(...worldGear.map((offer, index) => ({
         gameRef: offer.gameRef, displayName: offer.displayName, displayNameEn: offer.displayNameEn,
         category: "warframe", imageUrl: null, maxRank: 30, xp: index % 2 === 0 ? 900000 : null,

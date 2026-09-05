@@ -10,7 +10,7 @@ use platscope_providers::{
 use platscope_storage::Database;
 use serde::Serialize;
 
-use crate::CoreError;
+use crate::{CoreError, lock_database};
 
 const CACHE_KEY: &str = "world_activity.snapshot.v1";
 const MIN_REQUEST_INTERVAL: Duration = Duration::from_secs(15);
@@ -53,6 +53,18 @@ pub struct WorldActivityOfferView {
     pub mastery_ref: Option<String>,
     pub set_slug: Option<String>,
     pub relic_slug: Option<String>,
+    pub equipment_category: Option<String>,
+    pub image_url: Option<String>,
+    pub rewards: Vec<WorldActivityRelicRewardView>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorldActivityRelicRewardView {
+    pub game_ref: String,
+    pub display_name: String,
+    pub chance_percent: f64,
+    pub equipment_refs: Vec<String>,
 }
 
 impl WorldActivityService {
@@ -68,7 +80,7 @@ impl WorldActivityService {
     /// Не требует привязки Warframe Market, сканирования инвентаря или запуска игры.
     ///
     /// # Errors
-    /// Возвращает ошибку сети, только если ещё нет сохранённых данных.
+    /// Возвращает ошибку сети, если ещё нет сохранённых данных, или ошибку чтения справочников.
     pub async fn view(
         &self,
         database: &Mutex<Database>,
@@ -116,12 +128,7 @@ impl WorldActivityService {
         })?;
         let refresh_failed = cache.failed;
         drop(cache);
-        let (metadata, catalog) = database.try_lock().ok().map_or((None, None), |database| {
-            (
-                database.load_current_game_metadata().ok().flatten(),
-                database.load_current_catalog().ok().flatten(),
-            )
-        });
+        let (metadata, catalog) = load_local_catalogs(database)?;
         Ok(build_view(
             snapshot,
             refresh_failed,
@@ -129,6 +136,18 @@ impl WorldActivityService {
             catalog.as_ref(),
         ))
     }
+}
+
+fn load_local_catalogs(
+    database: &Mutex<Database>,
+) -> Result<(Option<GameMetadataSnapshot>, Option<ItemCatalog>), CoreError> {
+    // Занятое соединение — не отсутствие справочника. Ошибку чтения
+    // возвращаем вызывающему коду, чтобы он сохранил последний хороший экран.
+    let database = lock_database(database)?;
+    Ok((
+        database.load_current_game_metadata()?,
+        database.load_current_catalog()?,
+    ))
 }
 
 fn should_refresh(cache: &ActivityCache, force: bool) -> bool {
@@ -269,6 +288,67 @@ fn localize_offer(
         mastery_ref: mastery.map(|item| item.game_ref.clone()),
         set_slug,
         relic_slug: relic.map(|item| item.relic_slug.clone()),
+        equipment_category: mastery.map(|item| item.category.clone()),
+        image_url: mastery.and_then(|item| item.image_url.clone()),
+        rewards: relic.map_or_else(Vec::new, |relic| {
+            relic
+                .rewards
+                .iter()
+                .map(|reward| localize_relic_reward(reward, metadata, catalog))
+                .collect()
+        }),
+    }
+}
+
+fn localize_relic_reward(
+    reward: &platscope_domain::RelicRewardDefinition,
+    metadata: Option<&GameMetadataSnapshot>,
+    catalog: Option<&ItemCatalog>,
+) -> WorldActivityRelicRewardView {
+    let localized = metadata.and_then(|metadata| {
+        metadata
+            .item_localizations
+            .iter()
+            .find(|item| item.game_ref == reward.reward_game_ref)
+    });
+    let market = catalog.and_then(|catalog| {
+        catalog.items.iter().find(|item| {
+            item.game_ref.as_ref() == Some(&reward.reward_game_ref)
+                || reward.reward_slug.as_ref() == Some(&item.slug)
+        })
+    });
+    let display_name = if reward.reward_game_ref == "/Lotus/Types/Recipes/Components/FormaBlueprint"
+    {
+        if reward.display_name_en.starts_with("2X ") {
+            "Чертёж: Форма ×2".into()
+        } else {
+            "Чертёж: Форма".into()
+        }
+    } else {
+        localized
+            .map(|item| &item.display_name_ru)
+            .or_else(|| market.and_then(|item| item.display_name_ru.as_ref()))
+            .unwrap_or(&reward.display_name_en)
+            .replace("(Чертеж)", "· чертёж")
+            .replace("(Чертёж)", "· чертёж")
+    };
+    WorldActivityRelicRewardView {
+        game_ref: reward.reward_game_ref.clone(),
+        display_name,
+        chance_percent: reward.chance_percent,
+        equipment_refs: metadata.map_or_else(Vec::new, |metadata| {
+            metadata
+                .prime_sets
+                .iter()
+                .filter(|set| {
+                    set.components.iter().any(|part| {
+                        part.game_ref == reward.reward_game_ref
+                            || reward.reward_slug.as_ref() == Some(&part.slug)
+                    })
+                })
+                .map(|set| set.set_game_ref.clone())
+                .collect()
+        }),
     }
 }
 
@@ -316,6 +396,111 @@ fn localized_bundle_name(game_ref: &str, items: &[MasteryItemDefinition]) -> Opt
 mod tests {
     use super::*;
     use platscope_providers::parse_world_activity;
+
+    fn resurgence_fixture() -> (WorldActivitySnapshot, GameMetadataSnapshot, ItemCatalog) {
+        let fixture: serde_json::Value = serde_json::from_slice(include_bytes!(
+            "../../../fixtures/world-activity/resurgence.json"
+        ))
+        .unwrap();
+        (
+            parse_world_activity(
+                &serde_json::to_vec(&fixture["worldstate"]).unwrap(),
+                chrono::Utc::now(),
+            )
+            .unwrap(),
+            serde_json::from_value(fixture["metadata"].clone()).unwrap(),
+            serde_json::from_value(fixture["catalog"].clone()).unwrap(),
+        )
+    }
+
+    #[test]
+    fn resurgence_maps_real_rotation_to_warframes_and_exact_relic_rewards() {
+        let (snapshot, metadata, catalog) = resurgence_fixture();
+        let view = build_view(snapshot, false, Some(&metadata), Some(&catalog));
+        let frames: Vec<_> = view
+            .resurgence_offers
+            .iter()
+            .filter(|offer| offer.equipment_category.as_deref() == Some("warframe"))
+            .collect();
+        assert_eq!(frames.len(), 2);
+        assert_eq!(frames[0].display_name, "Банши Прайм");
+        assert_eq!(frames[1].display_name, "Мираж Прайм");
+        assert!(frames.iter().all(|offer| offer.image_url.is_some()));
+        let relics: Vec<_> = view
+            .resurgence_offers
+            .iter()
+            .filter(|offer| offer.kind == "relic")
+            .collect();
+        assert_eq!(relics.len(), 6);
+        for relic in &relics {
+            assert_eq!(relic.rewards.len(), 6);
+            for frame in &frames {
+                assert!(
+                    relic
+                        .rewards
+                        .iter()
+                        .any(|reward| reward.equipment_refs.contains(&frame.game_ref)),
+                    "{}: {}",
+                    relic.display_name,
+                    frame.display_name
+                );
+            }
+            assert!(
+                relic
+                    .rewards
+                    .iter()
+                    .filter(|reward| reward.display_name.contains("Форма"))
+                    .all(|reward| reward.equipment_refs.is_empty())
+            );
+        }
+        let lith = relics
+            .iter()
+            .find(|relic| relic.display_name == "Реликвия Лит M7")
+            .unwrap();
+        assert!(
+            lith.rewards
+                .iter()
+                .any(|reward| reward.display_name.contains("Мираж")
+                    && reward.display_name.contains("чертёж"))
+        );
+        assert!(
+            lith.rewards
+                .iter()
+                .any(|reward| reward.display_name == "Чертёж: Форма ×2")
+        );
+        let blueprint = lith
+            .rewards
+            .iter()
+            .find(|reward| reward.equipment_refs.contains(&frames[1].game_ref))
+            .unwrap();
+        assert!((blueprint.chance_percent - 2.0).abs() < f64::EPSILON);
+        // Фоновый браузер получает тот же результат сопоставления, что и приложение.
+        let browser_offers: serde_json::Value = serde_json::from_slice(include_bytes!(
+            "../../../fixtures/world-activity/resurgence-offers.json"
+        ))
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(&view.resurgence_offers).unwrap(),
+            browser_offers
+        );
+    }
+
+    #[test]
+    fn busy_database_does_not_become_a_missing_catalog() {
+        let (_, metadata, catalog) = resurgence_fixture();
+        let database = Mutex::new(Database::open_in_memory().unwrap());
+        let mut guard = database.lock().unwrap();
+        guard.promote_game_metadata(&metadata).unwrap();
+        guard.promote_catalog(&catalog).unwrap();
+        std::thread::scope(|scope| {
+            let reader = scope.spawn(|| load_local_catalogs(&database).unwrap());
+            std::thread::sleep(Duration::from_millis(30));
+            drop(guard);
+            let (metadata, catalog) = reader.join().unwrap();
+            assert!(metadata.is_some());
+            assert!(catalog.is_some());
+        });
+    }
 
     fn snapshot() -> WorldActivitySnapshot {
         parse_world_activity(br#"{"timestamp":"2026-09-05T09:45:00Z","events":[],"cetusCycle":{"state":"day","activation":"2026-09-05T09:20:00Z","expiry":"2026-09-05T11:00:00Z"}}"#,

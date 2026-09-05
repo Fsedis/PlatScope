@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import { get, writable } from "svelte/store";
 import { markWorldAlertsDelivered, nextWorldRefresh, parseWorldPreferences, WORLD_PREFERENCES_KEY, worldAlertCandidates,
@@ -23,23 +24,28 @@ export function createWorldActivityStore(load: (force: boolean) => Promise<World
   let state: WorldActivityState = { view: null, loading: false, error: false, nextRefreshAt: 0, manualRefreshAt: 0 };
   const store = writable(state);
   let inFlight: Promise<void> | null = null;
+  let invalidated = false;
   function publish(update: Partial<WorldActivityState>) { state = { ...state, ...update }; store.set(state); }
   function refresh(force = false): Promise<void> {
     if (inFlight) return inFlight;
     if (now() < state.manualRefreshAt) return Promise.resolve();
     publish({ loading: true, manualRefreshAt: now() + 15_000 });
+    // Изменение локального справочника не требует нового запроса к источнику.
+    const refreshSource = force && !invalidated;
+    invalidated = false;
     inFlight = (async () => {
       try {
-        const view = await load(force);
+        const view = await load(refreshSource);
         publish({ view, error: view.refreshFailed, nextRefreshAt: nextWorldRefresh(view, now()),
           manualRefreshAt: now() + (view.refreshFailed ? 45_000 : 15_000) });
       } catch {
         publish({ error: true, nextRefreshAt: now() + 45_000, manualRefreshAt: now() + 45_000 });
-      } finally { publish({ loading: false }); }
+      } finally { publish({ loading: false, ...(invalidated ? { nextRefreshAt: 0 } : {}) }); }
     })().finally(() => { inFlight = null; });
     return inFlight;
   }
-  return { subscribe: store.subscribe, refresh };
+  function invalidate() { invalidated = true; publish({ nextRefreshAt: 0 }); }
+  return { subscribe: store.subscribe, refresh, invalidate };
 }
 
 function loadWithDeadline(forceRefresh: boolean): Promise<WorldActivityView> {
@@ -81,7 +87,7 @@ export function startWorldActivityAlerts(): () => void {
     if (screenReaders || watched) {
       worldNow.set(now);
       const state = get(worldActivityStore);
-      if (!state.loading && now >= state.nextRefreshAt) void worldActivityStore.refresh(true);
+      if (!state.loading && now >= state.nextRefreshAt) void worldActivityStore.refresh(Boolean(state.view?.catalogAvailable));
       const candidates = worldAlertCandidates(state.error ? null : state.view, preferences, now, previousTick, eligibleSince);
       if (candidates.length) {
         const next = markWorldAlertsDelivered(preferences, candidates);
@@ -100,9 +106,14 @@ export function startWorldActivityAlerts(): () => void {
     if (value.rules.some(rule => rule.enabled) && !get(worldActivityStore).view) void worldActivityStore.refresh();
   });
   const timer = window.setInterval(tick, 1_000);
+  // Названия и состав обновляются после загрузки справочников, не только при
+  // следующей смене цикла мира. В демонстрационном браузере IPC не запускается.
+  const listeners = isMock() ? [] : ["game-metadata-updated", "market-data-updated"].map(event =>
+    listen(event, () => worldActivityStore.invalidate()).catch(() => () => undefined));
   window.addEventListener("focus", tick);
   document.addEventListener("visibilitychange", tick);
   tick();
   return () => { disposed = true; cleanup(); window.clearInterval(timer);
+    for (const listener of listeners) void listener.then(unlisten => unlisten());
     window.removeEventListener("focus", tick); document.removeEventListener("visibilitychange", tick); };
 }

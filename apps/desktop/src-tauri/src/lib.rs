@@ -45,6 +45,8 @@ struct AppState {
     // OCR наград чувствителен к задержкам: обновление рынка может удерживать основной
     // mutex БД дольше, чем открыт экран выбора. Отдельное WAL-чтение не блокирует награды.
     reward_database: Mutex<Database>,
+    // Сводка читает справочники независимо от длительного обновления рынка и OCR.
+    world_database: Mutex<Database>,
     market_data_service: MarketDataService,
     live_pricing_service: LivePricingService,
     history_service: HistoryService,
@@ -679,8 +681,9 @@ async fn world_activity(
 ) -> Result<WorldActivityView, String> {
     state
         .world_activity_service
-        .view(&state.database, force_refresh)
+        .view(&state.world_database, force_refresh)
         .await
+        .map(localize_world_activity_images)
         .map_err(|error| error.to_string())
 }
 
@@ -2719,6 +2722,17 @@ fn localize_inventory_images(mut view: InventoryView) -> InventoryView {
     view
 }
 
+fn localize_world_activity_images(mut view: WorldActivityView) -> WorldActivityView {
+    for offer in view
+        .baro_offers
+        .iter_mut()
+        .chain(&mut view.resurgence_offers)
+    {
+        localize_component_image_url(&mut offer.image_url);
+    }
+    view
+}
+
 fn localize_sell_now_images(mut view: SellNowView) -> SellNowView {
     for row in &mut view.rows {
         localize_component_image_url(&mut row.inventory.image_url);
@@ -3866,6 +3880,7 @@ pub fn run() {
             let database_path = data_directory.join("platscope.db");
             let database = Database::open(&database_path)?;
             let reward_database = Database::open(&database_path)?;
+            let world_database = Database::open(&database_path)?;
             let market_data_service = MarketDataService::production()?;
             let live_pricing_service = LivePricingService::production()?;
             let history_service = HistoryService::production()?;
@@ -3890,6 +3905,7 @@ pub fn run() {
             app.manage(AppState {
                 database: Mutex::new(database),
                 reward_database: Mutex::new(reward_database),
+                world_database: Mutex::new(world_database),
                 market_data_service,
                 live_pricing_service,
                 history_service,

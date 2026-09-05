@@ -39,6 +39,7 @@ describe("события и расписание игры", () => {
     expect(nextWorldRefresh(fixture(), now)).toBe(now + 8 * 60_000 + 3_000);
     expect(nextWorldRefresh(makeWorldActivityMock("expired", now), now)).toBe(now + 45_000);
     expect(nextWorldRefresh(makeWorldActivityMock("stale", now), now)).toBe(now + 45_000);
+    expect(nextWorldRefresh(makeWorldActivityMock("catalog", now), now)).toBe(now + 15_000);
   });
   it("различает Ая, Королевскую Ая, дукаты и кредиты; null не превращается в ноль", () => {
     const item = fixture().resurgenceOffers[0];
@@ -109,6 +110,34 @@ describe("напоминания без повторов и лишних уве�
 });
 
 describe("общий запрос экрана и уведомлений", () => {
+  it("пересчитывает локальные названия после загрузки справочника без принудительного запроса в сеть", async () => {
+    let time = now;
+    const load = vi.fn().mockResolvedValue(fixture());
+    const store = createWorldActivityStore(load, () => time);
+    await store.refresh();
+    store.invalidate();
+    expect(get(store).nextRefreshAt).toBe(0);
+    await store.refresh(true);
+    expect(load).toHaveBeenCalledTimes(1);
+    time += 15_000;
+    await store.refresh(true);
+    expect(load).toHaveBeenLastCalledWith(false);
+    expect(get(store).nextRefreshAt).toBeGreaterThan(time);
+  });
+  it("не теряет обновление справочника, пришедшее во время запроса", async () => {
+    let finish!: (view: ReturnType<typeof fixture>) => void;
+    let time = now;
+    const load = vi.fn(() => new Promise<ReturnType<typeof fixture>>(resolve => finish = resolve));
+    const store = createWorldActivityStore(load, () => time);
+    const first = store.refresh();
+    store.invalidate(); finish(fixture()); await first;
+    expect(get(store).nextRefreshAt).toBe(0);
+    time += 15_000;
+    const retry = store.refresh(true);
+    expect(load).toHaveBeenLastCalledWith(false);
+    finish(fixture()); await retry;
+    expect(get(store).nextRefreshAt).toBeGreaterThan(time);
+  });
   it("объединяет одновременные загрузки и ограничивает ручные повторы", async () => {
     let finish!: (view: ReturnType<typeof fixture>) => void;
     const load = vi.fn(() => new Promise<ReturnType<typeof fixture>>(resolve => finish = resolve));
