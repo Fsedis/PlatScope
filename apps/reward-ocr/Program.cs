@@ -10,7 +10,7 @@ using Tesseract;
 
 namespace PlatScope.RewardOcr;
 
-internal static class Program
+internal static partial class Program
 {
     private const int ReferenceWidth = 1920;
     private const int ReferenceHeight = 1080;
@@ -229,7 +229,8 @@ internal static class Program
             && threePlayerResult.Rewards.Count == 3
             && CountMatched(twoPlayerResult) == 2
             && twoPlayerResult.Rewards.Count == 2;
-        return layoutsAreValid ? 0 : 3;
+        var matchingIsValid = RunMatchingRegression(engine);
+        return layoutsAreValid && matchingIsValid ? 0 : 3;
     }
 
     private static Bitmap BuildRussianSelfTestScreenshot(IReadOnlyList<string> labels)
@@ -683,10 +684,11 @@ internal static class Program
     private static RewardMatch MatchReward(int slot, string rawText, IReadOnlyList<CatalogCandidate> catalog)
     {
         var normalized = Normalize(rawText);
-        if (normalized.Length < 4) return new RewardMatch(slot, rawText, null, null, null, 0);
+        if (normalized.Length < 3) return new RewardMatch(slot, rawText, null, null, null, 0);
 
         CatalogCandidate? best = null;
         var bestDistance = int.MaxValue;
+        var ambiguous = false;
         foreach (var candidate in catalog)
         {
             var distance = Levenshtein(normalized, candidate.NormalizedName);
@@ -694,6 +696,11 @@ internal static class Program
             {
                 best = candidate;
                 bestDistance = distance;
+                ambiguous = false;
+            }
+            else if (distance == bestDistance && candidate.Source.ItemId != best?.Source.ItemId)
+            {
+                ambiguous = true;
             }
         }
 
@@ -701,12 +708,27 @@ internal static class Program
         var length = Math.Max(normalized.Length, best.NormalizedName.Length);
         var confidence = length == 0 ? 0 : Math.Clamp(1d - bestDistance / (double)length, 0, 1);
         var allowedDistance = Math.Max(3, (int)Math.Ceiling(normalized.Length * 0.45));
-        if (bestDistance > allowedDistance || confidence < 0.55)
+        if (bestDistance > allowedDistance || confidence < 0.55 || ambiguous
+            || normalized.Length < 4 && bestDistance != 0
+            || HasConflictingPrimeNamePrefix(normalized, best.NormalizedName))
         {
             return new RewardMatch(slot, rawText, null, null, null, confidence);
         }
 
         return new RewardMatch(slot, rawText, best.Source.ItemId, best.Source.Slug, best.Source.Name, confidence);
+    }
+
+    private static bool HasConflictingPrimeNamePrefix(string recognized, string candidate)
+    {
+        var recognizedPrime = recognized.IndexOf("ПРАЙМ", StringComparison.Ordinal);
+        var candidatePrime = candidate.IndexOf("ПРАЙМ", StringComparison.Ordinal);
+        if (recognizedPrime < 3 || candidatePrime < 3) return false;
+        var recognizedName = recognized[..recognizedPrime];
+        var candidateName = candidate[..candidatePrime];
+        // «Ак» — часть названия другого оружия, а не шум. Даже при неполном
+        // каталоге нельзя превращать Акбронко в Бронко (и наоборот).
+        return recognizedName == "АК" + candidateName
+            || candidateName == "АК" + recognizedName;
     }
 
     private static string CleanOcrText(string value) => string.Join(

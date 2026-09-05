@@ -413,7 +413,7 @@ fn normalize_wfcd_metadata(
         metadata: GameMetadataSnapshotMetadata {
             source: GameMetadataSource::WfcdWarframeItems,
             fetched_at: dump.fetched_at,
-            schema_version: 8,
+            schema_version: 9,
             set_count: u64::try_from(prime_sets.len()).unwrap_or(u64::MAX),
             relic_count: u64::try_from(relics.len()).unwrap_or(u64::MAX),
             prime_part_count: u64::try_from(prime_parts.len()).unwrap_or(u64::MAX),
@@ -1043,18 +1043,12 @@ fn parse_sets(
     let items: Vec<WfcdSetItem> = serde_json::from_slice(body).map_err(|error| {
         ProviderError::schema_changed(format!("invalid WFCD set JSON: {error}"))
     })?;
-    'set_items: for item in items.into_iter().filter(|item| {
+    for item in items.into_iter().filter(|item| {
         (item.is_prime || item.name.ends_with(" Prime")) && !item.components.is_empty()
     }) {
-        let Some((set_slug, tags)) = by_game_ref.get(item.unique_name.as_str()).copied() else {
-            continue;
-        };
-        if !tags.iter().any(|tag| tag == "set") {
-            continue;
-        }
         let vault_status = vault_status(item.vaulted);
         let mut components = Vec::new();
-        let mut resolved_parts = Vec::new();
+        let mut recipe_is_complete = true;
         let tradable_components = item
             .components
             .into_iter()
@@ -1062,10 +1056,10 @@ fn parse_sets(
             .collect::<Vec<_>>();
         for component in tradable_components {
             let Some((slug, _)) = resolve_component(&component.unique_name, by_game_ref) else {
-                // Публикация оставшихся строк превратила бы обрезанный рецепт
-                // в якобы полный сет. Пропускаем весь сет, пока каталог и WFCD
-                // снова не будут согласованы.
-                continue 'set_items;
+                // Неполный рецепт нельзя публиковать как сет. Но остальные
+                // распознанные детали всё ещё являются наградами и стоят дукатов.
+                recipe_is_complete = false;
+                continue;
             };
             let ducats = component.ducats.or(component.prime_selling_price);
             let image_url = wfcd_component_image_url(component.image_name.as_deref());
@@ -1077,7 +1071,7 @@ fn parse_sets(
                 image_url,
             });
             if let Some(ducats) = ducats.filter(|ducats| *ducats > 0) {
-                resolved_parts.push((
+                parts.insert(
                     slug.into(),
                     PrimePartMetadata {
                         slug: slug.into(),
@@ -1085,8 +1079,14 @@ fn parse_sets(
                         ducats,
                         vault_status,
                     },
-                ));
+                );
             }
+        }
+        let Some((set_slug, tags)) = by_game_ref.get(item.unique_name.as_str()).copied() else {
+            continue;
+        };
+        if !recipe_is_complete || !tags.iter().any(|tag| tag == "set") {
+            continue;
         }
         components.sort_by(|left, right| left.slug.cmp(&right.slug));
         if components
@@ -1096,7 +1096,6 @@ fn parse_sets(
             continue;
         }
         if components.len() >= 2 {
-            parts.extend(resolved_parts);
             sets.insert(
                 set_slug.into(),
                 PrimeSetDefinition {
@@ -1234,7 +1233,7 @@ mod tests {
         validate_metadata_dump(&dump).expect("production metadata stays within aggregate limit");
         let snapshot = normalize_wfcd_metadata(&dump, &catalog)
             .expect("production metadata normalizes against the current catalog");
-        assert_eq!(snapshot.metadata.schema_version, 8);
+        assert_eq!(snapshot.metadata.schema_version, 9);
         assert!(snapshot.mastery_items.len() > 500);
         assert!(
             snapshot
@@ -1244,6 +1243,23 @@ mod tests {
         );
         assert!(!snapshot.syndicate_offers.is_empty());
         assert!(!snapshot.arcane_dissolutions.is_empty());
+        for (slug, expected_ducats) in [
+            ("akbronco_prime_blueprint", 15),
+            ("akbronco_prime_link", 45),
+            ("aklex_prime_blueprint", 45),
+            ("aklex_prime_link", 100),
+            ("akvasto_prime_blueprint", 100),
+            ("akvasto_prime_link", 45),
+            ("akmagnus_prime_blueprint", 15),
+            ("akmagnus_prime_link", 45),
+        ] {
+            let part = snapshot.prime_parts.iter().find(|part| part.slug == slug);
+            assert_eq!(
+                part.map(|part| part.ducats),
+                Some(expected_ducats),
+                "{slug}"
+            );
+        }
     }
 
     #[test]
@@ -1737,7 +1753,7 @@ mod tests {
     }
 
     #[test]
-    fn prime_set_with_unresolved_tradable_component_is_not_published() {
+    fn incomplete_prime_set_keeps_known_reward_parts_but_is_not_published() {
         let item_catalog = catalog();
         let by_game_ref: HashMap<&str, (&str, &[String])> = item_catalog
             .items
@@ -1757,8 +1773,8 @@ mod tests {
                 "isPrime":true,
                 "components":[
                     {"uniqueName":"/Lotus/Types/Recipes/WarframeRecipes/NyxPrimeBlueprint","itemCount":1,"tradable":true,"ducats":15},
-                    {"uniqueName":"/Lotus/Types/Recipes/WarframeRecipes/NyxPrimeChassisBlueprint","itemCount":1,"tradable":true,"ducats":45},
-                    {"uniqueName":"/Lotus/Types/Recipes/WarframeRecipes/MissingPrimeSystemsBlueprint","itemCount":1,"tradable":true,"ducats":100}
+                    {"uniqueName":"/Lotus/Types/Recipes/WarframeRecipes/MissingPrimeSystemsBlueprint","itemCount":1,"tradable":true,"ducats":100},
+                    {"uniqueName":"/Lotus/Types/Recipes/WarframeRecipes/NyxPrimeChassisBlueprint","itemCount":1,"tradable":true,"ducats":45}
                 ]
             }]"#,
             &by_game_ref,
@@ -1768,7 +1784,69 @@ mod tests {
         .expect("schema-valid WFCD set document parses");
 
         assert!(sets.is_empty());
-        assert!(parts.is_empty());
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts["nyx_prime_blueprint"].ducats, 15);
+        assert_eq!(parts["nyx_prime_chassis_blueprint"].ducats, 45);
+    }
+
+    #[test]
+    fn prime_rewards_keep_ducats_even_without_a_market_set() {
+        let item_catalog = catalog();
+        let by_game_ref = item_catalog
+            .items
+            .iter()
+            .filter(|item| item.slug != "nyx_prime_set")
+            .filter_map(|item| {
+                item.game_ref
+                    .as_deref()
+                    .map(|game_ref| (game_ref, (item.slug.as_str(), item.tags.as_slice())))
+            })
+            .collect();
+        let mut sets = BTreeMap::new();
+        let mut parts = BTreeMap::new();
+        parse_sets(
+            include_bytes!("../../../fixtures/metadata/wfcd_sets.json"),
+            &by_game_ref,
+            &mut sets,
+            &mut parts,
+        )
+        .expect("детали не зависят от наличия сета в каталоге");
+        assert!(sets.is_empty());
+        assert_eq!(parts.len(), 4);
+        assert_eq!(parts["nyx_prime_neuroptics_blueprint"].ducats, 100);
+    }
+
+    #[test]
+    fn repeated_recipe_component_does_not_erase_known_reward_parts() {
+        let item_catalog = catalog();
+        let by_game_ref = item_catalog
+            .items
+            .iter()
+            .filter_map(|item| {
+                item.game_ref
+                    .as_deref()
+                    .map(|game_ref| (game_ref, (item.slug.as_str(), item.tags.as_slice())))
+            })
+            .collect();
+        let mut items: serde_json::Value =
+            serde_json::from_slice(include_bytes!("../../../fixtures/metadata/wfcd_sets.json"))
+                .unwrap();
+        let components = items[0]["components"].as_array_mut().unwrap();
+        components.push(components[0].clone());
+        let mut sets = BTreeMap::new();
+        let mut parts = BTreeMap::new();
+        parse_sets(
+            &serde_json::to_vec(&items).unwrap(),
+            &by_game_ref,
+            &mut sets,
+            &mut parts,
+        )
+        .unwrap();
+        // Парное оружие содержит повторяющиеся собранные пистолеты. Такой
+        // рецепт пока нельзя оценить как полный сет, но терять его награды нельзя.
+        assert!(sets.is_empty());
+        assert_eq!(parts.len(), 4);
+        assert_eq!(parts["nyx_prime_blueprint"].ducats, 15);
     }
 
     fn catalog() -> ItemCatalog {

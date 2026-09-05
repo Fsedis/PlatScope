@@ -1,5 +1,6 @@
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { makeMasteryMock } from "./masteryMock";
+import { makeWorldActivityMock } from "./worldActivityMock";
 
 import type {
   AccountOrder,
@@ -774,7 +775,16 @@ export async function installMarketBrowserMock(): Promise<void> {
     }
     if (command === "load_mastery") {
       if (mockOptions.get("mockMastery") === "error") throw new Error("test mastery unavailable");
-      return makeMasteryMock(mockOptions.get("mockMastery"));
+      const result = makeMasteryMock(mockOptions.get("mockMastery"));
+      const worldGear = makeWorldActivityMock(null).resurgenceOffers.filter(offer => offer.masteryRef);
+      result.items.push(...worldGear.map((offer, index) => ({
+        gameRef: offer.gameRef, displayName: offer.displayName, displayNameEn: offer.displayNameEn,
+        category: "warframe", imageUrl: null, maxRank: 30, xp: index % 2 === 0 ? 900000 : null,
+        masteryRank: index % 2 === 0 ? 30 : null,
+        status: index % 2 === 0 ? "mastered" as const : "progress" as const,
+        reason: index % 2 === 0 ? "history_confirmed" as const : "history_absent" as const, setSlugs: [],
+      })));
+      return result;
     }
     if (command === "scan_read_only_inventory") {
       if (mockOptions.get("mockMastery") === "scan-error") throw new Error("test scan unavailable");
@@ -835,6 +845,12 @@ export async function installMarketBrowserMock(): Promise<void> {
     }
     if (command === "bounty_hunter") {
       return makeBountyHunterView();
+    }
+    if (command === "world_activity") {
+      const scenario = mockOptions.get("mockWorld");
+      if (scenario === "error") throw new Error("test worldstate unavailable");
+      if (scenario === "loading") return new Promise(() => undefined);
+      return makeWorldActivityMock(scenario);
     }
     if (command === "open_market_items") {
       const slugs = (args as { slugs?: unknown } | undefined)?.slugs;

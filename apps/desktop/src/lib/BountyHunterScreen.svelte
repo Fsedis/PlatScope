@@ -31,6 +31,7 @@
   import type { LivePricingResult } from "./market";
 
   export let onOpenSettings: () => void;
+  export let initialRegion = "all";
 
   const LOAD_DEADLINE_MS = 20_000;
   const locale = useLocale();
@@ -38,7 +39,7 @@
   let loading = false;
   let loadingStartedAt: number | null = null;
   let error = "";
-  let region = "all";
+  let region = initialRegion;
   let onlyPriced = true;
   let query = "";
   let sort: BountySortKey = "platinum";

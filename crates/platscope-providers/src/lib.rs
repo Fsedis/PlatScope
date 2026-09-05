@@ -6,6 +6,7 @@ mod parser;
 mod relics_run;
 mod warframe_market;
 mod wfcd_metadata;
+mod world_activity;
 mod worldstate;
 
 use async_trait::async_trait;
@@ -25,6 +26,10 @@ pub use parser::{
 pub use relics_run::{RelicsRunCatalogProvider, RelicsRunProvider};
 pub use warframe_market::WarframeMarketProvider;
 pub use wfcd_metadata::WfcdMetadataProvider;
+pub use world_activity::{
+    ActivityCycle, ActivityEvent, ActivityOffer, ActivityPeriod, ActivitySteelPath, ActivityTrader,
+    WorldActivityProvider, WorldActivitySnapshot, parse_world_activity,
+};
 pub use worldstate::{
     BountyJob, BountyMission, BountyRewardDrop, BountyState, DailyMarketState, NightwaveState,
     SteelPathReward, SteelPathState, VoidTraderItem, VoidTraderState, WarframeWorldstateProvider,

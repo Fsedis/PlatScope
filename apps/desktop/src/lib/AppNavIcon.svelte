@@ -1,5 +1,6 @@
 <script lang="ts">
   export let screen:
+    | "world_activity"
     | "market"
     | "inventory"
     | "equipped_mods"
@@ -10,7 +11,9 @@
 </script>
 
 <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
-  {#if screen === "market"}
+  {#if screen === "world_activity"}
+    <circle cx="12" cy="12" r="9" /><path d="M12 6v6l4 2M3 12h2m14 0h2M12 3v2m0 14v2" />
+  {:else if screen === "market"}
     <path d="M4 17V9m5 8V5m5 12v-6m5 6V3M3 20h18" />
   {:else if screen === "inventory"}
     <path d="M4 7h16v13H4zM3 4h18v3H3zM9 11h6" />

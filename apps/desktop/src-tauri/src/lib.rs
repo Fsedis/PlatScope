@@ -22,7 +22,8 @@ use platscope_core::{
     MarketBrowserService, MarketDataService, MarketHistoryView, MarketRefreshOutcome,
     MarketSearchResult, MarketSearchRow, MasteryService, MasteryView, PriceRecommendation,
     PricingService, ResourceConverterService, ResourceConverterView, SETTINGS_KEY, SellNowService,
-    SellNowView, SetComponentInsight, UpdateListingInput, enrich_account_view, init_logging,
+    SellNowView, SetComponentInsight, UpdateListingInput, WorldActivityService, WorldActivityView,
+    enrich_account_view, init_logging,
 };
 use platscope_domain::{
     GameMetadataSnapshot, InventoryResolution, MarketItemKind, MarketVariantKey, PriceConfidence,
@@ -50,6 +51,7 @@ struct AppState {
     game_metadata_service: GameMetadataService,
     resource_converter_service: ResourceConverterService,
     bounty_hunter_service: BountyHunterService,
+    world_activity_service: WorldActivityService,
     account_service: AccountService,
     trade_reconciliation_lock: tokio::sync::Mutex<()>,
     read_only_inventory_scanner: Arc<ReadOnlyInventoryScanner>,
@@ -671,6 +673,19 @@ async fn resource_converter(
 
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)] // Tauri command extractor owns State.
+async fn world_activity(
+    force_refresh: bool,
+    state: State<'_, AppState>,
+) -> Result<WorldActivityView, String> {
+    state
+        .world_activity_service
+        .view(&state.database, force_refresh)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
 async fn bounty_hunter(
     force_refresh: bool,
     state: State<'_, AppState>,
@@ -2020,16 +2035,21 @@ fn build_reward_ocr_catalog(
                 .filter_map(|reward| reward.reward_slug.clone())
         })
         .collect();
-    let prime_slugs: HashSet<_> = metadata
-        .prime_parts
+    // Список деталей полных сетов не равен списку наград: например, рецепт
+    // Акбронко может не собраться из каталога, но его чертёж выпадает из реликвий.
+    // Используем все известные награды, в том числе из реликвий других игроков.
+    let reward_slugs: HashSet<_> = metadata
+        .relics
         .iter()
-        .map(|part| part.slug.as_str())
+        .flat_map(|relic| &relic.rewards)
+        .filter_map(|reward| reward.reward_slug.as_deref())
+        .chain(metadata.prime_parts.iter().map(|part| part.slug.as_str()))
         .collect();
     let mut result = Vec::new();
     for item in market_catalog
         .items
         .into_iter()
-        .filter(|item| prime_slugs.contains(item.slug.as_str()))
+        .filter(|item| reward_slugs.contains(item.slug.as_str()))
     {
         if let Some(name) = russian_reward_ocr_name(item.display_name_ru) {
             result.push(RewardOcrCatalogItem {
@@ -3832,6 +3852,7 @@ fn desktop_builder() -> tauri::Builder<tauri::Wry> {
 /// # Panics
 ///
 /// Завершает процесс, если Tauri runtime не может быть создан или запущен.
+#[allow(clippy::too_many_lines)] // Единый список сервисов и команд оболочки.
 pub fn run() {
     desktop_builder()
         .register_asynchronous_uri_scheme_protocol(
@@ -3875,6 +3896,7 @@ pub fn run() {
                 game_metadata_service,
                 resource_converter_service: ResourceConverterService::production()?,
                 bounty_hunter_service: BountyHunterService::production()?,
+                world_activity_service: WorldActivityService::production()?,
                 account_service,
                 trade_reconciliation_lock: tokio::sync::Mutex::new(()),
                 read_only_inventory_scanner: Arc::new(ReadOnlyInventoryScanner::new()),
@@ -3903,6 +3925,7 @@ pub fn run() {
             insights,
             resource_converter,
             bounty_hunter,
+            world_activity,
             open_market_items,
             account_status,
             account_connect,
@@ -4444,6 +4467,110 @@ mod tests {
         );
         assert_eq!(russian_reward_ocr_name(Some("   ".into())), None);
         assert_eq!(russian_reward_ocr_name(None), None);
+    }
+
+    #[test]
+    fn reward_ocr_catalog_keeps_rewards_missing_from_complete_prime_sets() {
+        let missing_rewards = [
+            ("akbronco_prime_blueprint", "Акбронко Прайм (Чертеж)"),
+            ("akbronco_prime_link", "Акбронко Прайм: Связь"),
+            ("aklex_prime_blueprint", "Аклекс Прайм (Чертеж)"),
+            ("aklex_prime_link", "Аклекс Прайм: Связь"),
+            ("akvasto_prime_blueprint", "Аквасто Прайм (Чертеж)"),
+            ("akvasto_prime_link", "Аквасто Прайм: Связь"),
+            ("akmagnus_prime_blueprint", "Акмагнус Прайм (Чертеж)"),
+            ("akmagnus_prime_link", "Акмагнус Прайм: Связь"),
+            ("kavasa_prime_buckle", "Каваса Прайм: Застежка"),
+            ("kavasa_prime_band", "Каваса Прайм: Лента"),
+            (
+                "kavasa_prime_kubrow_collar_blueprint",
+                "Ошейник Кубрау: Каваса Прайм (Чертеж)",
+            ),
+            ("lohk", "Лок"),
+        ];
+        let items: Vec<_> = missing_rewards
+            .iter()
+            .copied()
+            .chain([
+                ("bronco_prime_blueprint", "Бронко Прайм (Чертеж)"),
+                ("akbronco_prime_set", "Акбронко Прайм: Комплект"),
+                ("english_only", ""),
+            ])
+            .map(|(slug, name)| {
+                serde_json::json!({
+                    "item_id": slug, "slug": slug, "display_name_en": slug,
+                    "display_name_ru": name, "subtypes": [], "tags": []
+                })
+            })
+            .collect();
+        let catalog: platscope_domain::ItemCatalog = serde_json::from_value(serde_json::json!({
+            "metadata": {
+                "provider": "relics_run", "fetched_at": Utc::now(), "schema_version": 1,
+                "item_count": items.len(), "checksum_sha256": "reward-regression"
+            },
+            "items": items
+        }))
+        .unwrap();
+        let rewards: Vec<_> = missing_rewards
+            .iter()
+            .map(|(slug, name)| {
+                serde_json::json!({
+                    "rewardSlug": slug, "rewardGameRef": format!("/Lotus/Test/{slug}"),
+                    "displayNameEn": name,
+                    "chancePercent": 100.0 / f64::from(u32::try_from(missing_rewards.len()).unwrap())
+                })
+            })
+            .collect();
+        // Старый кэш: рецепт Акбронко не поддержан, его деталей в primeParts нет.
+        let metadata: GameMetadataSnapshot = serde_json::from_value(serde_json::json!({
+            "metadata": {
+                "source": "wfcd_warframe_items", "fetchedAt": Utc::now(), "schemaVersion": 8,
+                "setCount": 0, "relicCount": 1, "primePartCount": 1,
+                "checksumSha256": "old-reward-cache"
+            },
+            "primeSets": [], "rivenDispositions": [],
+            "primeParts": [{
+                "slug": "bronco_prime_blueprint", "gameRef": "/Lotus/Test/Bronco",
+                "ducats": 15, "vaultStatus": "available"
+            }],
+            "relics": [{
+                "relicSlug": "axi_test_relic", "relicGameRef": "/Lotus/Test/OtherPlayersRelic",
+                "displayNameEn": "Axi Test", "refinement": "intact", "vaultStatus": "vaulted",
+                "rewards": rewards
+            }]
+        }))
+        .unwrap();
+        let mut database = Database::open_in_memory().unwrap();
+        database.promote_catalog(&catalog).unwrap();
+        database.promote_game_metadata(&metadata).unwrap();
+        for active in [
+            HashSet::new(),
+            HashSet::from(["/Lotus/Test/OtherPlayersRelic".into()]),
+        ] {
+            let result = build_reward_ocr_catalog(&database, &active).unwrap();
+            for (slug, name) in missing_rewards {
+                let reward = result.iter().find(|item| item.slug == slug).unwrap();
+                assert_eq!(reward.item_id, slug);
+                assert_eq!(reward.name, name);
+            }
+            assert!(
+                result
+                    .iter()
+                    .any(|item| item.slug == "bronco_prime_blueprint")
+            );
+            assert!(!result.iter().any(|item| item.slug.ends_with("_set")));
+            assert!(!result.iter().any(|item| item.slug == "english_only"));
+            assert_eq!(
+                result
+                    .iter()
+                    .filter(|item| item.slug == "forma_blueprint")
+                    .count(),
+                2
+            );
+            if !active.is_empty() {
+                assert_ne!(result[0].slug, "bronco_prime_blueprint");
+            }
+        }
     }
 
     fn reward_choice_for_ranking(

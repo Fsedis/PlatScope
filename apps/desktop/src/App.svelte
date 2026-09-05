@@ -6,6 +6,8 @@
   import AppNavIcon from "./lib/AppNavIcon.svelte";
   import AppUpdatePanel from "./lib/AppUpdatePanel.svelte";
   import BountyHunterScreen from "./lib/BountyHunterScreen.svelte";
+  import WorldActivityScreen from "./lib/WorldActivityScreen.svelte";
+  import { startWorldActivityAlerts, worldPreferences } from "./lib/worldActivityStore";
   import DiagnosticsScreen from "./lib/DiagnosticsScreen.svelte";
   import EquippedModsScreen from "./lib/EquippedModsScreen.svelte";
   import HistoryChart from "./lib/HistoryChart.svelte";
@@ -54,6 +56,7 @@
   } from "./lib/i18n";
   import {
     loadMarketViewPreferences,
+    saveInsightsViewPreferences,
     saveMarketViewPreferences,
   } from "./lib/viewPreferences";
 
@@ -63,6 +66,8 @@
       skip: "Перейти к содержимому",
       navLabel: "Разделы приложения",
       market: "Рынок",
+      worldActivity: "Сейчас в игре",
+      worldActivityLede: "Что доступно сейчас, что скоро сменится и куда отправиться.",
       inventory: "Мои предметы",
       equippedMods: "Надетые моды",
       insights: "Возможности",
@@ -97,6 +102,8 @@
       skip: "Skip to content",
       navLabel: "Application sections",
       market: "Market",
+      worldActivity: "Now in game",
+      worldActivityLede: "Current activities, world cycles and upcoming rotations.",
       inventory: "My items",
       equippedMods: "Equipped mods",
       insights: "Opportunities",
@@ -140,6 +147,7 @@
   let historyIdentity = "";
   let historyRange: 7 | 30 | 90 = 7;
   type AppScreen =
+    | "world_activity"
     | "market"
     | "inventory"
     | "equipped_mods"
@@ -149,7 +157,8 @@
     | "settings";
   type MarketWorkspace = "sales" | "browse";
 
-  let activeScreen: AppScreen = "inventory";
+  let activeScreen: AppScreen = $worldPreferences.startHere ? "world_activity" : "inventory";
+  let bountyRegion = "all";
   let marketWorkspace: MarketWorkspace = "sales";
   let pageHeading: HTMLHeadingElement;
   let selectedIdentity = "";
@@ -396,6 +405,7 @@
 
   function screenTitle(screen: AppScreen, selectedCopy: typeof shell): string {
     return {
+      world_activity: selectedCopy.worldActivity,
       market: selectedCopy.market,
       inventory: selectedCopy.inventory,
       equipped_mods: selectedCopy.equippedMods,
@@ -408,6 +418,7 @@
 
   function screenLede(screen: AppScreen, selectedCopy: typeof shell): string {
     return {
+      world_activity: selectedCopy.worldActivityLede,
       market: selectedCopy.marketLede,
       inventory: selectedCopy.inventoryLede,
       equipped_mods: selectedCopy.equippedModsLede,
@@ -462,6 +473,7 @@
     window.addEventListener("pointerdown", handlePointer);
     const stopUpdateChecks = startAutomaticUpdateChecks();
     const stopBountyRewardAlerts = startBountyRewardAlerts();
+    const stopWorldActivityAlerts = startWorldActivityAlerts();
     void loadUiSettings().then(() => loadStatus()).then(() => searchMarket());
     void listen<MarketRefreshOutcome>("market-data-updated", (event) => {
       refreshOutcome = event.payload;
@@ -484,6 +496,7 @@
       window.removeEventListener("pointerdown", handlePointer);
       stopUpdateChecks();
       stopBountyRewardAlerts();
+      stopWorldActivityAlerts();
       if (searchTimer) clearTimeout(searchTimer);
     };
   });
@@ -506,6 +519,10 @@
     </div>
 
     <nav class="section-tabs" aria-label={shell.navLabel}>
+        <button type="button" class:active={activeScreen === "world_activity"}
+          aria-current={activeScreen === "world_activity" ? "page" : undefined}
+          onclick={() => navigateTo("world_activity")}
+        ><AppNavIcon screen="world_activity" /><span>{shell.worldActivity}</span></button>
         <button
           type="button"
           class:active={activeScreen === "market"}
@@ -534,7 +551,7 @@
           type="button"
           class:active={activeScreen === "bounty_hunter"}
           aria-current={activeScreen === "bounty_hunter" ? "page" : undefined}
-          onclick={() => navigateTo("bounty_hunter")}
+          onclick={() => { bountyRegion = "all"; navigateTo("bounty_hunter"); }}
         ><AppNavIcon screen="bounty_hunter" /><span>{shell.bountyHunter}</span></button>
         <button
           type="button"
@@ -560,7 +577,7 @@
   <header class="app-header">
     <div class="page-heading">
       <h1 bind:this={pageHeading} tabindex="-1">{screenTitle(activeScreen, shell)}</h1>
-      <p class="lede" class:sr-only={["market", "inventory", "insights", "bounty_hunter"].includes(activeScreen)}>{screenLede(activeScreen, shell)}</p>
+      <p class="lede" class:sr-only={["world_activity", "market", "inventory", "insights", "bounty_hunter"].includes(activeScreen)}>{screenLede(activeScreen, shell)}</p>
     </div>
   </header>
 
@@ -569,7 +586,11 @@
   <div class="screen-body">
 
   {#key $locale}
-  {#if activeScreen === "market"}
+  {#if activeScreen === "world_activity"}
+    <WorldActivityScreen onOpenSettings={() => navigateTo("settings")}
+      onOpenBounties={region => { bountyRegion = region; navigateTo("bounty_hunter"); }}
+      onOpenInsights={mode => { saveInsightsViewPreferences({ mode }); navigateTo("insights"); }} />
+  {:else if activeScreen === "market"}
   <div class="live-region" role="status" aria-live="polite">
     {#if loading}
       {shell.openingStorage}
@@ -902,7 +923,7 @@
       onOpenMarketSales={openMarketSales}
     />
   {:else if activeScreen === "bounty_hunter"}
-    <BountyHunterScreen onOpenSettings={() => navigateTo("settings")} />
+    <BountyHunterScreen initialRegion={bountyRegion} onOpenSettings={() => navigateTo("settings")} />
   {:else if activeScreen === "diagnostics"}
     <DiagnosticsScreen onOpenSettings={() => navigateTo("settings")} />
   {:else if activeScreen === "settings"}
