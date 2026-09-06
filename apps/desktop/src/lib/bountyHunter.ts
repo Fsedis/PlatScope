@@ -67,11 +67,11 @@ export function withBountyLivePrices(
         if (!job.rewards.some((reward) => reward.slug && prices.has(reward.slug))) return job;
         const rewards = job.rewards.map((reward) => {
           const price = reward.slug ? prices.get(reward.slug) : undefined;
-          return price === undefined ? reward : {
+          return price === undefined || !Number.isFinite(price) || price <= 0 ? reward : {
             ...reward, unitPrice: price, expectedPlatinum: price * reward.expectedQuantity,
           };
         });
-        const pricedRewardCount = rewards.filter((reward) => reward.marketKey && reward.unitPrice != null).length;
+        const pricedRewardCount = bountyEstimate({ ...job, rewards }).priced;
         return {
           ...job, rewards, pricedRewardCount,
           expectedPlatinum: rewards.reduce((total, reward) => total + (reward.expectedPlatinum ?? 0), 0),
@@ -124,8 +124,31 @@ export function bestBountyJob(view: BountyHunterView | null): BountyJobView | nu
     .sort((left, right) => right.expectedPlatinum - left.expectedPlatinum)[0] ?? null;
 }
 
-function topPricedRewardChance(job: BountyJobView): number {
-  return job.rewards.find((reward) => reward.unitPrice != null)?.chancePercent ?? 0;
+function normalized(value: string): string {
+  return value.trim().toLocaleLowerCase("ru").replaceAll("ё", "е");
+}
+
+export function activeBountyView(view: BountyHunterView | null, now: number): BountyHunterView | null {
+  return view ? { ...view, regions: view.regions.filter(region => (validTimestamp(region.expiry) ?? 0) > now) } : null;
+}
+
+export function bountyJobIdentity(row: RankedBountyJob): string {
+  return JSON.stringify([row.regionKey, row.expiry, row.job.id]);
+}
+
+export function bountyFeaturedReward(job: BountyJobView, query = "", targetKey = "", byChance = false): BountyRewardView | null {
+  const matched = job.rewards.filter(reward => targetKey
+    ? reward.trackingKey === targetKey : !!normalized(query) && normalized(reward.displayName).includes(normalized(query)));
+  return [...(matched.length ? matched : job.rewards)].sort((a, b) =>
+    matched.length || byChance ? b.chancePercent - a.chancePercent
+      : (b.expectedPlatinum ?? -1) - (a.expectedPlatinum ?? -1) || b.chancePercent - a.chancePercent,
+  )[0] ?? null;
+}
+
+export function bountyEstimate(job: BountyJobView): { value: number | null; priced: number; total: number } {
+  const market = job.rewards.filter(reward => reward.marketKey);
+  const priced = market.filter(reward => reward.expectedPlatinum != null && Number.isFinite(reward.expectedPlatinum) && reward.expectedPlatinum >= 0);
+  return { value: priced.length ? priced.reduce((sum, reward) => sum + reward.expectedPlatinum!, 0) : null, priced: priced.length, total: market.length };
 }
 
 export function rankedBountyJobs(
@@ -135,38 +158,49 @@ export function rankedBountyJobs(
     onlyPriced: boolean;
     query: string;
     sort: BountySortKey;
+    now?: number;
+    targetKey?: string;
   },
 ): RankedBountyJob[] {
   if (!view) return [];
-  const query = options.query.trim().toLocaleLowerCase("ru");
-  const rows = view.regions.flatMap((region) => region.jobs.map((job) => ({
+  const query = normalized(options.query);
+  const activeView = options.now === undefined ? view : activeBountyView(view, options.now)!;
+  const rows = activeView.regions.flatMap((region) => region.jobs.map((job) => ({
     regionKey: region.key,
     regionName: region.displayName,
     expiry: region.expiry,
     job,
   }))).filter((row) => {
     if (options.region !== "all" && row.regionKey !== options.region) return false;
-    if (options.onlyPriced && row.job.pricedRewardCount === 0) return false;
+    if (options.onlyPriced && bountyEstimate(row.job).value === null) return false;
+    if (options.targetKey) return row.job.rewards.some(reward => reward.trackingKey === options.targetKey);
     if (!query) return true;
-    return row.job.title.toLocaleLowerCase("ru").includes(query)
-      || row.regionName.toLocaleLowerCase("ru").includes(query)
-      || row.job.rewards.some((reward) => reward.displayName.toLocaleLowerCase("ru").includes(query));
+    return normalized(row.job.title).includes(query)
+      || normalized(row.regionName).includes(query)
+      || row.job.rewards.some((reward) => normalized(reward.displayName).includes(query));
   });
   rows.sort((left, right) => {
+    const leftEstimate = bountyEstimate(left.job), rightEstimate = bountyEstimate(right.job);
+    const byValue = (rightEstimate.value ?? -1) - (leftEstimate.value ?? -1);
     if (options.sort === "reward_chance") {
-      return topPricedRewardChance(right.job) - topPricedRewardChance(left.job)
-        || right.job.expectedPlatinum - left.job.expectedPlatinum;
+      const chance = (job: BountyJobView) => {
+        const reward = bountyFeaturedReward(job, query, options.targetKey, true);
+        if (query && !options.targetKey && reward && !normalized(reward.displayName).includes(query)) return -1;
+        return reward?.chancePercent ?? -1;
+      };
+      return chance(right.job) - chance(left.job)
+        || byValue;
     }
     if (options.sort === "level") {
       return left.job.minLevel - right.job.minLevel
-        || right.job.expectedPlatinum - left.job.expectedPlatinum;
+        || byValue;
     }
     if (options.sort === "rotation") {
       return new Date(left.expiry).getTime() - new Date(right.expiry).getTime()
-        || right.job.expectedPlatinum - left.job.expectedPlatinum;
+        || byValue;
     }
-    return right.job.expectedPlatinum - left.job.expectedPlatinum
-      || right.job.priceCoveragePercent - left.job.priceCoveragePercent
+    return byValue
+      || (rightEstimate.total ? rightEstimate.priced / rightEstimate.total : 0) - (leftEstimate.total ? leftEstimate.priced / leftEstimate.total : 0)
       || left.job.minLevel - right.job.minLevel;
   });
   return rows;

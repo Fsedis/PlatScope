@@ -17,10 +17,28 @@
   import type { GameMetadataRefreshOutcome, InsightsView } from "./insights";
   import type { RelicRewardScanView } from "./relicRewards";
   import AppUpdatePanel from "./AppUpdatePanel.svelte";
+  import DiagnosticsScreen from "./DiagnosticsScreen.svelte";
   import { worldActivityStore } from "./worldActivityStore";
 
   export let onSettingsSaved: (settings: AppSettings) => void;
   export let onMarketRefreshed: (outcome: MarketRefreshOutcome) => void;
+
+  let diagnosticsOpen = false;
+  let diagnosticsDialog: HTMLDialogElement;
+  let dataRefreshHeading: HTMLHeadingElement;
+
+  async function openDiagnostics(): Promise<void> {
+    diagnosticsOpen = true;
+    await tick();
+    diagnosticsDialog.showModal();
+  }
+
+  async function openDataRefresh(): Promise<void> {
+    diagnosticsDialog.close();
+    await tick();
+    dataRefreshHeading.scrollIntoView({ block: "start" });
+    dataRefreshHeading.focus({ preventScroll: true });
+  }
 
   const locale = useLocale();
   const copy = {
@@ -432,6 +450,16 @@
   </div>
 </dialog>
 
+<dialog class="diagnostics-dialog" bind:this={diagnosticsDialog} onclose={() => diagnosticsOpen = false} aria-labelledby="diagnostics-heading">
+  <header class="diagnostics-dialog__header">
+    <div><h2 id="diagnostics-heading">{$locale === "ru" ? "Диагностика" : "Diagnostics"}</h2><p>{$locale === "ru" ? "Состояние источников и сохранённых данных." : "Data sources and saved data status."}</p></div>
+    <button type="button" class="secondary" onclick={() => diagnosticsDialog.close()}>{$locale === "ru" ? "Закрыть" : "Close"}</button>
+  </header>
+  <div class="diagnostics-dialog__body">
+    {#if diagnosticsOpen}<DiagnosticsScreen onOpenSettings={openDataRefresh} />{/if}
+  </div>
+</dialog>
+
 {#if changed || saving}
   <div class="settings-actions" role="region" aria-label={$locale === "ru" ? "Несохранённые настройки" : "Unsaved settings"}>
     <span>{$locale === "ru" ? "Есть несохранённые изменения" : "You have unsaved changes"}</span>
@@ -606,7 +634,7 @@
 <section class="settings-card refresh-settings-card" aria-labelledby="data-refresh-heading">
   <div>
     <p class="eyebrow">{c.refreshKicker}</p>
-    <h2 id="data-refresh-heading">{c.refreshHeading}</h2>
+    <h2 id="data-refresh-heading" bind:this={dataRefreshHeading} tabindex="-1">{c.refreshHeading}</h2>
     <p>{c.refreshDescription}</p>
   </div>
   <div class="refresh-controls">
@@ -648,7 +676,24 @@
 
 <AppUpdatePanel mode="settings" />
 
+<section class="diagnostics-entry" aria-labelledby="diagnostics-entry-heading">
+  <div><h2 id="diagnostics-entry-heading">{$locale === "ru" ? "Диагностика" : "Diagnostics"}</h2><p>{$locale === "ru" ? "Если что-то работает неправильно, здесь можно проверить данные и сохранить отчёт." : "Check data and save a report when something is not working correctly."}</p></div>
+  <button type="button" class="secondary" aria-haspopup="dialog" onclick={openDiagnostics}>{$locale === "ru" ? "Открыть диагностику" : "Open diagnostics"}</button>
+</section>
+
 <style>
+  .diagnostics-entry { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:.8rem 1.5rem; margin-top:.7rem; padding:.9rem; border:1px solid var(--border); border-radius:.75rem; background:var(--surface-1); }
+  .diagnostics-entry h2 { font-size:1.1rem; margin:0 0 .35rem; }
+  .diagnostics-entry p { margin:0; color:var(--text-muted); font-size:.875rem; line-height:1.5; }
+  .diagnostics-entry button { flex:none; min-height:2.25rem; }
+  .diagnostics-dialog { width:min(76rem,calc(100vw - 2rem)); max-height:calc(100dvh - 2rem); padding:0; border:1px solid var(--border); border-radius:.9rem; background:var(--app-bg); color:var(--text); box-shadow:var(--shadow-md); overscroll-behavior:contain; }
+  .diagnostics-dialog::backdrop { background:rgb(0 0 0 / .45); }
+  .diagnostics-dialog__header { position:sticky; top:0; z-index:1; display:flex; align-items:start; justify-content:space-between; gap:1rem; padding:1.1rem 1.25rem; border-bottom:1px solid var(--border); background:var(--surface-1); }
+  .diagnostics-dialog__header h2 { margin:0; font-size:1.35rem; }
+  .diagnostics-dialog__header p { margin:.3rem 0 0; color:var(--text-muted); font-size:.875rem; line-height:1.4; }
+  .diagnostics-dialog__header button { flex:none; min-height:2.25rem; }
+  .diagnostics-dialog__body { padding:1.25rem; }
+  #data-refresh-heading { scroll-margin-top:5rem; }
   .leave-dialog { width: min(32rem, calc(100vw - 2rem)); border: 1px solid var(--border); border-radius: .8rem; padding: 1.25rem; background: var(--surface-1); color: var(--text); }
   .leave-dialog::backdrop { background: rgb(0 0 0 / .4); }
   .leave-dialog__actions { display: flex; flex-wrap: wrap; gap: .6rem; margin-top: 1rem; }

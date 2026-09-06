@@ -8,7 +8,6 @@
   import BountyHunterScreen from "./lib/BountyHunterScreen.svelte";
   import WorldActivityScreen from "./lib/WorldActivityScreen.svelte";
   import { startWorldActivityAlerts, worldPreferences } from "./lib/worldActivityStore";
-  import DiagnosticsScreen from "./lib/DiagnosticsScreen.svelte";
   import EquippedModsScreen from "./lib/EquippedModsScreen.svelte";
   import HistoryChart from "./lib/HistoryChart.svelte";
   import InsightsScreen from "./lib/InsightsScreen.svelte";
@@ -72,14 +71,12 @@
       equippedMods: "Надетые моды",
       insights: "Возможности",
       bountyHunter: "Охотник за наградами",
-      diagnostics: "Состояние данных",
       settings: "Настройки",
       marketLede: "Мои продажи, актуальность ордеров и поиск цены в одном рабочем месте.",
       inventoryLede: "Торговый инвентарь, момент продажи и ордера Warframe Market в одном месте.",
       equippedModsLede: "На каком предмете и в какой конфигурации стоит каждый мод.",
       insightsLede: "Лучшие способы превратить инвентарь и ресурсы в платину.",
-      bountyHunterLede: "Какой активный заказ принесёт больше платины и какие награды можно продать.",
-      diagnosticsLede: "Что загружено, что устарело и где возникла ошибка.",
+      bountyHunterLede: "Найдите нужную награду и выберите активный заказ по шансу выпадения, сложности и стоимости добычи.",
       settingsLede: "Язык, платформа и обновление данных.",
       searching: "Ищем в сохранённых данных…", shown: (visible: number, total: number) => `${visible} из ${total} вариантов показано`,
       storageError: (_reason: string) => "Не удалось открыть сохранённые данные. Перезапустите PlatScope.",
@@ -108,14 +105,12 @@
       equippedMods: "Equipped mods",
       insights: "Opportunities",
       bountyHunter: "Bounty hunter",
-      diagnostics: "Data status",
       settings: "Settings",
       marketLede: "Your sales, order health, and price research in one workspace.",
       inventoryLede: "Market inventory, sell timing, and Warframe Market orders in one place.",
       equippedModsLede: "See the item and configuration using each mod.",
       insightsLede: "The best ways to turn inventory and resources into platinum.",
-      bountyHunterLede: "Compare active bounties by saleable rewards and expected platinum.",
-      diagnosticsLede: "Provider, local cache, and data coverage status without reading terminal logs.",
+      bountyHunterLede: "Find rewards and compare active bounties by drop chance, difficulty and estimated reward value.",
       settingsLede: "Language, market platform, and data refresh controls.",
       searching: "Searching saved data…", shown: (visible: number, total: number) => `${visible} of ${total} variants shown`,
       storageError: (_reason: string) => "Unable to open saved data. Restart PlatScope.",
@@ -153,7 +148,6 @@
     | "equipped_mods"
     | "insights"
     | "bounty_hunter"
-    | "diagnostics"
     | "settings";
   type MarketWorkspace = "sales" | "browse";
 
@@ -411,7 +405,6 @@
       equipped_mods: selectedCopy.equippedMods,
       insights: selectedCopy.insights,
       bounty_hunter: selectedCopy.bountyHunter,
-      diagnostics: selectedCopy.diagnostics,
       settings: selectedCopy.settings,
     }[screen];
   }
@@ -424,7 +417,6 @@
       equipped_mods: selectedCopy.equippedModsLede,
       insights: selectedCopy.insightsLede,
       bounty_hunter: selectedCopy.bountyHunterLede,
-      diagnostics: selectedCopy.diagnosticsLede,
       settings: selectedCopy.settingsLede,
     }[screen];
   }
@@ -553,12 +545,6 @@
           aria-current={activeScreen === "bounty_hunter" ? "page" : undefined}
           onclick={() => { bountyRegion = "all"; navigateTo("bounty_hunter"); }}
         ><AppNavIcon screen="bounty_hunter" /><span>{shell.bountyHunter}</span></button>
-        <button
-          type="button"
-          class:active={activeScreen === "diagnostics"}
-          aria-current={activeScreen === "diagnostics" ? "page" : undefined}
-          onclick={() => navigateTo("diagnostics")}
-        ><AppNavIcon screen="diagnostics" /><span>{shell.diagnostics}</span></button>
         <button
           type="button"
           class:active={activeScreen === "settings"}
@@ -924,8 +910,6 @@
     />
   {:else if activeScreen === "bounty_hunter"}
     <BountyHunterScreen initialRegion={bountyRegion} onOpenSettings={() => navigateTo("settings")} />
-  {:else if activeScreen === "diagnostics"}
-    <DiagnosticsScreen onOpenSettings={() => navigateTo("settings")} />
   {:else if activeScreen === "settings"}
     <SettingsScreen bind:this={settingsScreen} onSettingsSaved={applySettings} onMarketRefreshed={handleMarketRefreshed} />
   {/if}

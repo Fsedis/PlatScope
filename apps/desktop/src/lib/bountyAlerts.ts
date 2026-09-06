@@ -16,6 +16,7 @@ import {
   saveBountyAppearanceIds,
 } from "./bountyWatchlist";
 import {
+  activeBountyView,
   bountyAutomaticRefreshAt,
   type BountyHunterView,
 } from "./bountyHunter";
@@ -85,7 +86,7 @@ export function startBountyRewardAlerts(): () => void {
     if (rotationAt === null) return;
     const delay = Math.min(
       MAX_TIMER_DELAY_MS,
-      Math.max(1_000, rotationAt - Date.now() + ROTATION_SETTLE_DELAY_MS),
+      rotationAt <= Date.now() ? REFRESH_RETRY_DELAY_MS : Math.max(1_000, rotationAt - Date.now() + ROTATION_SETTLE_DELAY_MS),
     );
     refreshTimer = window.setTimeout(() => void refresh(true), delay);
   };
@@ -94,7 +95,7 @@ export function startBountyRewardAlerts(): () => void {
     currentView = view;
     const preferences = loadBountyWatchPreferences();
     const previousAppearanceIds = loadBountyAppearanceIds();
-    const result = detectBountyRewardAlerts(view, preferences, previousAppearanceIds);
+    const result = detectBountyRewardAlerts(activeBountyView(view, Date.now())!, preferences, previousAppearanceIds);
     saveBountyAppearanceIds(result.currentAppearanceIds);
     schedule(view);
     for (const alert of result.alerts) {

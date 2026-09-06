@@ -30,7 +30,7 @@ import type {
 import type { LiveSellNowResult, SellNowRow, SellNowView } from "./sellNow";
 import type { RelicRewardScanView } from "./relicRewards";
 import type { ResourceConverterView } from "./resourceConverter";
-import type { BountyHunterView } from "./bountyHunter";
+import { makeBountyHunterMock } from "./bountyHunterMock";
 import {
   isSaleTrade,
   planTradeReconciliation,
@@ -679,6 +679,16 @@ export async function installMarketBrowserMock(): Promise<void> {
           {side:"buy",platinum:Math.max(1,value-5),quantity:1,perTrade:1,userStatus:"in_game"},
         ],warning:null} satisfies LivePricingResult;
       }
+      if (mockOptions.has("mockBounty") && key) {
+        const reward = makeBountyHunterMock().regions.flatMap(region => region.jobs.flatMap(job => job.rewards)).find(reward => reward.slug === key.slug);
+        if (reward) {
+          if (mockOptions.get("mockLiveFailure") === "empty") return null;
+          const price = (reward.unitPrice ?? 12) + 2;
+          return { recommendation: { ...rows[0]!.recommendation, key, listPrice: price, fairPrice: price },
+            fetchedAt: new Date().toISOString(), quoteState: mockOptions.get("mockLiveFailure") === "stale" ? "stale_cache" : "network",
+            sellOrderCount: 3, buyOrderCount: 2, orders: [], warning: null } satisfies LivePricingResult;
+        }
+      }
       const row = rows.find((candidate) => candidate.recommendation.key.slug === key?.slug);
       if (!row) return null;
       const scoped = marketRowForPlatform(row, key?.platform as AppSettings["platform"] ?? appSettings.platform);
@@ -875,7 +885,12 @@ export async function installMarketBrowserMock(): Promise<void> {
       };
     }
     if (command === "bounty_hunter") {
-      return makeBountyHunterView();
+      const scenario = mockOptions.get("mockBounty");
+      if (scenario === "refresh-error" && (args as { forceRefresh?: boolean })?.forceRefresh) throw new Error("Тест: ошибка при смене ротации");
+      if (scenario === "error") throw new Error("Тест: источник заказов недоступен");
+      if (scenario === "loading") return new Promise(() => undefined);
+      if (scenario === "no-data") return null;
+      return makeBountyHunterMock(scenario);
     }
     if (command === "world_activity") {
       const scenario = mockOptions.get("mockWorld");
@@ -1116,113 +1131,6 @@ function makeResourceConverterView(): ResourceConverterView {
         },
       ],
     },
-  };
-}
-
-function makeBountyHunterView(): BountyHunterView {
-  const fetchedAt = new Date();
-  const expiry = new Date(fetchedAt.getTime() + 90 * 60 * 1000).toISOString();
-  return {
-    fetchedAt: fetchedAt.toISOString(),
-    marketSourceDate: "2026-09-01",
-    regions: [
-      {
-        key: "cetus",
-        displayName: "Цетус",
-        expiry,
-        jobs: [
-          {
-            id: "cetus-tier-five",
-            title: "Ослабить позиции Гринир",
-            minLevel: 40,
-            maxLevel: 60,
-            minMasteryRank: 0,
-            stageCount: 5,
-            totalStanding: 7420,
-            expectedPlatinum: 4.8,
-            marketRewardCount: 1,
-            pricedRewardCount: 1,
-            priceCoveragePercent: 100,
-            rewards: [
-              {
-                trackingKey: "market:primed_flow",
-                displayName: "Редкий мод",
-                imageUrl: rows[6]?.imageUrl ?? null,
-                slug: "primed_flow",
-                marketKey: rows[6]?.recommendation.key ?? null,
-                ownedQuantity: 2,
-                rarity: "Редкая",
-                expectedQuantity: 0.12,
-                chancePercent: 11.8,
-                unitPrice: 28,
-                expectedPlatinum: 3.3,
-              },
-              {
-                trackingKey: "worldstate:aya",
-                displayName: "Айя",
-                imageUrl: null,
-                slug: null,
-                marketKey: null,
-                ownedQuantity: 4,
-                rarity: "Редкая",
-                expectedQuantity: 0.25,
-                chancePercent: 23.4,
-                unitPrice: null,
-                expectedPlatinum: null,
-              },
-              {
-                trackingKey: "worldstate:400 endo",
-                displayName: "400 эндо",
-                imageUrl: null,
-                slug: null,
-                marketKey: null,
-                ownedQuantity: 1200,
-                rarity: "Необычная",
-                expectedQuantity: 0.5,
-                chancePercent: 50,
-                unitPrice: null,
-                expectedPlatinum: null,
-              },
-            ],
-          },
-        ],
-      },
-      {
-        key: "fortuna",
-        displayName: "Фортуна",
-        expiry,
-        jobs: [
-          {
-            id: "fortuna-tier-four",
-            title: "Засада на курьера",
-            minLevel: 30,
-            maxLevel: 50,
-            minMasteryRank: 0,
-            stageCount: 5,
-            totalStanding: 6250,
-            expectedPlatinum: 2.6,
-            marketRewardCount: 1,
-            pricedRewardCount: 1,
-            priceCoveragePercent: 100,
-            rewards: [
-              {
-                trackingKey: "market:synth_reflex",
-                displayName: "Синт Рефлекс",
-                imageUrl: null,
-                slug: "synth_reflex",
-                marketKey: rows[6]?.recommendation.key ?? null,
-                ownedQuantity: 1,
-                rarity: "Необычная",
-                expectedQuantity: 0.2,
-                chancePercent: 18.5,
-                unitPrice: 10,
-                expectedPlatinum: 2,
-              },
-            ],
-          },
-        ],
-      },
-    ],
   };
 }
 

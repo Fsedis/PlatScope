@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   bestBountyJob,
+  activeBountyView,
+  bountyEstimate,
+  bountyFeaturedReward,
+  bountyJobIdentity,
   bountyAutomaticRefreshAt,
   bountyRotationAt,
   rankedBountyJobs,
@@ -9,6 +13,7 @@ import {
   withBountyLivePrices,
   type BountyHunterView,
 } from "./bountyHunter";
+import { makeBountyHunterMock } from "./bountyHunterMock";
 
 const view: BountyHunterView = {
   fetchedAt: "2026-09-02T10:00:00Z",
@@ -45,7 +50,8 @@ const view: BountyHunterView = {
           marketRewardCount: 2,
           pricedRewardCount: 2,
           priceCoveragePercent: 100,
-          rewards: [],
+          rewards: [{ trackingKey: "market:saved", displayName: "Награда", slug: "saved", rarity: "rare",
+            marketKey: { slug: "saved", platform: "pc", rank: null, charges: null, subtype: null, amberStars: null, cyanStars: null }, expectedQuantity: .5, chancePercent: 40, unitPrice: 8.4, expectedPlatinum: 4.2 }],
         },
       ],
     },
@@ -53,6 +59,60 @@ const view: BountyHunterView = {
 };
 
 describe("bounty hunter view helpers", () => {
+  it("сортирует по шансу искомой непродаваемой награды, а не первой награды с ценой", () => {
+    const mock = makeBountyHunterMock();
+    const rows = rankedBountyJobs(mock, { region: "all", onlyPriced: false, query: "аЙя", sort: "reward_chance" });
+    expect(rows[0]!.job.title).toBe("Ослабить позиции Гринир");
+    expect(bountyFeaturedReward(rows[0]!.job, "Айя")?.chancePercent).toBe(78.2);
+    const chances = rows.map(row => bountyFeaturedReward(row.job, "Айя")!.chancePercent);
+    expect(chances).toEqual([...chances].sort((a, b) => b - a));
+  });
+
+  it("отслеживание ищет точный ключ и нормализует ё в текстовом поиске", () => {
+    const mock = makeBountyHunterMock();
+    const job = mock.regions[0]!.jobs[0]!;
+    job.title = "Чертёж";
+    expect(rankedBountyJobs(mock, { region: "all", onlyPriced: false, query: "чертеж", sort: "platinum" })).toHaveLength(1);
+    const result = rankedBountyJobs(mock, { region: "all", onlyPriced: false, query: "старое имя", targetKey: job.rewards[0]!.trackingKey, sort: "reward_chance" });
+    expect(result.length).toBeGreaterThan(0);
+    expect(result.every(row => row.job.rewards.some(reward => reward.trackingKey === job.rewards[0]!.trackingKey))).toBe(true);
+  });
+
+  it("скрывает завершённую ротацию, сохраняя заказы других регионов", () => {
+    const now = Date.parse("2026-09-06T10:00:00Z");
+    const mock = makeBountyHunterMock("partial-expired", now);
+    const rows = rankedBountyJobs(mock, { region: "all", onlyPriced: false, query: "", sort: "platinum", now });
+    expect(rows).toHaveLength(10);
+    expect(rows.some(row => row.regionKey === "cetus")).toBe(false);
+    mock.regions[1]!.expiry = "invalid";
+    expect(activeBountyView(mock, now)?.regions.map(region => region.key)).toEqual(["necralisk"]);
+    expect(mock.regions).toHaveLength(3);
+  });
+
+  it("различает неизвестную стоимость и нулевую, не считает ненадёжную цену учтённой", () => {
+    const mock = makeBountyHunterMock();
+    const job = mock.regions[0]!.jobs[0]!;
+    job.rewards[0]!.expectedPlatinum = null;
+    expect(bountyEstimate(job)).toEqual({ value: null, total: 1, priced: 0 });
+    const options = { region: "cetus", onlyPriced: true, query: job.title, sort: "platinum" as const };
+    expect(rankedBountyJobs(mock, options)).toHaveLength(0);
+    job.rewards[0]!.expectedPlatinum = 0;
+    expect(bountyEstimate(job).value).toBe(0);
+    expect(rankedBountyJobs(mock, options)).toHaveLength(1);
+  });
+
+  it("после проверки цен меняет главную награду и рейтинг, не смешивая заказы разных регионов", () => {
+    const mock = makeBountyHunterMock();
+    const job = mock.regions[0]!.jobs[3]!;
+    const updated = withBountyLivePrices(mock, new Map([["necramech_continuity", 1000], ["augur_reach", NaN]]))!;
+    const updatedJob = updated.regions[0]!.jobs[3]!;
+    expect(bountyFeaturedReward(updatedJob)?.slug).toBe("necramech_continuity");
+    expect(updatedJob.rewards[0]!.unitPrice).toBe(job.rewards[0]!.unitPrice);
+    const rows = rankedBountyJobs(updated, { region: "all", onlyPriced: false, query: "", sort: "platinum" });
+    expect(rows[0]!.job.id).toBe(job.id);
+    expect(new Set(rows.map(bountyJobIdentity)).size).toBe(rows.length);
+    expect(bountyJobIdentity(rows[0]!)).not.toBe(bountyJobIdentity({ ...rows[0]!, expiry: "2027-01-01" }));
+  });
   it("updates ranking and coverage from live prices without changing saved data", () => {
     const saved: BountyHunterView = {
       ...view,
