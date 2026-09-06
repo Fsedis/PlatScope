@@ -147,63 +147,12 @@ summary:focus-visible,
 
 .app-shell {
   display: grid;
-  grid-template-columns: 12.5rem minmax(0, 1fr);
+  grid-template-columns: 15.5rem minmax(0, 1fr);
   min-height: 100vh;
 }
 
-.app-sidebar {
-  position: sticky;
-  inset-block-start: 0;
-  display: flex;
-  flex-direction: column;
-  min-height: 100vh;
-  max-height: 100vh;
-  border-inline-end: 1px solid var(--border);
-  padding: 0.8rem 0.6rem;
-  background: var(--sidebar-bg);
-}
-
-.app-brand {
-  display: flex;
-  align-items: center;
-  gap: 0.55rem;
-  min-height: 2.75rem;
-  padding-inline: 0.4rem;
-}
-
-.app-brand__mark {
-  flex: none;
-  width: 1.8rem;
-  height: 1.8rem;
-  fill: none;
-  stroke: var(--accent-strong);
-  stroke-linejoin: round;
-  stroke-width: 1.5;
-}
-
-.app-brand__copy {
-  min-width: 0;
-}
-
-.app-brand__copy strong,
-.app-brand__copy small {
-  display: block;
-}
-
-.app-brand__copy strong {
-  color: var(--text);
-  font-family: Georgia, "Times New Roman", serif;
-  font-size: 1.12rem;
-  letter-spacing: -0.01em;
-}
-
-.app-brand__copy small {
-  margin-block-start: 0.12rem;
-  color: var(--text-subtle);
-  font-size: .68rem;
-  font-weight: 700;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
+@media (min-width: 68.001rem) {
+  .app-shell.sidebar-compact { grid-template-columns: 4.75rem minmax(0, 1fr); }
 }
 
 .app-main {
@@ -223,19 +172,6 @@ summary:focus-visible,
 
 .page-heading {
   min-width: 0;
-}
-
-.sidebar-status > span {
-  width: 0.5rem;
-  height: 0.5rem;
-  border-radius: 50%;
-  background: #7b879a;
-  box-shadow: 0 0 0 0.18rem rgb(123 135 154 / 14%);
-}
-
-.sidebar-status > span.ready {
-  background: var(--success);
-  box-shadow: 0 0 0 0.18rem rgb(88 207 115 / 14%);
 }
 
 h1,
@@ -284,41 +220,6 @@ h3 {
   text-wrap: pretty;
 }
 
-.section-tabs {
-  display: grid;
-  gap: 0.2rem;
-  margin-block: 0.65rem;
-}
-
-.section-tabs button {
-  display: grid;
-  grid-template-columns: 1.15rem minmax(0, 1fr);
-  align-items: center;
-  gap: 0.5rem;
-  min-height: 2.25rem;
-  border-color: transparent;
-  border-radius: 0.5rem;
-  padding-inline: 0.55rem;
-  background: transparent;
-  color: var(--text-muted);
-  font-size: 0.78rem;
-  font-weight: 600;
-  text-align: start;
-}
-
-.section-tabs button:hover {
-  border-color: transparent;
-  background: oklch(0.96 0.018 80 / 0.7);
-  color: var(--text);
-}
-
-.section-tabs button.active {
-  border-color: oklch(0.74 0.055 62);
-  background: var(--accent-soft);
-  color: var(--accent-strong);
-  box-shadow: 0.1875rem 0 0 var(--accent) inset;
-}
-
 .nav-icon {
   width: 1rem;
   height: 1rem;
@@ -327,35 +228,6 @@ h3 {
   stroke-linecap: round;
   stroke-linejoin: round;
   stroke-width: 1.7;
-}
-
-.sidebar-status {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
-  gap: 0.4rem;
-  margin-block-start: auto;
-  border: 1px solid var(--border);
-  border-radius: 0.55rem;
-  padding: 0.45rem 0.55rem;
-  background: oklch(0.96 0.018 80 / 0.62);
-}
-
-.sidebar-status strong,
-.sidebar-status small {
-  display: block;
-}
-
-.sidebar-status strong {
-  color: var(--text-muted);
-  font-size: .75rem;
-  letter-spacing: 0.06em;
-}
-
-.sidebar-status small {
-  margin-block-start: 0.12rem;
-  color: var(--text-subtle);
-  font-size: .75rem;
 }
 
 .live-region {
@@ -1909,63 +1781,7 @@ td,
 }
 
 @media (max-width: 68rem) {
-  .app-shell {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .app-sidebar {
-    position: static;
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    min-height: auto;
-    max-height: none;
-    border-inline-end: 0;
-    border-block-end: 1px solid var(--border);
-    padding: 0.65rem 0.75rem;
-  }
-
-  .app-brand {
-    min-height: 2.75rem;
-  }
-
-  .section-tabs {
-    grid-column: 1 / -1;
-    grid-row: 2;
-    grid-template-columns: repeat(7, minmax(0, 1fr));
-    margin-block: 0.65rem 0;
-  }
-
-  .sidebar-status {
-    grid-column: 2;
-    grid-row: 1;
-    justify-self: end;
-    margin-block-start: 0;
-  }
-
-  .section-tabs button {
-    grid-template-columns: minmax(0, 1fr);
-    justify-items: center;
-    gap: 0.3rem;
-    min-height: 2.75rem;
-    padding: 0.3rem 0.2rem;
-    text-align: center;
-  }
-
-  .section-tabs button.active {
-    box-shadow: 0 0.1875rem 0 var(--accent) inset;
-  }
-
-  .section-tabs button span {
-    max-width: 100%;
-    overflow: hidden;
-    font-size: .75rem;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .sidebar-status {
-    margin-block-start: 0;
-  }
+  .app-shell { grid-template-columns: minmax(0, 1fr); }
 }
 
 @media (max-width: 58rem) {

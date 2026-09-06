@@ -3,7 +3,7 @@
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { onMount, tick } from "svelte";
 
-  import AppNavIcon from "./lib/AppNavIcon.svelte";
+  import AppSidebar, { type AppScreen } from "./lib/AppSidebar.svelte";
   import AppUpdatePanel from "./lib/AppUpdatePanel.svelte";
   import BountyHunterScreen from "./lib/BountyHunterScreen.svelte";
   import WorldActivityScreen from "./lib/WorldActivityScreen.svelte";
@@ -123,6 +123,8 @@
   } as const;
 
   $: shell = shellCopy[$locale];
+  $: navigationLabels = { world_activity: shell.worldActivity, market: shell.market, inventory: shell.inventory,
+    equipped_mods: shell.equippedMods, insights: shell.insights, bounty_hunter: shell.bountyHunter, settings: shell.settings };
 
   let status: FoundationStatus | null = null;
   let refreshOutcome: MarketRefreshOutcome | null = null;
@@ -134,16 +136,9 @@
   let historyView: MarketHistoryView | null = null;
   let historyIdentity = "";
   let historyRange: 7 | 30 | 90 = 7;
-  type AppScreen =
-    | "world_activity"
-    | "market"
-    | "inventory"
-    | "equipped_mods"
-    | "insights"
-    | "bounty_hunter"
-    | "settings";
   type MarketWorkspace = "sales" | "browse";
 
+  let sidebarCompact = false;
   let activeScreen: AppScreen = $worldPreferences.startHere ? "world_activity" : "inventory";
   let bountyRegion = "all";
   let marketWorkspace: MarketWorkspace = "sales";
@@ -515,64 +510,14 @@
 
 <a class="skip-link" href="#app-content">{shell.skip}</a>
 
-<div class="app-shell">
-  <aside class="app-sidebar">
-    <div class="app-brand">
-      <svg class="app-brand__mark" viewBox="0 0 32 32" aria-hidden="true">
-        <path d="M16 2 28 9v14l-12 7L4 23V9z" />
-        <path d="m10 21 6-14 6 14-6-4z" />
-      </svg>
-      <span class="app-brand__copy"><strong>PlatScope</strong><small>Warframe Market</small></span>
-    </div>
-
-    <nav class="section-tabs" aria-label={shell.navLabel}>
-        <button type="button" class:active={activeScreen === "world_activity"}
-          aria-current={activeScreen === "world_activity" ? "page" : undefined}
-          onclick={() => navigateTo("world_activity")}
-        ><AppNavIcon screen="world_activity" /><span>{shell.worldActivity}</span></button>
-        <button
-          type="button"
-          class:active={activeScreen === "market"}
-          aria-current={activeScreen === "market" ? "page" : undefined}
-          onclick={() => navigateTo("market")}
-        ><AppNavIcon screen="market" /><span>{shell.market}</span></button>
-        <button
-          type="button"
-          class:active={activeScreen === "inventory"}
-          aria-current={activeScreen === "inventory" ? "page" : undefined}
-          onclick={() => { inventoryInitialQuery = ""; navigateTo("inventory"); }}
-        ><AppNavIcon screen="inventory" /><span>{shell.inventory}</span></button>
-        <button
-          type="button"
-          class:active={activeScreen === "equipped_mods"}
-          aria-current={activeScreen === "equipped_mods" ? "page" : undefined}
-          onclick={() => navigateTo("equipped_mods")}
-        ><AppNavIcon screen="equipped_mods" /><span>{shell.equippedMods}</span></button>
-        <button
-          type="button"
-          class:active={activeScreen === "insights"}
-          aria-current={activeScreen === "insights" ? "page" : undefined}
-          onclick={() => navigateTo("insights")}
-        ><AppNavIcon screen="insights" /><span>{shell.insights}</span></button>
-        <button
-          type="button"
-          class:active={activeScreen === "bounty_hunter"}
-          aria-current={activeScreen === "bounty_hunter" ? "page" : undefined}
-          onclick={() => { bountyRegion = "all"; navigateTo("bounty_hunter"); }}
-        ><AppNavIcon screen="bounty_hunter" /><span>{shell.bountyHunter}</span></button>
-        <button
-          type="button"
-          class:active={activeScreen === "settings"}
-          aria-current={activeScreen === "settings" ? "page" : undefined}
-          onclick={() => navigateTo("settings")}
-        ><AppNavIcon screen="settings" /><span>{shell.settings}</span></button>
-    </nav>
-
-    <div class="sidebar-status">
-      <span class:ready={Boolean(status?.marketSnapshot)} aria-hidden="true"></span>
-      <div><strong>{shell.marketData}</strong><small>{status?.marketSnapshot ? `${shell.dataReady} · ${status.marketSnapshot.sourceDate}` : shell.dataMissing}</small></div>
-    </div>
-  </aside>
+<div class="app-shell" class:sidebar-compact={sidebarCompact}>
+  <AppSidebar {activeScreen} labels={navigationLabels} locale={$locale} snapshot={status?.marketSnapshot ?? null}
+    pending={loading} unavailable={!status && !loading} bind:compact={sidebarCompact}
+    onNavigate={screen => {
+      if (screen === "inventory") inventoryInitialQuery = "";
+      if (screen === "bounty_hunter") bountyRegion = "all";
+      navigateTo(screen);
+    }} />
 
   <main id="app-content" class="app-main">
   <header class="app-header">

@@ -710,7 +710,7 @@ internal static partial class Program
         var allowedDistance = Math.Max(3, (int)Math.Ceiling(normalized.Length * 0.45));
         if (bestDistance > allowedDistance || confidence < 0.55 || ambiguous
             || normalized.Length < 4 && bestDistance != 0
-            || HasConflictingPrimeNamePrefix(normalized, best.NormalizedName))
+            || HasUnreliablePrimeName(normalized, best.NormalizedName))
         {
             return new RewardMatch(slot, rawText, null, null, null, confidence);
         }
@@ -718,17 +718,37 @@ internal static partial class Program
         return new RewardMatch(slot, rawText, best.Source.ItemId, best.Source.Slug, best.Source.Name, confidence);
     }
 
-    private static bool HasConflictingPrimeNamePrefix(string recognized, string candidate)
+    private static bool HasUnreliablePrimeName(string recognized, string candidate)
     {
-        var recognizedPrime = recognized.IndexOf("ПРАЙМ", StringComparison.Ordinal);
-        var candidatePrime = candidate.IndexOf("ПРАЙМ", StringComparison.Ordinal);
-        if (recognizedPrime < 3 || candidatePrime < 3) return false;
+        var recognizedPrime = PrimeMarkerIndex(recognized);
+        var candidatePrime = PrimeMarkerIndex(candidate);
+        if (recognizedPrime < 0 || candidatePrime < 0) return false;
         var recognizedName = recognized[..recognizedPrime];
         var candidateName = candidate[..candidatePrime];
+        if (recognizedName == candidateName && recognizedName.Length > 0) return false;
+        // Общие слова «Прайм: Каркас» не подтверждают имя варфрейма.
+        // Без первой строки ближайшим кандидатом раньше становился короткий «Эш».
+        if (recognizedName.Length < 2 || candidateName.Length < 2) return true;
         // «Ак» — часть названия другого оружия, а не шум. Даже при неполном
         // каталоге нельзя превращать Акбронко в Бронко (и наоборот).
-        return recognizedName == "АК" + candidateName
-            || candidateName == "АК" + recognizedName;
+        if (recognizedName == "АК" + candidateName || candidateName == "АК" + recognizedName) return true;
+        var nameLength = Math.Max(recognizedName.Length, candidateName.Length);
+        var nameDistance = Levenshtein(recognizedName, candidateName);
+        return nameDistance > Math.Max(1, (int)Math.Floor(nameLength * 0.30))
+            || nameDistance / (double)nameLength > 0.35;
+    }
+
+    private static int PrimeMarkerIndex(string value)
+    {
+        var index = value.IndexOf("ПРАЙМ", StringComparison.Ordinal);
+        if (index >= 0) return index;
+        // OCR также читает «Праим», «Прайн» и «Прайк». Ошибка одной буквы
+        // в общей части не должна обходить проверку имени перед ней.
+        for (var start = 0; start <= value.Length - 5; start++)
+        {
+            if (Levenshtein(value.Substring(start, 5), "ПРАЙМ") <= 1) return start;
+        }
+        return -1;
     }
 
     private static string CleanOcrText(string value) => string.Join(

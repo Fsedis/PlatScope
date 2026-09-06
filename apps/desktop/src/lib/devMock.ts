@@ -398,13 +398,15 @@ export async function installMarketBrowserMock(): Promise<void> {
       return null;
     }
     if (command === "foundation_status") {
-      return {
+      const sidebarScenario = mockOptions.get("mockSidebar");
+      if (sidebarScenario === "error") throw new Error("test foundation unavailable");
+      const result = {
         appName: "PlatScope",
         appVersion: "0.1.0",
         databasePath: "C:\\Users\\Demo\\AppData\\Local\\PlatScope\\platscope.db",
         schemaVersion: 10,
         offlineReady: true,
-        marketSnapshot: snapshot,
+        marketSnapshot: sidebarScenario === "missing" ? null : snapshot,
         catalogItemCount: 3840,
         historyCoverage: {
           oldestDate: "2026-08-20",
@@ -413,6 +415,7 @@ export async function installMarketBrowserMock(): Promise<void> {
         },
         inventoryItemCount: inventory.metadata.itemCount,
       } satisfies FoundationStatus;
+      return sidebarScenario === "loading" ? new Promise(resolve => setTimeout(() => resolve(result), 3_000)) : result;
     }
     if (command === "diagnostics_status") {
       return {

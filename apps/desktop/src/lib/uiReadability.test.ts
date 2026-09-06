@@ -34,7 +34,7 @@ describe("читаемость рабочего интерфейса", () => {
   });
 
   it("не уменьшает подписи рабочих экранов ниже 12 px при базовых 16 px", () => {
-    for (const filename of ["MarketItemDetail.svelte", "MarketTradingShift.svelte", "BountyHunterScreen.svelte", "BountyJobDetail.svelte", "WorldActivityScreen.svelte", "PrimeResurgence.svelte", "OpportunityPlanner.svelte", "PlanSetDetail.svelte"]) {
+    for (const filename of ["AppSidebar.svelte", "MarketItemDetail.svelte", "MarketTradingShift.svelte", "BountyHunterScreen.svelte", "BountyJobDetail.svelte", "WorldActivityScreen.svelte", "PrimeResurgence.svelte", "OpportunityPlanner.svelte", "PlanSetDetail.svelte"]) {
       const source = readFileSync(new URL(filename, import.meta.url), "utf8");
       for (const match of source.matchAll(/font-size:\s*([\d.]+)rem/g)) {
         expect(Number(match[1]), `${filename}: ${match[0]}`).toBeGreaterThanOrEqual(.75);
