@@ -1,4 +1,12 @@
 import type { ActivityOffer } from "./worldActivity";
+import type { InventoryView } from "./inventory";
+
+/** Все уровни улучшения объединяются по точному идентификатору реликвии. */
+export function rotationRelicOwned(relic: ActivityOffer, inventory: InventoryView | null): number | null {
+  if (!inventory || !relic.relicSlug) return null;
+  return inventory.items.filter(item => item.key?.slug === relic.relicSlug)
+    .reduce((total, item) => total + item.ownedQuantity, 0);
+}
 
 export function rotationEquipment(offers: ActivityOffer[]): ActivityOffer[] {
   return offers.filter((offer, index) => offer.kind === "equipment"

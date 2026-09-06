@@ -1008,6 +1008,24 @@ export async function installMarketBrowserMock(): Promise<void> {
     }
     if (command === "load_inventory") {
       if (mockOptions.get("mockMarketError") === "inventory") throw new Error("test inventory unavailable");
+      if (mockOptions.has("mockResurgenceInventory")) {
+        const scenario = mockOptions.get("mockResurgenceInventory");
+        if (scenario === "error") throw new Error("test resurgence inventory unavailable");
+        if (scenario === "missing") return null;
+        const relics = makeWorldActivityMock(mockOptions.get("mockWorld")).resurgenceOffers.filter(offer => offer.kind === "relic");
+        const items: InventoryViewItem[] = scenario === "empty" ? [] : relics.flatMap((relic, index) =>
+          (index === 1 ? [] : ["intact", "radiant"]).map((subtype, level) => ({
+            ...inventory.items[0], canonicalGameId: `${relic.gameRef}/${subtype}`, displayName: relic.displayName,
+            imageUrl: null, tags: ["relic"], itemId: null,
+            key: { ...inventory.items[0].key!, slug: relic.relicSlug!, rank: null, subtype },
+            rank: null, subtype, ownedQuantity: index + (level ? 2 : 5), sellableQuantity: 0,
+            tradeableQuantity: index + (level ? 2 : 5), untradeableQuantity: 0, unknownQuantity: 0,
+            leveledQuantity: 0, equippedQuantity: 0, equippedPlacements: [],
+          })));
+        const view = { ...inventory, items, metadata: { ...inventory.metadata, itemCount: items.length },
+          summary: { ...inventory.summary, ownedQuantity: items.reduce((sum, item) => sum + item.ownedQuantity, 0), sellableQuantity: 0, resolvedRows: items.length, attentionRows: 0 } } satisfies InventoryView;
+        return scenario === "loading" ? new Promise(resolve => setTimeout(() => resolve(view), 3_000)) : view;
+      }
       return localizeInventoryView(inventory);
     }
     if (command === "set_inventory_keep_copies") {

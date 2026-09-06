@@ -18,7 +18,8 @@ export function makeWorldActivityMock(scenario: string | null, now = Date.now())
     gear("Юфона Прайм", "Euphona Prime", "/Lotus/Demo/World/Euphona", 2),
     ...["Лит K5", "Лит M7", "Мезо E5", "Нео B6", "Акси H5", "Акси A12"].map((name, index): ActivityOffer => ({
       gameRef: `/Lotus/Demo/Relic/${index}`, displayName: `Реликвия ${name}`, displayNameEn: `Relic ${index}`,
-      kind: "relic", ducats: null, credits: 1, masteryRef: null, setSlug: null, relicSlug: null,
+      kind: "relic", ducats: null, credits: 1, masteryRef: null, setSlug: null,
+      relicSlug: ["lith_k5_relic", "lith_m7_relic", "meso_e5_relic", "neo_b6_relic", "axi_h5_relic", "axi_a12_relic"][index],
       equipmentCategory: null, imageUrl: null,
       rewards: [
         { gameRef: `/Lotus/Demo/Reward/${index}/frame`, displayName: `${index % 2 ? "Мираж" : "Банши"} Прайм: ${["Каркас", "Нейрооптика", "Система"][index % 3]}`,

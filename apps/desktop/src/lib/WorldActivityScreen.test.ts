@@ -61,6 +61,10 @@ describe("экран «Сейчас в игре»", () => {
     expect(body).toContain("Лит K5");
     expect(body).toContain("Банши Прайм: Каркас");
     expect(body).toContain("Все награды и шансы");
+    const firstRelic = body.slice(body.indexOf("Лит K5"), body.indexOf("Все награды и шансы"));
+    expect(firstRelic).toContain("В наличии:");
+    expect(firstRelic).toContain("Шанс выпадения без улучшения: 11%");
+    expect(body).toContain("В наличии — все уровни улучшения");
     expect(body).not.toContain("Реликвии и товары Варзии");
     expect(body.indexOf("Лит K5")).toBeLessThan(body.indexOf("Готовые предметы, наборы и украшения"));
   });
