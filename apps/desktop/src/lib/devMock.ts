@@ -1,6 +1,7 @@
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { makeMasteryMock } from "./masteryMock";
 import { makeWorldActivityMock } from "./worldActivityMock";
+import { makeOpportunityPlanMock } from "./opportunityPlanMock";
 
 import type {
   AccountOrder,
@@ -669,6 +670,15 @@ export async function installMarketBrowserMock(): Promise<void> {
     if (command === "live_price_current_variant") {
       if (mockOptions.get("mockLiveFailure") === "all") throw new Error("test network unavailable");
       const key = (args as { key?: MarketSearchRow["recommendation"]["key"] })?.key;
+      if (mockOptions.has("mockPlan")) {
+        const set = makeOpportunityPlanMock(makeInsightsView(),"full").sets.find(row => row.definition.setSlug === key?.slug);
+        if (!set?.setRecommendation) return null;
+        const value = mockOptions.get("mockLiveFailure") === "unprofitable" ? 1 : set.setRecommendation.fairPrice! + 2;
+        return {recommendation:{...set.setRecommendation,listPrice:value},fetchedAt:new Date().toISOString(),quoteState:"network",sellOrderCount:1,buyOrderCount:1,orders:[
+          {side:"sell",platinum:value,quantity:3,perTrade:1,userStatus:"in_game"},
+          {side:"buy",platinum:Math.max(1,value-5),quantity:1,perTrade:1,userStatus:"in_game"},
+        ],warning:null} satisfies LivePricingResult;
+      }
       const row = rows.find((candidate) => candidate.recommendation.key.slug === key?.slug);
       if (!row) return null;
       const scoped = marketRowForPlatform(row, key?.platform as AppSettings["platform"] ?? appSettings.platform);
@@ -797,6 +807,9 @@ export async function installMarketBrowserMock(): Promise<void> {
     }
     if (command === "insights") {
       const view = makeInsightsView();
+      if (mockOptions.get("mockPlan") === "error") throw new Error("test insights unavailable");
+      if (mockOptions.get("mockPlan") === "loading") return new Promise(() => undefined);
+      if (mockOptions.has("mockPlan")) return makeOpportunityPlanMock(view,mockOptions.get("mockPlan")!);
       if (mockOptions.get("mockInsights") === "1") {
         const extra = structuredClone(view.sets[0]);
         extra.definition.setSlug = "preview_prime_set";

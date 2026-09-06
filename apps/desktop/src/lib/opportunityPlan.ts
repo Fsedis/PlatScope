@@ -19,7 +19,7 @@ export function saleEstimate(row: SetInsightRow, goal: OpportunityGoal, quote?: 
   };
 }
 
-export interface BudgetChoice { row: SetInsightRow; revenue: number; ownedValue: number; profit: number; cost: number; buyer: boolean; volume: number | null }
+export interface BudgetChoice { row: SetInsightRow; revenue: number; ownedValue: number; profit: number; cost: number; buyer: boolean; volume: number | null; purchases: ShoppingPart[] }
 export interface ShoppingPart { slug: string; name: string; quantity: number; cost: number }
 export interface BudgetPlan { choices: BudgetChoice[]; shopping: ShoppingPart[]; cost: number; revenue: number; ownedValue: number; profit: number; limited: boolean }
 interface State { choices: BudgetChoice[]; used: Map<string, number>; purchases: Map<string, number>; cost: number; revenue: number; ownedValue: number; score: number }
@@ -49,7 +49,8 @@ export function planCompletionBudget(rows: SetInsightRow[], budget: number, goal
         pricing.set(slug, entry);
       }
     }
-    const choice: BudgetChoice = { row, revenue: sale.price, ownedValue: opportunity.ownedPartsOpportunityValue, cost: opportunity.completionCost, profit, buyer: sale.buyer, volume: sale.volume };
+    const choice: BudgetChoice = { row, revenue: sale.price, ownedValue: opportunity.ownedPartsOpportunityValue, cost: opportunity.completionCost, profit, buyer: sale.buyer, volume: sale.volume,
+      purchases: opportunity.missingParts.map(part => ({slug:part.slug,name:part.displayName,quantity:part.quantity,cost:part.estimatedCost!})) };
     return [{ choice, used, missing: opportunity.missingParts }];
   });
   const weight = (choice: BudgetChoice) => goal === "profit" ? 1 : choice.buyer ? 1 : (choice.volume ?? 0) / ((choice.volume ?? 0) + 10);
@@ -58,6 +59,27 @@ export function planCompletionBudget(rows: SetInsightRow[], budget: number, goal
     const estimates = pricing.get(slug)?.recommendations.map((rec) => estimatedBuyPrice(rec, quantity)?.unitPrice ?? null) ?? [];
     if (!estimates.length || estimates.some((price) => !positive(price))) return null;
     return Math.ceil(Math.max(...estimates as number[]) * quantity * 100);
+  };
+  // Цена общей покупки относится ко всем её копиям, включая ранее выбранные комплекты.
+  // Распределяем копейки без потерь: строки плана и общий итог должны совпадать.
+  const priceChoices = (choices: BudgetChoice[], purchases: Map<string, number>): BudgetChoice[] => {
+    const result = choices.map(choice => ({...choice, purchases:choice.purchases.map(part => ({...part, cost:0}))}));
+    for (const [slug, quantity] of purchases) {
+      let remainingCost = purchaseCost(slug, quantity)!;
+      let remainingQuantity = quantity;
+      for (const choice of result) {
+        const part = choice.purchases.find(part => part.slug === slug);
+        if (!part) continue;
+        const cost = Math.floor(remainingCost * part.quantity / remainingQuantity);
+        part.cost = cost / 100;
+        remainingCost -= cost;
+        remainingQuantity -= part.quantity;
+      }
+    }
+    return result.map(choice => {
+      const cost = Math.round(choice.purchases.reduce((sum, part) => sum + part.cost, 0) * 100) / 100;
+      return {...choice, cost, profit:choice.revenue - choice.ownedValue - cost};
+    });
   };
   let states: State[] = [{ choices: [], used: new Map(), purchases: new Map(), cost: 0, revenue: 0, ownedValue: 0, score: 0 }];
   let limited = false;
@@ -76,11 +98,11 @@ export function planCompletionBudget(rows: SetInsightRow[], budget: number, goal
       let cost = 0;
       for (const [slug, quantity] of purchases) { const price = purchaseCost(slug, quantity); if (price === null) { fits = false; break; } cost += price; }
       if (!fits || cost > limit) continue;
-      const marginalProfit = candidate.choice.revenue - candidate.choice.ownedValue - (cost - state.cost) / 100;
-      if (marginalProfit <= 0) continue;
-      next.push({ choices: [...state.choices, candidate.choice], used, purchases, cost,
+      const choices = priceChoices([...state.choices, candidate.choice], purchases);
+      if (choices.some(choice => choice.profit <= 0)) continue;
+      next.push({ choices, used, purchases, cost,
         revenue: state.revenue + candidate.choice.revenue, ownedValue: state.ownedValue + candidate.choice.ownedValue,
-        score: state.score + marginalProfit * weight(candidate.choice) });
+        score: choices.reduce((total, choice) => total + choice.profit * weight(choice), 0) });
     }
     next.sort((a, b) => b.score - a.score || a.cost - b.cost);
     if (next.length > 256) limited = true;

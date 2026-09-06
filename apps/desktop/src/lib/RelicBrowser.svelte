@@ -11,6 +11,7 @@
   export let sets: SetInsightRow[];
   export let locale: UiLocale = "ru";
   export let onPlanSet: (slug: string) => void;
+  export let initialRelicSlug = "";
   let scenario: RelicOverviewScenario = "solo";
   let sort: RelicSort = "value";
   let query = "";
@@ -39,6 +40,10 @@
       if (typeof saved?.selectedSlug === "string") selectedSlug = saved.selectedSlug;
       if (typeof saved?.upgrades === "boolean") upgrades = saved.upgrades;
     } catch { /* Недоступное хранилище не мешает выбору реликвий. */ }
+    if (initialRelicSlug) {
+      selectedSlug = initialRelicSlug;
+      query = view.relics.find(row => row.definition.relicSlug === initialRelicSlug)?.displayName.replace(/^Реликвия\s+/i, "") ?? "";
+    }
   });
   onDestroy(() => {
     try { sessionStorage.setItem("platscope.relic-browser.v1",JSON.stringify({scenario,sort,query,selectedSlug:selected?.relicSlug ?? "",upgrades})); }

@@ -37,9 +37,10 @@ export function createWorldActivityStore(load: (force: boolean) => Promise<World
       try {
         const view = await load(refreshSource);
         publish({ view, error: view.refreshFailed, nextRefreshAt: nextWorldRefresh(view, now()),
-          manualRefreshAt: now() + (view.refreshFailed ? 45_000 : 15_000) });
+          manualRefreshAt: now() + 15_000 });
       } catch {
-        publish({ error: true, nextRefreshAt: now() + 45_000, manualRefreshAt: now() + 45_000 });
+        // После восстановления связи можно повторить вручную раньше фоновой попытки.
+        publish({ error: true, nextRefreshAt: now() + 45_000, manualRefreshAt: now() + 15_000 });
       } finally { publish({ loading: false, ...(invalidated ? { nextRefreshAt: 0 } : {}) }); }
     })().finally(() => { inFlight = null; });
     return inFlight;

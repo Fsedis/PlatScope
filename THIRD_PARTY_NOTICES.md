@@ -1,5 +1,20 @@
 # Уведомления о стороннем коде
 
+## Warframe: изображения вкладки «Сейчас в игре»
+
+`apps/desktop/src/lib/assets/world-activity/*.png` — оригинальные текстуры
+Warframe, © Digital Extremes: эмблемы локаций, портреты торговцев, изображения
+реликвий и игровые символы. Получены без перерисовки из
+[зеркала игровых ресурсов browse.wf](https://browse.wf/).
+Происхождение текстур описано в
+[Warframe Public Export Plus](https://github.com/calamity-inc/warframe-public-export-plus#images).
+Права на игровую графику принадлежат Digital Extremes, а не проекту PlatScope.
+
+Точные пути, адреса скачивания и SHA-256 сохранены в
+`apps/desktop/src/lib/assets/world-activity/sources.json`; назначение изображений —
+в соседнем `README.md`. Исходные файлы не изменены. Для белых эмблем цвет
+задаётся CSS-маской, портреты и реликвии отображаются в исходных цветах.
+
 ## Warframe: игровой значок освоения
 
 `apps/desktop/src/lib/assets/warframe-mastered.png` — оригинальная текстура

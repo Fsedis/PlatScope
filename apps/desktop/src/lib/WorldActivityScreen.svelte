@@ -3,6 +3,7 @@
   import MasteryBadge from "./MasteryBadge.svelte";
   import PrimeResurgence from "./PrimeResurgence.svelte";
   import WorldActivityIcon from "./WorldActivityIcon.svelte";
+  import WorldActivityArtwork from "./WorldActivityArtwork.svelte";
   import { ALERT_NAMES, CYCLES, alertStates, countdown, nextReset, nextState, offerCost, periodState,
     sectionStale, stateName, steelReward, traderLocation,
     type ActivityCycle, type AlertKey, type CycleKey, type WorldAlertRule } from "./worldActivity";
@@ -146,9 +147,11 @@
       {:else}<span>{$worldActivityStore.error ? "Нет соединения с источником" : "Получаем данные игры"}</span>{/if}
     </div>
     <div class="toolbar-actions">
+      {#if sourceDelayed || $worldActivityStore.error}
       <button type="button" class="secondary refresh-button" disabled={$worldActivityStore.loading || refreshWait > 0}
         title={!$worldActivityStore.loading && refreshWait > 0 ? `Повторная проверка доступна через ${refreshWait} с` : "Проверить события игры"}
-        onclick={() => worldActivityStore.refresh(true)}><span class="small-icon" class:spinning={$worldActivityStore.loading}><WorldActivityIcon kind="refresh" /></span>{$worldActivityStore.loading ? "Обновляем…" : "Обновить"}</button>
+        onclick={() => worldActivityStore.refresh(true)}><span class="small-icon" class:spinning={$worldActivityStore.loading}><WorldActivityIcon kind="refresh" /></span>{$worldActivityStore.loading ? "Проверяем…" : "Повторить попытку"}</button>
+      {/if}
       <button type="button" class="secondary reminders-button" aria-expanded={showNotifications} aria-controls="world-notifications"
         onclick={event => showNotifications ? closeNotifications() : configure(undefined, event.currentTarget)}>
         <span class="small-icon"><WorldActivityIcon kind="bell" /></span>Напоминания{#if activeRules.length}<span class="count-badge">{activeRules.length}</span>{/if}
@@ -206,7 +209,7 @@
         {@const active = periodState(cycle, now) === "active"}
         {@const next = cycle ? nextState(cycle) : null}
         <article class="cycle-card" data-tone={cycleTone(cycle, active)} aria-label={CYCLES[key].name}>
-          <header class="cycle-heading"><span class="cycle-icon"><WorldActivityIcon kind={key === "cetus" && cycle?.state === "night" ? "night" : key} /></span>
+          <header class="cycle-heading"><span class="cycle-icon"><WorldActivityArtwork kind={key} /></span>
             <h3>{CYCLES[key].name}</h3>
             <button type="button" class="bell" class:enabled={activeRules.some(rule => rule.key === key)} aria-label={`Напомнить: ${CYCLES[key].name}`} title="Настроить напоминание" onclick={event => configure(key, event.currentTarget)}><WorldActivityIcon kind="bell" /></button>
           </header>
@@ -225,7 +228,7 @@
 
     <div class="world-columns">
       <article class="world-panel resurgence-panel">
-        <header class="resurgence-title"><div class="title-with-icon"><span class="vendor-icon"><WorldActivityIcon kind="resurgence" /></span>
+        <header class="resurgence-title"><div class="title-with-icon"><span class="vendor-icon"><WorldActivityArtwork kind="resurgence" /></span>
           <div><h2>Возрождение Прайм</h2><p>Варзия · Базар Мэру</p></div></div>
           <button type="button" class="bell" class:enabled={activeRules.some(rule => rule.key === "resurgence")} aria-label="Напомнить о смене Возрождения Прайм" title="Напомнить о смене ротации" onclick={event => configure("resurgence", event.currentTarget)}><WorldActivityIcon kind="bell" /></button></header>
         {#if view.resurgence && resurgenceState === "active"}
@@ -241,7 +244,7 @@
 
       <aside class="world-schedule" aria-label="Торговцы и расписание">
         <article class="world-panel baro-panel">
-          <header class="panel-title"><div class="title-with-icon"><span class="vendor-icon"><WorldActivityIcon kind="baro" /></span>
+          <header class="panel-title"><div class="title-with-icon"><span class="vendor-icon"><WorldActivityArtwork kind="baro" /></span>
             <div><h2>Баро Ки’Тиир</h2><p>{baroState === "active" ? "Торговец Бездны" : baroState === "upcoming" ? "Следующий визит" : "Ждём расписание"}</p></div></div>
             <button type="button" class="bell" class:enabled={activeRules.some(rule => rule.key === "baro")} aria-label="Напомнить о Баро" title="Напомнить о Баро" onclick={event => configure("baro", event.currentTarget)}><WorldActivityIcon kind="bell" /></button>
           </header>
@@ -265,7 +268,7 @@
           {:else}<p class="empty-copy">{view.baro ? "Предыдущий визит закончился. Уточняем следующий." : "Источник пока не передал расписание Баро."}</p>{/if}
         </article>
 
-        <article class="world-panel teshin-panel"><header class="panel-title"><div class="title-with-icon"><span class="vendor-icon teshin-icon"><WorldActivityIcon kind="teshin" /></span><div><h2>Тешин</h2><p>Товар недели · Стальной Путь</p></div></div></header>
+        <article class="world-panel teshin-panel"><header class="panel-title"><div class="title-with-icon"><span class="vendor-icon"><WorldActivityArtwork kind="teshin" /></span><div><h2>Тешин</h2><p>Товар недели · Стальной Путь</p></div></div></header>
           {#if view.steelPath && periodState(view.steelPath, now) === "active"}
             <strong class="teshin-reward">{steelReward(view.steelPath.reward)}</strong><p class="teshin-cost">{view.steelPath.cost} стальной эссенции</p>
             <p class="schedule-change" title={dateLabel(view.steelPath.expiry)}>Смена через <b>{countdown(view.steelPath.expiry, now)}</b></p>
@@ -286,7 +289,7 @@
         </section>
 
         {#if liveEvents.length}
-          <section class="world-panel live-events" aria-labelledby="events-heading"><header class="panel-title"><div class="title-with-icon"><span class="small-icon"><WorldActivityIcon kind="events" /></span><h2 id="events-heading">События игры</h2></div><span class="count-badge">{liveEvents.length}</span></header>
+          <section class="world-panel live-events" aria-labelledby="events-heading"><header class="panel-title"><div class="title-with-icon"><span class="small-icon"><WorldActivityArtwork kind="events" /></span><h2 id="events-heading">События игры</h2></div><span class="count-badge">{liveEvents.length}</span></header>
             {#each liveEvents as event}<div class="event-row"><strong>{event.name}</strong><span title={dateLabel(event.expiry)}>До конца {countdown(event.expiry, now)}</span></div>{/each}
             {#if sectionStale(view, "events", now)}<p class="stale-note">Сохранённый список событий · не удалось обновить</p>{/if}
           </section>
@@ -296,7 +299,7 @@
   {/if}
 
   <footer class="world-footer"><label class="start-preference"><input type="checkbox" checked={$worldPreferences.startHere}
-    onchange={event => { if (!setStartHere(event.currentTarget.checked)) event.currentTarget.checked = $worldPreferences.startHere; }} />Открывать «Сейчас в игре» при запуске</label><span>Таймеры обновляются автоматически</span>
+    onchange={event => { if (!setStartHere(event.currentTarget.checked)) event.currentTarget.checked = $worldPreferences.startHere; }} />Открывать «Сейчас в игре» при запуске</label><span>Данные и таймеры обновляются автоматически</span>
     {#if preferenceMessage}<p class="preference-message" role="status">{preferenceMessage}</p>{/if}</footer>
 </section>
 
@@ -333,9 +336,9 @@
   .cycle-card[data-tone="ember"] { --cycle-color:oklch(.46 .1 40); --cycle-tint:oklch(.945 .029 48); }
   .cycle-card[data-tone="sage"] { --cycle-color:oklch(.42 .056 160); --cycle-tint:oklch(.941 .025 145); }
   .cycle-card[data-tone="violet"] { --cycle-color:oklch(.45 .067 310); --cycle-tint:oklch(.945 .021 306); }
-  .cycle-heading { display:grid; grid-template-columns:1.7rem minmax(0,1fr) auto; align-items:center; gap:.45rem; min-height:2.5rem; }
+  .cycle-heading { display:grid; grid-template-columns:2.25rem minmax(0,1fr) auto; align-items:center; gap:.55rem; min-height:2.5rem; }
   .cycle-heading h3 { font-size:.8125rem; line-height:1.35; text-wrap:balance; }
-  .cycle-icon { display:inline-flex; width:1.7rem; height:1.7rem; color:var(--cycle-color); }
+  .cycle-icon { display:inline-flex; width:2.25rem; height:2.25rem; color:var(--cycle-color); }
   .cycle-body { padding-top:.95rem; }
   .cycle-phase { display:block; color:var(--cycle-color); font-size:1.02rem; font-weight:650; }
   .cycle-phase.unknown { color:var(--text-muted); font-size:.875rem; }
@@ -361,8 +364,8 @@
   .title-with-icon { min-width:0; gap:.7rem; }
   .title-with-icon > div { min-width:0; }
   .title-with-icon p { margin-top:.2rem; }
-  .vendor-icon { display:inline-flex; flex:none; width:2.35rem; height:2.35rem; padding:.3rem; color:var(--accent-strong); background:var(--accent-soft); border-radius:.65rem; }
-  .resurgence-title .vendor-icon { width:2.75rem; height:2.75rem; background:var(--surface-2); color:var(--gold); }
+  .vendor-icon { display:inline-flex; flex:none; width:3rem; height:3rem; overflow:hidden; border-radius:.65rem; background:var(--surface-2); }
+  .resurgence-title .vendor-icon { width:3.25rem; height:3.25rem; }
   .rotation-period { display:flex; align-items:baseline; flex-wrap:wrap; justify-content:space-between; gap:.3rem .75rem; margin-top:1rem; padding-bottom:1rem; border-bottom:1px solid var(--border); color:var(--text-muted); font-size:.8125rem; }
   .rotation-period b { font-weight:600; color:var(--text); font-variant-numeric:tabular-nums; }
   .resurgence-actions { display:flex; flex-wrap:wrap; gap:.6rem; border-top:1px solid var(--border); padding-top:1rem; margin-top:1.25rem; }
@@ -396,7 +399,6 @@
   .offer-empty { justify-items:start; }
   .baro-action { margin-top:.9rem; }
   .baro-action button { width:100%; justify-content:space-between; }
-  .teshin-icon { background:var(--surface-3); color:var(--text-muted); }
   .teshin-reward { display:block; font-size:1rem; font-weight:650; line-height:1.4; }
   .teshin-cost { margin-top:.25rem; }
   .schedule-change { display:flex; flex-wrap:wrap; justify-content:space-between; gap:.35rem .6rem; margin-top:.85rem; padding-top:.75rem; border-top:1px solid var(--border); }
@@ -447,8 +449,8 @@
   @container (max-width:70rem) {
     .world-columns { grid-template-columns:minmax(0,1fr) minmax(18rem,.55fr); }
     .cycle-card { padding:.8rem; }
-    .cycle-heading { grid-template-columns:1.4rem minmax(0,1fr); gap:.4rem; position:relative; padding-right:1.55rem; align-items:start; }
-    .cycle-icon { width:1.4rem; height:1.4rem; }
+    .cycle-heading { grid-template-columns:1.9rem minmax(0,1fr); gap:.4rem; position:relative; padding-right:1.55rem; align-items:center; }
+    .cycle-icon { width:1.9rem; height:1.9rem; }
     .cycle-heading .bell { position:absolute; right:-.35rem; top:-.4rem; margin:0; }
     .cycle-heading h3 { font-size:.8125rem; }
     .resurgence-panel { padding:1.1rem; }
@@ -457,10 +459,12 @@
     .reset-time { flex-basis:100%; justify-content:space-between; }
     .schedule-heading { padding:1rem 1rem .8rem; }
   }
-  @container (max-width:54rem) {
+  @container (max-width:60rem) {
     .cycle-grid { grid-template-columns:repeat(6,minmax(0,1fr)); }
     .cycle-card { grid-column:span 2; }
     .cycle-card:nth-child(n+4) { grid-column:span 3; }
+  }
+  @container (max-width:54rem) {
     .cycle-heading { min-height:2.3rem; }
     .cycle-body { padding-top:.65rem; }
     .world-columns { grid-template-columns:minmax(0,1fr); }

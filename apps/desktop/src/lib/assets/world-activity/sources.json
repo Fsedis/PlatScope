@@ -1,0 +1,92 @@
+[
+  {
+    "file": "cetus.png",
+    "gamePath": "/Lotus/Interface/Icons/Syndicates/FactionSigilEidolonCetusElder.png",
+    "source": "https://browse.wf/Lotus/Interface/Icons/Syndicates/FactionSigilEidolonCetusElder.png",
+    "sha256": "a9165571c66b32dc614802c0ec2566b49bbbb7d97aa26e03c016c3044f84833d"
+  },
+  {
+    "file": "vallis.png",
+    "gamePath": "/Lotus/Interface/Icons/Syndicates/FactionSigilSolarisUnited.png",
+    "source": "https://browse.wf/Lotus/Interface/Icons/Syndicates/FactionSigilSolarisUnited.png",
+    "sha256": "d45c21ed75e5b386cd120589dfac38fb3a767395a60cc3d8e28f025a75e265d8"
+  },
+  {
+    "file": "cambion.png",
+    "gamePath": "/Lotus/Interface/Icons/Syndicates/FactionSigilEntrati.png",
+    "source": "https://browse.wf/Lotus/Interface/Icons/Syndicates/FactionSigilEntrati.png",
+    "sha256": "dedae187b01c622b9b153295ea1e469d1a3486a6d13367895b9285e759daadd2"
+  },
+  {
+    "file": "zariman.png",
+    "gamePath": "/Lotus/Interface/Icons/Syndicates/Zariman/FactionSigilZariman.png",
+    "source": "https://browse.wf/Lotus/Interface/Icons/Syndicates/Zariman/FactionSigilZariman.png",
+    "sha256": "af6ad091f2ea583bf66382c80716f7fb7c69ad370e5b87b83c6964c70ac0de77"
+  },
+  {
+    "file": "duviri.png",
+    "gamePath": "/Lotus/Interface/Graphics/StartingZoneChoice/DuviriStartingZoneIconParadox.png",
+    "source": "https://browse.wf/Lotus/Interface/Graphics/StartingZoneChoice/DuviriStartingZoneIconParadox.png",
+    "sha256": "59e2c80ef6046d3f32ad5a342cf726ba16ee367cbdd687b93a0196e28b7686d6"
+  },
+  {
+    "file": "baro.png",
+    "gamePath": "/Lotus/Interface/Icons/Npcs/BaroKiTeerPortrait.png",
+    "source": "https://browse.wf/Lotus/Interface/Icons/Npcs/BaroKiTeerPortrait.png",
+    "sha256": "6a60ee2851bde28d777cf5ca8549029303c5c1760fb1db571b021ca35fd28200"
+  },
+  {
+    "file": "teshin.png",
+    "gamePath": "/Lotus/Interface/Icons/Npcs/Teshin.png",
+    "source": "https://browse.wf/Lotus/Interface/Icons/Npcs/Teshin.png",
+    "sha256": "aa11ae6d54c23b2c0e4ae37216405bb9176c32f311767b77ddd0ec0842bb9977"
+  },
+  {
+    "file": "varzia.png",
+    "gamePath": "/Lotus/Interface/Icons/Npcs/Varzia.png",
+    "source": "https://browse.wf/Lotus/Interface/Icons/Npcs/Varzia.png",
+    "sha256": "7454ef09602be5093fcb746b95993ffb76077781c2ea14c999bbdc076c80026e"
+  },
+  {
+    "file": "events.png",
+    "gamePath": "/Lotus/Interface/Icons/Notifications/EventNotificationIcon.png",
+    "source": "https://browse.wf/Lotus/Interface/Icons/Notifications/EventNotificationIcon.png",
+    "sha256": "06a4d60820be2d5012145c2aa89feeeea1c7e296ce09e39887ab03a5d99ce6fb"
+  },
+  {
+    "file": "relic.png",
+    "gamePath": "/Lotus/Interface/Graphics/VoidRelics/VoidRelicsNoRelicIcon.png",
+    "source": "https://browse.wf/Lotus/Interface/Graphics/VoidRelics/VoidRelicsNoRelicIcon.png",
+    "sha256": "370fa4574fb149823727e795b60966e678ad7b1589a17eef085ba514c7e820ee"
+  },
+  {
+    "file": "relic-lith.png",
+    "gamePath": "/Lotus/Interface/Icons/Relics/RelicLithA.png",
+    "source": "https://browse.wf/Lotus/Interface/Icons/Relics/RelicLithA.png",
+    "sha256": "6c9eca507bb9eeea8a91e955ffd433f51cb9079ce706ce25c040c38441ae0b29"
+  },
+  {
+    "file": "relic-meso.png",
+    "gamePath": "/Lotus/Interface/Icons/Relics/RelicMesoA.png",
+    "source": "https://browse.wf/Lotus/Interface/Icons/Relics/RelicMesoA.png",
+    "sha256": "9161fc2dbc9054e89e4d4a358814784e170c849fae9c556165fbd3f487bb3110"
+  },
+  {
+    "file": "relic-neo.png",
+    "gamePath": "/Lotus/Interface/Icons/Relics/RelicNeoA.png",
+    "source": "https://browse.wf/Lotus/Interface/Icons/Relics/RelicNeoA.png",
+    "sha256": "2ab169a122848e52688f75177aa1bcb38eb7108a2ba16bb841c99a1ec68aec43"
+  },
+  {
+    "file": "relic-axi.png",
+    "gamePath": "/Lotus/Interface/Icons/Relics/RelicAxiA.png",
+    "source": "https://browse.wf/Lotus/Interface/Icons/Relics/RelicAxiA.png",
+    "sha256": "d48a13c51c45d261438d731458049913843f2e8fecd704ccc5e4432b7f111129"
+  },
+  {
+    "file": "warframe.png",
+    "gamePath": "/Lotus/Interface/Graphics/StartingZoneChoice/DuviriStartingZoneIconWarframe.png",
+    "source": "https://browse.wf/Lotus/Interface/Graphics/StartingZoneChoice/DuviriStartingZoneIconWarframe.png",
+    "sha256": "3edb7975ace5197fe3c013b8b0083a33a0ad62b4eec5df2075d081a783daca8e"
+  }
+]

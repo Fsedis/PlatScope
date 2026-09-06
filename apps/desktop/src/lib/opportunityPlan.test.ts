@@ -1,7 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { render } from "svelte/server";
+import { writable } from "svelte/store";
+import OpportunityPlanner from "./OpportunityPlanner.svelte";
+import PlanSetDetail from "./PlanSetDetail.svelte";
 import { planCompletionBudget, planSetAcquisition, saleEstimate } from "./opportunityPlan";
-import type { RelicInsightRow, SetInsightRow } from "./insights";
+import type { InsightsView, RelicInsightRow, SetInsightRow } from "./insights";
 import type { LivePricingResult, PriceRecommendation } from "./market";
+
+vi.mock("./i18n", async importOriginal => ({ ...await importOriginal<typeof import("./i18n")>(), useLocale: () => writable("ru") }));
 
 function price(slug: string, value: number): PriceRecommendation {
   return { key: { slug, platform: "pc", rank: null, charges: null, subtype: null, amberStars: null, cyanStars: null },
@@ -45,6 +51,30 @@ describe("план возможностей", () => {
     expect(result.shopping).toHaveLength(1);
     expect(result.shopping[0]).toMatchObject({quantity:2,cost:40});
     expect(result.profit).toBe(40);
+    expect(result.choices.map(choice => choice.cost)).toEqual([20,20]);
+    expect(result.choices.map(choice => choice.profit)).toEqual([20,20]);
+    expect(result.choices.flatMap(choice => choice.purchases).reduce((sum,part) => sum + part.cost,0)).toBe(result.cost);
+  });
+  it("не скрывает убыточный комплект внутри выгодной общей покупки", () => {
+    const a=set("a",10,100), b=set("b",10,5);
+    b.components[1].definition.slug=a.components[1].definition.slug;
+    for (const row of [a,b]) row.components[1].recommendation!.depthThree=20;
+    const result=planCompletionBudget([a,b],100,"profit");
+    expect(result.choices.map(choice => choice.row.displayName)).toEqual(["a"]);
+    expect(result.profit).toBe(100);
+  });
+  it("сводит дробную стоимость общих деталей и выгоду строк с итогом", () => {
+    const a=set("a",1,10), b=set("b",1,10), c=set("c",1,10);
+    for (const row of [a,b,c]) {
+      row.components[1].definition.slug="shared";
+      row.components[1].recommendation!.depthThree=1.335;
+    }
+    const result=planCompletionBudget([a,b,c],10,"profit");
+    expect(result.choices).toHaveLength(3);
+    expect(result.cost).toBe(4.01);
+    expect(result.choices.reduce((sum,choice) => sum + choice.cost,0)).toBeCloseTo(result.cost,10);
+    expect(result.choices.reduce((sum,choice) => sum + choice.profit,0)).toBeCloseTo(result.profit,10);
+    expect(result.choices.every(choice => choice.purchases[0].cost === choice.cost)).toBe(true);
   });
   it("отказывается от некорректного бюджета и устаревшей цены", () => {
     const row=set("a",10,20);
@@ -94,5 +124,45 @@ describe("план возможностей", () => {
     const result=planSetAcquisition(row,[source],0,10);
     expect(result).toMatchObject({openings:1,traces:0,buyCost:10,chance:2});
     expect(result.buy.map(part=>part.slug)).toEqual(["other"]);
+  });
+});
+
+describe("действия в моём плане", () => {
+  function detail(row: SetInsightRow, mode: "complete" | "ready") {
+    return render(PlanSetDetail, {props:{row,mode,goal:"profit",quote:undefined,choice:undefined,
+      view:{sets:[row],relics:[],voidTraces:0} as unknown as InsightsView,
+      onCheck:vi.fn(),onOpenSet:vi.fn(),onOpenParts:vi.fn(),onOpenRelic:vi.fn(),onExclude:vi.fn(),onRestore:vi.fn()}}).body;
+  }
+  it("для готового комплекта открывает продажу и не предлагает собрать следующий", () => {
+    const row=set("ready",10,20);
+    row.components.forEach(part => {part.ownedQuantity=1;part.tradeableQuantity=1;part.sellableQuantity=1;});
+    const body=detail(row,"ready");
+    expect(body).toContain("Перейти к продаже комплекта");
+    expect(body).toContain("Ничего докупать не нужно");
+    expect(body).not.toContain("Купите недостающие детали");
+    expect(body).not.toContain("Можно ли обойтись своими реликвиями");
+  });
+  it("не подменяет отсутствующие цены обещанной выгодой", () => {
+    const row=set("unknown",10,20);
+    row.setRecommendation=null;
+    row.components[1].recommendation=null;
+    const body=detail(row,"complete");
+    expect(body).toContain("Для оценки выгоды не хватает надёжных цен");
+    expect(body).not.toContain("+ 0p");
+    expect(body).toContain("Найти продавцов деталей");
+  });
+  it("после падения цены объясняет, почему докупка невыгодна", () => {
+    const row=set("loss",10,20);
+    row.setRecommendation=price("loss",5);
+    expect(detail(row,"complete")).toContain("При этой цене докупка не выгоднее продажи своих деталей");
+  });
+  it("без инвентаря не строит план и предлагает загрузить данные", () => {
+    const row=set("inventory_missing",10,20);
+    const body=render(OpportunityPlanner,{props:{view:{inventoryAvailable:false,sets:[row],relics:[]} as unknown as InsightsView,
+      sets:[row],quotes:new Map(),errors:new Map(),onCheck:vi.fn(),onOpenSet:vi.fn(),onOpenParts:vi.fn(),onOpenRelic:vi.fn(),onOpenSettings:vi.fn()}}).body;
+    expect(body).toContain("Сначала загрузите инвентарь");
+    expect(body).toContain("Открыть настройки данных");
+    expect(body).not.toContain("Итог подобранного плана");
+    expect(body).not.toContain("inventory_missing");
   });
 });

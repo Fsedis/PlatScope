@@ -1,7 +1,8 @@
 <script lang="ts">
   import { tick } from "svelte";
   import MasteryBadge from "./MasteryBadge.svelte";
-  import WorldActivityIcon from "./WorldActivityIcon.svelte";
+  import WorldActivityArtwork from "./WorldActivityArtwork.svelte";
+  import { relicArtwork } from "./worldActivityArtwork";
   import { offerCost, type ActivityOffer } from "./worldActivity";
   import { rotationEquipment, rotationRelics, rotationRewards } from "./primeResurgence";
 
@@ -43,7 +44,7 @@
             <button type="button" class="warframe-select" aria-pressed={selected?.gameRef === offer.gameRef} aria-controls="rotation-relics"
               aria-label={`Показать реликвии: ${offer.displayName}`} onclick={() => select(offer)}>
               <span class="portrait" aria-hidden="true">{#if offer.imageUrl && !failedImages.has(offer.gameRef)}<img src={offer.imageUrl} alt="" loading="lazy" onerror={() => failedImages = new Set(failedImages).add(offer.gameRef)} />
-                {:else}<span class="portrait-fallback"><WorldActivityIcon kind="resurgence" /></span>{/if}</span>
+                {:else}<span class="portrait-fallback"><WorldActivityArtwork kind="warframe" /></span>{/if}</span>
               <span class="warframe-copy"><strong>{offer.displayName}</strong><span class="relic-link">{selected?.gameRef === offer.gameRef ? "Реликвии выбраны" : `Реликвии: ${rotationRelics(offers, offer.gameRef).length}`} <span aria-hidden="true">{selected?.gameRef === offer.gameRef ? "✓" : "↓"}</span></span></span>
             </button>
             {#if offer.masteryRef}<div class="mastery"><MasteryBadge gameRef={offer.masteryRef} /></div>{/if}
@@ -77,7 +78,7 @@
       {#each relics as relic (relic.gameRef)}
         {@const rewards = rotationRewards(relic, warframes.length ? warframes : equipment, selected?.gameRef)}
         <article class="relic-card">
-          <header><div class="relic-name"><span class="relic-icon"><WorldActivityIcon kind="relic" /></span><h4>{shortRelicName(relic.displayName)}</h4></div><span class="cost">{offerCost(relic, true)}</span></header>
+          <header><div class="relic-name"><span class="relic-icon"><WorldActivityArtwork kind={relicArtwork(relic.relicSlug, relic.displayNameEn)} /></span><h4>{shortRelicName(relic.displayName)}</h4></div><span class="cost">{offerCost(relic, true)}</span></header>
           {#if rewards.length}<ul class="featured-rewards">{#each rewards as reward}<li>{reward.displayName}</li>{/each}</ul>
           {:else if catalogAvailable}<p class="relic-hint">{relic.rewards.length ? "Другие награды — в составе реликвии." : "Состав реликвии ещё не загружен."}</p>{/if}
           {#if relic.rewards.length}<details class="reward-details" name="rotation-rewards"><summary>Все награды и шансы</summary>
@@ -135,7 +136,7 @@
   .relic-card:has(.reward-details[open]) { grid-column:1 / -1; border-color:var(--border-strong); background:var(--surface-2); }
   .relic-card header { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:.5rem; }
   .relic-name { display:flex; align-items:center; gap:.4rem; min-width:0; }
-  .relic-icon { display:inline-flex; flex:none; width:1.4rem; height:1.4rem; color:var(--gold); }
+  .relic-icon { display:inline-flex; flex:none; width:2.2rem; height:2.2rem; color:var(--gold); }
   .cost { flex-shrink:0; font-size:.75rem; color:var(--text-muted); padding:.2rem .4rem; border-radius:.3rem; background:var(--surface-2); }
   .featured-rewards { padding:0; margin:.75rem 0 0; list-style:none; font-size:.8125rem; line-height:1.5; }
   .featured-rewards li { overflow-wrap:anywhere; }

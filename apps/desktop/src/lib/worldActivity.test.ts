@@ -155,6 +155,8 @@ describe("общий запрос экрана и уведомлений", () =>
     await store.refresh(); time += 60_000; await store.refresh(true);
     expect(get(store).view).not.toBeNull(); expect(get(store).error).toBe(true); expect(get(store).loading).toBe(false);
     await store.refresh(true); expect(load).toHaveBeenCalledTimes(2);
-    time += 46_000; await store.refresh(true); expect(get(store).error).toBe(false);
+    time += 16_000;
+    expect(get(store).nextRefreshAt).toBeGreaterThan(time);
+    await store.refresh(true); expect(get(store).error).toBe(false);
   });
 });

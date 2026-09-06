@@ -413,6 +413,7 @@
   let errorMessage = "";
   let activeMode: InsightsViewMode = loadInsightsViewPreferences().mode;
   let plannerSetSlug = "";
+  let plannerRelicSlug = "";
   let setQuery = "";
   let showAllSetRows = false;
   let showAllDucats = false;
@@ -469,6 +470,7 @@
     saveInsightsViewPreferences({ mode });
     setQuery = "";
     plannerSetSlug = "";
+    plannerRelicSlug = "";
     expandedLiveSetSlug = "";
     listingSlug = "";
     listingError = "";
@@ -725,14 +727,19 @@
       </div>
     {/if}
 
-    {#if !loading && !view && !errorMessage}
+    {#if loading && !view && activeMode === "overview"}
+      <section class="plan-loading" aria-busy="true" aria-label="Загрузка плана">
+        <h2>Готовим ваш план</h2><p>Сопоставляем инвентарь, цены комплектов и доступные реликвии.</p>
+        <div class="plan-placeholder" aria-hidden="true"><span></span><span></span><span></span></div>
+      </section>
+    {:else if !loading && !view && !errorMessage}
       <div class="message">
         <h2>{c.noSnapshot}</h2>
         <p>{c.noSnapshotBody}</p>
         <button type="button" onclick={onOpenSettings}>{c.openSettings}</button>
       </div>
     {:else if view}
-    {#if !view.inventoryAvailable}
+    {#if !view.inventoryAvailable && activeMode !== "overview"}
       <div class="message message--action" role="note">
         <div><h2>{c.noInventory}</h2><p>{c.noInventoryBody}</p></div>
         <button type="button" onclick={onOpenSettings}>{c.openSettings}</button>
@@ -744,6 +751,8 @@
     {#if activeMode === "overview"}
       <OpportunityPlanner initialSetSlug={plannerSetSlug} {view} sets={marketSets} quotes={liveSetQuotes} errors={liveSetErrors}
         busySlug={liveSetPriceBusySlug} onCheck={(row) => checkLiveSetPrice(row, true)}
+        {onOpenSettings} actionStatusSlug={marketStatusSlug} partsBusySlug={marketBusySlug}
+        onOpenRelic={(slug) => { selectMode("relics"); plannerRelicSlug = slug; }}
         onOpenParts={(row) => { expandedLiveSetSlug = ""; void openMissingParts(row); }} actionStatus={marketBusySlug ? c.openingMarket : expandedLiveSetSlug ? "" : marketStatus}
         onOpenSet={(row) => { selectMode(setOpportunity(row).completeSets > 0 ? "sell_sets" : "complete_sets"); setQuery = row.displayName; }} />
 
@@ -784,7 +793,7 @@
         {/if}
       </section>
     {:else if activeMode === "relics"}
-      <RelicBrowser {view} sets={marketSets} locale={$locale} onPlanSet={(slug) => { selectMode("overview"); plannerSetSlug = slug; }} />
+      <RelicBrowser {view} sets={marketSets} locale={$locale} initialRelicSlug={plannerRelicSlug} onPlanSet={(slug) => { selectMode("overview"); plannerSetSlug = slug; }} />
     {:else}
       {#if activeMode === "complete_sets" || activeMode === "sell_sets"}
         <section class="mode-heading" aria-labelledby="set-mode-title">
@@ -1019,6 +1028,11 @@
     min-width: 0;
     gap: .65rem;
   }
+  .plan-loading { border:1px solid var(--border); border-radius:.85rem; padding:1.35rem; background:var(--surface-1); }
+  .plan-loading h2 { margin:0; font-size:1.25rem; }
+  .plan-loading p { color:var(--text-muted); font-size:.875rem; line-height:1.5; }
+  .plan-placeholder { display:grid; gap:.65rem; margin-top:1.5rem; }
+  .plan-placeholder span { display:block; height:3.25rem; border-radius:.45rem; background:var(--surface-2); }
   .resource-mode[hidden] {
     display: none;
   }
@@ -1530,12 +1544,6 @@
   summary:focus-visible {
     outline: .15rem solid color-mix(in oklch, var(--accent) 75%, white);
     outline-offset: .12rem;
-  }
-
-  @media (max-width: 70rem) {
-  .mode-switcher {
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-    }
   }
 
   @media (max-width: 54rem) {
