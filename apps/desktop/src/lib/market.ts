@@ -198,7 +198,10 @@ export function variantLabel(key: MarketVariantKey, locale: UiLocale = "ru"): st
   const parts: string[] = [];
   if (key.rank !== null) parts.push(locale === "en" ? `rank ${key.rank}` : `ранг ${key.rank}`);
   if (key.charges !== null) parts.push(locale === "en" ? `charges ${key.charges}` : `заряды ${key.charges}`);
-  if (key.subtype) parts.push(key.subtype);
+  if (key.subtype) {
+    const refinements: Record<string, string> = { intact: "Нетронутая", exceptional: "Необычная", flawless: "Безупречная", radiant: "Сияющая" };
+    parts.push(locale === "ru" ? refinements[key.subtype] ?? key.subtype : key.subtype);
+  }
   if (key.amberStars !== null || key.cyanStars !== null) {
     parts.push(`${locale === "en" ? "stars" : "звёзды"} ${key.amberStars ?? 0}/${key.cyanStars ?? 0}`);
   }

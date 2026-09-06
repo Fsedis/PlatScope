@@ -420,9 +420,8 @@ h3 {
 .market-workspace-switch {
   display: flex;
   align-items: center;
-  margin-block-end: 0.65rem;
-  border-block-end: 1px solid var(--border);
-  padding: 0 0.1rem 0.6rem;
+  margin-block-end: 1.5rem;
+  padding: 0;
 }
 
 .market-workspace-switch__controls {
@@ -436,12 +435,12 @@ h3 {
 }
 
 .market-workspace-switch__controls button {
-  min-height: 1.9rem;
+  min-height: 2.7rem;
   border-color: transparent;
-  padding-inline: 0.65rem;
+  padding-inline: 1.1rem;
   background: transparent;
   color: var(--text-muted);
-  font-size: 0.75rem;
+  font-size: 0.875rem;
 }
 
 .market-workspace-switch__controls button:hover {
@@ -618,15 +617,11 @@ td {
 }
 
 .market-table th:first-child {
-  width: 46%;
+  width: 56%;
 }
 
 .market-table th:nth-child(2),
 .market-table th:nth-child(3) {
-  width: 16%;
-}
-
-.market-table th:nth-child(4) {
   width: 22%;
 }
 
@@ -2629,3 +2624,23 @@ td,
     fill: Highlight;
   }
 }
+
+/* Рынок: поиск и выбранный предмет читаются без потока расчётных карточек. */
+.market-search-intro { margin-bottom:1.1rem; }
+.market-search-intro h2 { font-size:1.2rem; margin:0 0 .4rem; }
+.market-search-intro p { margin:0; font-size:.875rem; line-height:1.5; color:var(--text-muted); }
+.market-toolbar { gap:1rem; padding:1rem; margin-bottom:1.25rem; }
+.market-layout { grid-template-columns:minmax(0,1.1fr) minmax(25rem,1fr); gap:1.25rem; }
+.market-detail { padding:1.35rem; }
+.market-table th, .market-table td { padding:.85rem .8rem; }
+.market-table .item-button { min-height:3.2rem; font-size:.9375rem; }
+.market-table .item-thumb { width:2.5rem; height:2.7rem; }
+.market-table .item-button small { font-size:.75rem; }
+.market-table .numeric { white-space:nowrap; }
+@media (max-width:1180px) {
+  .market-layout { grid-template-columns:minmax(0,1fr); }
+  .market-detail { position:static; max-height:none; overflow:visible; }
+}
+
+.market-table .estimate-age { display:block; margin-top:.3rem; font-size:.75rem; font-weight:400; white-space:normal; color:var(--text-muted); }
+.market-toolbar input::-webkit-search-cancel-button { -webkit-appearance:none; appearance:none; }

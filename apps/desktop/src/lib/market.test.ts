@@ -102,7 +102,7 @@ describe("market presentation helpers", () => {
         amberStars: null,
         cyanStars: null,
       }),
-    ).toBe("radiant");
+    ).toBe("Сияющая");
   });
 
   it("показывает число зарядов точного варианта", () => {

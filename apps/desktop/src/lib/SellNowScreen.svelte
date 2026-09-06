@@ -67,6 +67,7 @@
     saveSellNowViewPreferences,
   } from "./viewPreferences";
 
+  export let initialQuery = "";
   export let onInventoryChange: (() => void) | undefined = undefined;
   export let onOpenMarketSales: () => void;
   type PendingListingAction = { kind: "create"; input: CreateListingInput; itemName: string };
@@ -157,7 +158,7 @@
   let loading = cachedSellNowView === null;
   let refreshing = false;
   let scanning = false;
-  let itemMode: "inventory" | "mastery" = cachedItemMode;
+  let itemMode: "inventory" | "mastery" = initialQuery ? "inventory" : cachedItemMode;
   function selectItemMode(mode: "inventory" | "mastery") { itemMode = mode; cachedItemMode = mode; }
   let reserveUpdating = false;
   let errorMessage = "";
@@ -167,7 +168,7 @@
   let quoteTtlSeconds = 90;
   let liveLoading = false;
   let liveError = "";
-  let query = "";
+  let query = initialQuery;
   let category: InventoryCategoryFilter = "all";
   let preset: SellNowPreset = "all";
   let sortKey: SellNowSortKey = "name";
@@ -562,8 +563,8 @@
       if (cachedChecks.size !== checkedPrices.size) checkedPrices = new Map(cachedChecks);
     }, 5_000);
     const savedView = loadSellNowViewPreferences();
-    category = savedView.category;
-    preset = savedView.preset;
+    category = initialQuery ? "all" : savedView.category;
+    preset = initialQuery ? "all" : savedView.preset;
     sortKey = savedView.sortKey;
     sortDirection = savedView.sortDirection;
     viewPreferencesReady = true;

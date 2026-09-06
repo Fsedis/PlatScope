@@ -334,6 +334,30 @@ export async function installMarketBrowserMock(): Promise<void> {
   const mockOptions = new URLSearchParams(window.location.search);
   let inventoryRefreshEnabled = true;
   let inventoryPriceChecks = 0;
+  let accountReads = 0;
+  const salesScenario = mockOptions.get("mockSales");
+  if (salesScenario) {
+    account = connectedDemoAccount();
+    if (salesScenario === "empty") account.orders = [];
+    if (salesScenario === "unverified") account.profile!.verification = false;
+    if (salesScenario === "healthy" || salesScenario === "lot") {
+      account.orders = account.orders.filter(order => salesScenario === "lot" || order.id !== "demo-order-3").map(order => {
+        const item = inventory.items.find(item => item.itemId === order.itemId)!;
+        const price = rows.find(row => row.itemId === order.itemId)?.recommendation.listPrice ?? (order.id === "demo-order-1" ? 87 : order.id === "demo-order-2" ? 73 : 2);
+        const perTrade = salesScenario === "lot" && order.id === "demo-order-3" ? 3 : order.perTrade;
+        return { ...order, quantity: item.sellableQuantity, platinum: price * (perTrade ?? 1), perTrade, visible: true };
+      });
+    }
+    if (salesScenario !== "pending") {
+      tradeEvents = Array.from({ length: 16 }, (_, index) => ({
+        ...tradeEvents[0], id: index + 1, status: "ignored" as const,
+        occurredAt: new Date(Date.now() - index * 3_600_000).toISOString(),
+        platinumGiven: index % 3 ? 15 + index : 0, platinumReceived: index % 3 ? 0 : 87,
+        givenItems: index % 3 ? [] : [{ name: "Nyx Prime Set", quantity: 1 }],
+        receivedItems: index % 3 ? [{ name: "Primed Flow", quantity: 1 }] : [],
+      }));
+    }
+  }
   if (mockOptions.get("mockInsights") === "1") {
     account = { ...connectedDemoAccount(), orders: [] };
   }
@@ -436,7 +460,15 @@ export async function installMarketBrowserMock(): Promise<void> {
         bytes: 1_842,
       };
     }
-    if (command === "account_status") return account;
+    if (command === "account_status") {
+      ++accountReads;
+      if (mockOptions.get("mockMarketError") === "account") throw new Error("test account unavailable");
+      if (salesScenario === "changed" && accountReads === 3) {
+        account = { ...account, orders: account.orders.map(order => ({ ...order, platinum: order.platinum + 10 })) };
+      }
+      if (salesScenario === "loading") return new Promise(resolve => setTimeout(() => resolve(account), 3_000));
+      return account;
+    }
     if (command === "account_connect") {
       const request = args as { email?: string; password?: string };
       if (!request.email || !request.password) throw new Error("WFM rejected empty credentials");
@@ -471,6 +503,7 @@ export async function installMarketBrowserMock(): Promise<void> {
       return order;
     }
     if (command === "account_update_listing") {
+      if (mockOptions.get("mockMarketError") === "save") throw new Error("test connection unavailable");
       const request = args as { id?: string; input?: UpdateListingInput; confirmed?: boolean };
       if (!request.id || !request.input || !request.confirmed) throw new Error("explicit confirmation required");
       let updated: AccountOrder | null = null;
@@ -499,7 +532,10 @@ export async function installMarketBrowserMock(): Promise<void> {
       account = { ...account, orders: account.orders.filter((candidate) => candidate.id !== request.id) };
       return order;
     }
-    if (command === "trade_events") return tradeEvents;
+    if (command === "trade_events") {
+      if (mockOptions.get("mockMarketError") === "history") throw new Error("test history unavailable");
+      return tradeEvents;
+    }
     if (command === "trade_sales_summary") {
       const sales = tradeEvents.filter(isSaleTrade);
       return {
@@ -621,6 +657,7 @@ export async function installMarketBrowserMock(): Promise<void> {
       } satisfies RelicRewardScanView;
     }
     if (command === "search_market") {
+      if (mockOptions.get("mockMarketError") === "search") throw new Error("test search unavailable");
       const query = String((args as Record<string, unknown>)?.query ?? "").toLocaleLowerCase("ru");
       const matchingRows = rows.filter(
         (row) =>
@@ -669,6 +706,7 @@ export async function installMarketBrowserMock(): Promise<void> {
     }
     if (command === "live_price_current_variant") {
       if (mockOptions.get("mockLiveFailure") === "all") throw new Error("test network unavailable");
+      if (mockOptions.get("mockLiveFailure") === "empty") return null;
       const key = (args as { key?: MarketSearchRow["recommendation"]["key"] })?.key;
       if (mockOptions.has("mockPlan")) {
         const set = makeOpportunityPlanMock(makeInsightsView(),"full").sets.find(row => row.definition.setSlug === key?.slug);
@@ -714,7 +752,7 @@ export async function installMarketBrowserMock(): Promise<void> {
             { code: "live_top_buy", message: "Quick Sell основан на лучшем активном buy order точного варианта." },
           ],
         },
-        fetchedAt: "2026-08-27T06:45:00Z",
+        fetchedAt: new Date().toISOString(),
         quoteState: mockOptions.get("mockLiveFailure") === "stale" ? "stale_cache" : "network",
         sellOrderCount: 5,
         buyOrderCount: 1,
@@ -730,6 +768,7 @@ export async function installMarketBrowserMock(): Promise<void> {
       } satisfies LivePricingResult;
     }
     if (command === "market_history") {
+      if (mockOptions.get("mockMarketError") === "history") throw new Error("test history unavailable");
       const request = args as { key?: MarketSearchRow["recommendation"]["key"]; days?: number };
       if (!request.key) return null;
       if (request.key.platform !== "pc") {
@@ -968,6 +1007,7 @@ export async function installMarketBrowserMock(): Promise<void> {
       } satisfies LiveSellNowResult;
     }
     if (command === "load_inventory") {
+      if (mockOptions.get("mockMarketError") === "inventory") throw new Error("test inventory unavailable");
       return localizeInventoryView(inventory);
     }
     if (command === "set_inventory_keep_copies") {
@@ -1416,9 +1456,9 @@ function makeRow(
   return {
     itemId: `demo-${slug}`,
     displayName,
-    imageUrl: slug.startsWith("nyx_prime_")
+    imageUrl: inventory.items.find(item => item.itemId === `demo-${slug}`)?.imageUrl ?? (slug === "nyx_prime_set"
       ? "https://warframe.market/static/assets/items/images/en/thumbs/nyx_prime_set.fd41c04c9e9bcc7e0e6963914f68f880.128x128.png"
-      : null,
+      : null),
     itemKind,
     masteryRequirement: masteryRequirements[slug] ?? null,
     recommendation: {

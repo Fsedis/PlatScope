@@ -9,7 +9,7 @@
   import WorldActivityScreen from "./lib/WorldActivityScreen.svelte";
   import { startWorldActivityAlerts, worldPreferences } from "./lib/worldActivityStore";
   import EquippedModsScreen from "./lib/EquippedModsScreen.svelte";
-  import HistoryChart from "./lib/HistoryChart.svelte";
+  import MarketItemDetail from "./lib/MarketItemDetail.svelte";
   import InsightsScreen from "./lib/InsightsScreen.svelte";
   import MarketTradingShift from "./lib/MarketTradingShift.svelte";
   import SellNowScreen from "./lib/SellNowScreen.svelte";
@@ -23,21 +23,12 @@
     type FoundationStatus,
     type MarketRefreshOutcome,
   } from "./lib/foundation";
-  import {
-    formatChange,
-    timingLabel,
-    type MarketHistoryView,
-    type TrendSummary,
-  } from "./lib/history";
+  import type { MarketHistoryView } from "./lib/history";
   import {
     filterAndSortRows,
     formatPlatinum,
     formatVolume,
     freshnessLabel,
-    liveQuoteLabel,
-    liveUserStatusLabel,
-    masteryRequirementLabel,
-    priceReasonMessage,
     rowIdentity,
     variantLabel,
     type MarketSearchResult,
@@ -72,7 +63,7 @@
       insights: "Возможности",
       bountyHunter: "Охотник за наградами",
       settings: "Настройки",
-      marketLede: "Мои продажи, актуальность ордеров и поиск цены в одном рабочем месте.",
+      marketLede: "Управляйте объявлениями и находите цены на предметы.",
       inventoryLede: "Торговый инвентарь, момент продажи и ордера Warframe Market в одном месте.",
       equippedModsLede: "На каком предмете и в какой конфигурации стоит каждый мод.",
       insightsLede: "Лучшие способы превратить инвентарь и ресурсы в платину.",
@@ -86,14 +77,14 @@
       historyError: (_reason: string) => "Не удалось загрузить историю. Текущая цена по-прежнему доступна.",
       refreshing: "Обновляем данные…", refresh: "Обновить данные", openingStorage: "Открываем сохранённые данные…", validatingSnapshot: "Загружаем и проверяем новые цены…", providersUnavailable: "Источники временно недоступны. Показываем последние сохранённые данные.", checkStorage: "Проверить данные",
       noSnapshot: "Данные рынка ещё не загружены", loadMarket: "Загрузите цены рынка", loadMarketBody: "Обновление цен и 90-дневной истории находится в настройках.", loadingMarket: "Загружаем данные…", loadData: "Открыть настройки обновления",
-      marketFilters: "Поиск и фильтры рынка", searchItem: "Поиск предмета", searchExample: "Например, Никс Прайм или nyx prime", clear: "Очистить", shortcut: "Быстрый доступ:", priceAvailability: "Наличие цены", allVariants: "Все варианты", priced: "С надёжной ценой", unpriced: "Без надёжной цены",
+      marketFilters: "Поиск и фильтры рынка", searchItem: "Поиск предмета", searchExample: "Например, Никс Прайм или nyx prime", clear: "Очистить", shortcut: "Быстрый доступ:", priceAvailability: "Наличие оценки", allVariants: "Все варианты", priced: "Есть оценка", unpriced: "Оценки пока нет",
       results: "Результаты", snapshot: "Данные от", marketCaption: "Предметы, цены, продажи и актуальность данных", item: "Предмет", trades: "Сделки", freshness: "Актуальность",
-      first60: "Показаны первые 60 вариантов. Уточните запрос, чтобы сократить список.", noQuery: (query: string) => `По запросу «${query}» ничего не найдено`, noFilter: "Для этого фильтра ничего не найдено", checkSpelling: "Проверьте название предмета.", choosePriceFilter: "Выберите другой фильтр цены.", clearSearch: "Очистить поиск",
+      first60: "Поиск ограничен первыми 60 вариантами. Уточните название предмета, чтобы найти нужный.", noQuery: (query: string) => `По запросу «${query}» ничего не найдено`, noFilter: "Для этого фильтра ничего не найдено", checkSpelling: "Проверьте название предмета.", choosePriceFilter: "Выберите другой фильтр цены.", clearSearch: "Очистить поиск",
       relic: "Реликвия", riven: "Мод разлома", marketItem: "Предмет рынка", gettingLive: "Получаем текущие цены…", updateLive: "Обновить текущие цены", getLive: "Проверить текущие цены", liveHint: "Покажет ордера игроков, которые сейчас в игре.", dataDate: "Цена рассчитана по данным от", masteryRequirement: "Ранг мастерства", whyPrice: "Как рассчитана цена?",
       marketData: "Данные рынка", dataReady: "Загружены", dataMissing: "Не загружены",
       fair: "Цена", fairPrice: "Оценка рынка", listPrice: "Ориентир размещения", closedVolume: "Закрытые сделки", lowestAsk: "Минимальная цена продажи", depthThree: "Средняя цена до 3 шт.", depthPrice: "Средняя цена до 5 шт.", quickSell: "Лучшая заявка на покупку", sell: "продажа", buy: "покупка", currentOrders: "Ордера игроков в игре", side: "Тип", price: "Цена", quantityLot: "Количество · лот", playerStatus: "Статус", sellOrder: "Продажа", buyOrder: "Покупка", noActiveOrders: "Сейчас в игре нет ордеров для этого варианта.",
       priceHistory: "История цены", historyRange: "Период", dayShort: "д", loadingHistory: "Загружаем историю…", historyCoverage: (points: number, coverage: number) => `${points} дней · доступно ${coverage} дней истории`, selectForHistory: "Выберите строку, чтобы посмотреть историю цены.", median: "Медиана", change: "Изменение", averageVolume: "Средний объём", insufficientChart: "Пока недостаточно данных для графика. История накопится после обновлений рынка.", itemDetails: "Подробности предмета", selectItem: "Выберите предмет в таблице, чтобы увидеть цену и расчёт.",
-      marketModeLabel: "Режим рынка", mySales: "Мои продажи", marketSearch: "Поиск рынка",
+      marketModeLabel: "Режим рынка", mySales: "Мои продажи", marketSearch: "Найти предмет",
     },
     en: {
       skip: "Skip to content",
@@ -120,14 +111,14 @@
       historyError: (_reason: string) => "Unable to load history. The current price remains available.",
       refreshing: "Refreshing data…", refresh: "Refresh data", openingStorage: "Opening saved data…", validatingSnapshot: "Downloading and checking new prices…", providersUnavailable: "Sources are temporarily unavailable. Showing the latest saved data.", checkStorage: "Check data",
       noSnapshot: "Market data has not been loaded", loadMarket: "Load market prices", loadMarketBody: "Price and 90-day history updates are available in Settings.", loadingMarket: "Loading data…", loadData: "Open update settings",
-      marketFilters: "Market search and filters", searchItem: "Search items", searchExample: "For example, Nyx Prime or nyx prime", clear: "Clear", shortcut: "Shortcut:", priceAvailability: "Price availability", allVariants: "All variants", priced: "Reliable price", unpriced: "No reliable price",
+      marketFilters: "Market search and filters", searchItem: "Search items", searchExample: "For example, Nyx Prime or nyx prime", clear: "Clear", shortcut: "Shortcut:", priceAvailability: "Price availability", allVariants: "All variants", priced: "Has an estimate", unpriced: "No estimate yet",
       results: "Results", snapshot: "Data from", marketCaption: "Market items, prices, sales, and data freshness", item: "Item", trades: "Trades", freshness: "Freshness",
       first60: "Showing the first 60 variants. Refine the query to narrow the list.", noQuery: (query: string) => `No results for “${query}”`, noFilter: "No variants match this filter", checkSpelling: "Check the spelling or use a canonical slug.", choosePriceFilter: "Choose a different price filter.", clearSearch: "Clear search",
       relic: "Relic", riven: "Riven mod", marketItem: "Market item", gettingLive: "Getting current prices…", updateLive: "Refresh current prices", getLive: "Check current prices", liveHint: "Shows orders from players who are currently in game.", dataDate: "Price data from", masteryRequirement: "Mastery rank", whyPrice: "How is this price calculated?",
       marketData: "Market data", dataReady: "Loaded", dataMissing: "Not loaded",
       fair: "Fair", fairPrice: "Fair price", listPrice: "List price", closedVolume: "Closed volume", lowestAsk: "Lowest ask", depthThree: "Up to 3 units average", depthPrice: "Up to 5 units average", quickSell: "Quick Sell", sell: "sell", buy: "buy", currentOrders: "Orders from players in game", side: "Side", price: "Price", quantityLot: "Quantity · lot", playerStatus: "Player status", sellOrder: "Sell", buyOrder: "Buy", noActiveOrders: "No players in game have orders for this exact variant.",
       priceHistory: "Price history", historyRange: "History range", dayShort: "d", loadingHistory: "Loading local aggregates…", historyCoverage: (points: number, coverage: number) => `${points} days for this variant · ${coverage} local days covered`, selectForHistory: "Select a row to open compact history for the exact variant.", median: "Median", change: "Change", averageVolume: "Average volume", insufficientChart: "Not enough points for a chart. Background bootstrap adds up to seven days per launch.", itemDetails: "Item details", selectItem: "Select an item in the table to see its calculation and explanation.",
-      marketModeLabel: "Market mode", mySales: "My sales", marketSearch: "Market search",
+      marketModeLabel: "Market mode", mySales: "My sales", marketSearch: "Find an item",
     },
   } as const;
 
@@ -138,6 +129,8 @@
   let searchResult: MarketSearchResult | null = null;
   let liveResult: LivePricingResult | null = null;
   let liveIdentity = "";
+  let liveRequestIdentity = "";
+  let historyRequestIdentity = "";
   let historyView: MarketHistoryView | null = null;
   let historyIdentity = "";
   let historyRange: 7 | 30 | 90 = 7;
@@ -154,6 +147,8 @@
   let activeScreen: AppScreen = $worldPreferences.startHere ? "world_activity" : "inventory";
   let bountyRegion = "all";
   let marketWorkspace: MarketWorkspace = "sales";
+  let inventoryInitialQuery = "";
+  let marketActionMessage = "";
   let pageHeading: HTMLHeadingElement;
   let selectedIdentity = "";
   let query = "";
@@ -205,6 +200,9 @@
     sortKey,
     sortDirection,
   );
+  $: if (!visibleRows.some(row => rowIdentity(row) === selectedIdentity)) {
+    selectedIdentity = visibleRows[0] ? rowIdentity(visibleRows[0]) : "";
+  }
   $: if (viewPreferencesReady) {
     saveMarketViewPreferences({ priceFilter, sortKey, sortDirection });
   }
@@ -219,6 +217,27 @@
     : searchResult
       ? shell.shown(visibleRows.length, searchResult.rows.length)
       : "";
+
+  async function readMarket<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+    let timer: ReturnType<typeof setTimeout>;
+    try {
+      return await Promise.race([invoke<T>(command, args), new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("market_read_timeout")), 20_000);
+      })]);
+    } finally { clearTimeout(timer!); }
+  }
+
+  async function openSelectedMarketItem(): Promise<void> {
+    if (!selectedRow) return;
+    const identity = selectedIdentity;
+    marketActionMessage = "";
+    try {
+      await invoke("open_market_items", { slugs: [selectedRow.recommendation.key.slug] });
+      if (identity === selectedIdentity) marketActionMessage = "Warframe Market открыт в браузере.";
+    } catch {
+      if (identity === selectedIdentity) marketActionMessage = "Не удалось открыть Warframe Market. Повторите попытку.";
+    }
+  }
 
   async function loadStatus(): Promise<void> {
     loading = true;
@@ -245,17 +264,18 @@
     searching = true;
     errorMessage = "";
     try {
-      const result = await invoke<MarketSearchResult>("search_market", {
+      const result = await readMarket<MarketSearchResult>("search_market", {
         query: requestedQuery,
         limit: 60,
       });
       if (requestId !== searchSequence) return;
       searchResult = result;
-      const selectedStillExists = result.rows.some(
+      const filtered = filterAndSortRows(result.rows, priceFilter, sortKey, sortDirection);
+      const selectedStillExists = filtered.some(
         (row) => rowIdentity(row) === selectedIdentity,
       );
       if (!selectedStillExists) {
-        selectedIdentity = result.rows[0] ? rowIdentity(result.rows[0]) : "";
+        selectedIdentity = filtered[0] ? rowIdentity(filtered[0]) : "";
       }
       if (liveIdentity !== selectedIdentity) {
         liveResult = null;
@@ -279,6 +299,9 @@
 
   function scheduleSearch(event: Event): void {
     query = (event.currentTarget as HTMLInputElement).value;
+    ++searchSequence;
+    searching = true;
+    marketActionMessage = "";
     if (searchTimer) clearTimeout(searchTimer);
     searchTimer = setTimeout(() => void searchMarket(), 160);
   }
@@ -293,26 +316,29 @@
   function selectRow(row: MarketSearchRow): void {
     detailTrigger = document.activeElement as HTMLElement | null;
     selectedIdentity = rowIdentity(row);
+    marketActionMessage = "";
+    liveError = "";
+    historyError = "";
     void loadLivePrice(row);
-    void loadHistory(row);
-    void revealCompactDetail("detail-heading", "(max-width: 46rem)");
+    void revealCompactDetail("detail-heading", "(max-width: 1180px)");
   }
 
   async function loadLivePrice(row: MarketSearchRow): Promise<void> {
     const identity = rowIdentity(row);
     const requestId = ++liveSequence;
+    liveRequestIdentity = identity;
     liveLoading = true;
     liveError = "";
     try {
-      const result = await invoke<LivePricingResult | null>("live_price_current_variant", {
+      const result = await readMarket<LivePricingResult | null>("live_price_current_variant", {
         key: row.recommendation.key,
         itemKind: row.itemKind,
       });
       if (requestId !== liveSequence || identity !== selectedIdentity) return;
       liveResult = result;
       liveIdentity = result ? identity : "";
-      if (!result) liveError = shell.noBulk;
-      if (result) void loadHistory(row);
+      if (!result) liveError = "Для этого варианта пока нет текущих предложений. Сохранённая оценка остаётся ориентиром.";
+      if (result && historyIdentity === identity) void loadHistory(row);
     } catch (error) {
       if (requestId !== liveSequence || identity !== selectedIdentity) return;
       liveResult = null;
@@ -331,10 +357,11 @@
     const requestId = ++historySequence;
     const recommendation =
       liveResult && liveIdentity === identity ? liveResult.recommendation : row.recommendation;
+    historyRequestIdentity = identity;
     historyLoading = true;
     historyError = "";
     try {
-      const result = await invoke<MarketHistoryView>("market_history", {
+      const result = await readMarket<MarketHistoryView>("market_history", {
         key: row.recommendation.key,
         days: requestedRange,
         currentPrice: recommendation.fairPrice,
@@ -356,18 +383,6 @@
   function changeHistoryRange(days: 7 | 30 | 90): void {
     historyRange = days;
     if (selectedRow) void loadHistory(selectedRow, days);
-  }
-
-  function trendMedian(trend: TrendSummary, days: 7 | 30 | 90): number | null {
-    return days === 7 ? trend.median7d : days === 30 ? trend.median30d : trend.median90d;
-  }
-
-  function trendChange(trend: TrendSummary, days: 7 | 30 | 90): number | null {
-    return days === 7 ? trend.change7d : days === 30 ? trend.change30d : trend.change90d;
-  }
-
-  function trendVolume(trend: TrendSummary, days: 7 | 30 | 90): number | null {
-    return days === 7 ? trend.volumeAvg7d : days === 30 ? trend.volumeAvg30d : trend.volumeAvg90d;
   }
 
   function changeSort(nextKey: MarketSortKey): void {
@@ -525,7 +540,7 @@
           type="button"
           class:active={activeScreen === "inventory"}
           aria-current={activeScreen === "inventory" ? "page" : undefined}
-          onclick={() => navigateTo("inventory")}
+          onclick={() => { inventoryInitialQuery = ""; navigateTo("inventory"); }}
         ><AppNavIcon screen="inventory" /><span>{shell.inventory}</span></button>
         <button
           type="button"
@@ -577,7 +592,7 @@
       onOpenBounties={region => { bountyRegion = region; navigateTo("bounty_hunter"); }}
       onOpenInsights={mode => { saveInsightsViewPreferences({ mode }); navigateTo("insights"); }} />
   {:else if activeScreen === "market"}
-  <div class="live-region" role="status" aria-live="polite">
+  <div class="live-region sr-only" role="status" aria-live="polite">
     {#if loading}
       {shell.openingStorage}
     {:else if refreshOutcome?.stale}
@@ -590,7 +605,7 @@
   {#if errorMessage}
     <div class="error-block" role="alert">
       <p>{errorMessage}</p>
-      <button type="button" onclick={loadStatus}>{shell.checkStorage}</button>
+      <button type="button" onclick={() => void loadStatus().then(searchMarket)}>Повторить загрузку</button>
     </div>
   {/if}
 
@@ -611,7 +626,7 @@
 
   {#if marketWorkspace === "sales"}
     <MarketTradingShift
-      onOpenInventory={() => navigateTo("inventory")}
+      onOpenInventory={() => { inventoryInitialQuery = ""; navigateTo("inventory"); }}
       onBrowseMarket={() => (marketWorkspace = "browse")}
     />
   {:else if !loading && !status?.marketSnapshot}
@@ -624,6 +639,7 @@
       </button>
     </section>
   {:else if status?.marketSnapshot}
+    <div class="market-search-intro"><h2>Узнайте цену нужного предмета</h2><p>Найдите предмет, выберите ранг и сравните цены продавцов и покупателей.</p></div>
     <section class="market-toolbar" aria-labelledby="search-heading">
       <h2 id="search-heading" class="sr-only">{shell.marketFilters}</h2>
       <div class="search-field">
@@ -687,217 +703,87 @@
                   </th>
                   <th scope="col" aria-sort={sortAria("fair", sortKey, sortDirection)}>
                     <button type="button" onclick={() => changeSort("fair")}>
-                      {shell.fair} <span aria-hidden="true">{sortMarker("fair", sortKey, sortDirection)}</span>
+                      {$locale === "ru" ? "Оценка / шт." : "Estimate / item"} <span aria-hidden="true">{sortMarker("fair", sortKey, sortDirection)}</span>
                     </button>
                   </th>
                   <th scope="col" aria-sort={sortAria("volume", sortKey, sortDirection)}>
                     <button type="button" onclick={() => changeSort("volume")}>
-                      {shell.trades} <span aria-hidden="true">{sortMarker("volume", sortKey, sortDirection)}</span>
+                      {$locale === "ru" ? "Сделок в данных" : "Recorded trades"} <span aria-hidden="true">{sortMarker("volume", sortKey, sortDirection)}</span>
                     </button>
                   </th>
-                  <th scope="col">{shell.freshness}</th>
                 </tr>
               </thead>
               <tbody>
                 {#each visibleRows as row (rowIdentity(row))}
                   <tr class:selected={rowIdentity(row) === selectedIdentity}>
                     <td data-label={shell.item}>
-                      <button class="item-button" type="button" onclick={() => selectRow(row)}>
+                      <button class="item-button" type="button" aria-pressed={rowIdentity(row) === selectedIdentity} onclick={() => selectRow(row)}>
                         {#if row.imageUrl}
                           <img class="item-thumb" src={row.imageUrl} alt="" loading="lazy" decoding="async" />
                         {/if}
                         <span class="item-button__copy">
                         <span>{row.displayName}</span>
-                        <small>{variantLabel(row.recommendation.key, $locale)}</small>
+                        {#if variantLabel(row.recommendation.key, $locale) !== ($locale === "ru" ? "базовый вариант" : "base variant")}<small>{variantLabel(row.recommendation.key, $locale)}</small>{/if}
                         </span>
                       </button>
                     </td>
-                    <td class="numeric price-cell" data-label={shell.fair}>
-                      {formatPlatinum(row.recommendation.fairPrice, $locale)}
+                    <td class="numeric price-cell" data-label={$locale === "ru" ? "Оценка / шт." : "Estimate / item"}>
+                      {row.recommendation.fairPrice === null ? ($locale === "ru" ? "Нет оценки" : "No estimate") : formatPlatinum(row.recommendation.fairPrice, $locale).replace(/p$/, $locale === "ru" ? " пл." : "p")}
+                      {#if row.recommendation.freshness !== "fresh"}<small class="estimate-age">{freshnessLabel(row.recommendation.freshness, $locale)}</small>{/if}
                     </td>
                     <td class="numeric" data-label={shell.trades}>
                       {formatVolume(row.recommendation.closedVolume, $locale)}
-                    </td>
-                    <td data-label={shell.freshness}>
-                      <span class={`freshness freshness--${row.recommendation.freshness}`}>
-                        {freshnessLabel(row.recommendation.freshness, $locale)}
-                      </span>
                     </td>
                   </tr>
                 {/each}
               </tbody>
             </table>
           </div>
-          {#if searchResult?.truncated}
-            <p class="result-note">{shell.first60}</p>
-          {/if}
-        {:else if !searching}
+        {:else if searching}
+          <p class="no-results" role="status">{shell.searching}</p>
+        {:else if !errorMessage}
           <div class="no-results">
-            <h3>{query ? shell.noQuery(query) : shell.noFilter}</h3>
-            <p>{query ? shell.checkSpelling : shell.choosePriceFilter}</p>
-            {#if query}
+            {#if searchResult?.rows.length}
+              <h3>Нет вариантов с выбранной оценкой</h3>
+              <p>Предметы найдены, но скрыты фильтром наличия оценки.</p>
+              <button type="button" onclick={() => priceFilter = "all"}>Показать все варианты</button>
+            {:else if query}
+              <h3>{shell.noQuery(query)}</h3><p>{shell.checkSpelling}</p>
               <button type="button" onclick={clearSearch}>{shell.clearSearch}</button>
+            {:else}
+              <h3>Предметы пока не загружены</h3><p>Обновите данные рынка, чтобы начать поиск.</p>
+              <button type="button" onclick={() => navigateTo("settings")}>{shell.loadData}</button>
             {/if}
           </div>
+        {/if}
+        {#if searchResult?.truncated}
+          <p class="result-note">{shell.first60}</p>
         {/if}
       </section>
 
       <aside class="detail-panel market-detail" aria-labelledby="detail-heading">
         {#if selectedRow && activeRecommendation}
-          <div class="detail-heading">
-            {#if selectedRow.imageUrl}<img class="detail-art" src={selectedRow.imageUrl} alt="" decoding="async" />{/if}
-            <p>{selectedRow.itemKind === "relic" ? shell.relic : selectedRow.itemKind === "riven" ? shell.riven : shell.marketItem}</p>
-            <button type="button" class="secondary detail-back market-back" onclick={() => revealElement(detailTrigger ?? document.getElementById("results-heading"))}>{$locale === "ru" ? "← К результатам" : "← Back to results"}</button>
-            <h2 id="detail-heading" tabindex="-1">{selectedRow.displayName}</h2>
-            <span>{variantLabel(selectedRow.recommendation.key, $locale)}</span>
-          </div>
-
-          <div class="live-actions">
-            <button
-              type="button"
-              disabled={liveLoading}
-              onclick={() => loadLivePrice(selectedRow)}
-            >
-              {liveLoading ? shell.gettingLive : liveResult && liveIdentity === selectedIdentity ? shell.updateLive : shell.getLive}
-            </button>
-            <div class="live-status" aria-live="polite">
-              {#if liveResult && liveIdentity === selectedIdentity}
-                <span>{liveQuoteLabel(liveResult.quoteState, $locale)} · {liveResult.sellOrderCount} {shell.sell} / {liveResult.buyOrderCount} {shell.buy}</span>
-                {#if liveResult.warning}
-                  <strong>{$locale === "ru" ? "Часть текущих ордеров недоступна. Проверьте список перед продажей." : "Some current orders are unavailable. Review the list before selling."}</strong>
-                {/if}
-              {:else if liveError}
-                <strong>{liveError}</strong>
-              {:else}
-                <span>{shell.liveHint}</span>
-              {/if}
-            </div>
-          </div>
-
-          <dl class="price-grid">
-            <div class="price-grid__primary">
-              <dt>{shell.fairPrice}</dt>
-              <dd>{formatPlatinum(activeRecommendation.fairPrice, $locale)}</dd>
-            </div>
-            <div>
-              <dt>{shell.listPrice}</dt>
-              <dd>{formatPlatinum(activeRecommendation.listPrice, $locale)}</dd>
-            </div>
-            <div>
-              <dt>{shell.closedVolume}</dt>
-              <dd>{formatVolume(activeRecommendation.closedVolume, $locale)}</dd>
-            </div>
-          </dl>
-
-          {#if liveResult && liveIdentity === selectedIdentity}
-            <dl class="live-price-grid">
-              <div><dt>{shell.lowestAsk}</dt><dd>{formatPlatinum(activeRecommendation.lowestAsk, $locale)}</dd></div>
-              <div><dt>{shell.depthThree}</dt><dd>{formatPlatinum(activeRecommendation.depthThree, $locale)}</dd></div>
-              <div><dt>{shell.depthPrice}</dt><dd>{formatPlatinum(activeRecommendation.depthPrice, $locale)}</dd></div>
-              <div><dt>{shell.quickSell}</dt><dd>{formatPlatinum(activeRecommendation.quickSell, $locale)}</dd></div>
-            </dl>
-            <section class="live-orders" aria-labelledby="live-orders-heading">
-              <h3 id="live-orders-heading">{shell.currentOrders}</h3>
-              <div class="live-orders__scroll">
-                <table>
-                  <thead><tr><th>{shell.side}</th><th>{shell.price}</th><th>{shell.quantityLot}</th><th>{shell.playerStatus}</th></tr></thead>
-                  <tbody>
-                    {#each liveResult.orders as order, index (`${order.side}:${order.platinum}:${order.quantity}:${index}`)}
-                      <tr>
-                        <th scope="row"><span class={`order-side order-side--${order.side}`}>{order.side === "sell" ? shell.sellOrder : shell.buyOrder}</span></th>
-                        <td>{formatPlatinum(order.platinum, $locale)}</td>
-                        <td>{order.quantity.toLocaleString(localeCode($locale))} · {order.perTrade.toLocaleString(localeCode($locale))}</td>
-                        <td>{liveUserStatusLabel(order.userStatus, $locale)}</td>
-                      </tr>
-                    {:else}
-                      <tr><td colspan="4">{shell.noActiveOrders}</td></tr>
-                    {/each}
-                  </tbody>
-                </table>
-              </div>
-            </section>
-          {/if}
-
-          <div class="detail-meta">
-            <div>
-              <span>{shell.freshness}</span>
-              <strong>{freshnessLabel(activeRecommendation.freshness, $locale)}</strong>
-            </div>
-            <div>
-              <span>{shell.dataDate}</span>
-              <strong>{activeRecommendation.sourceDate}</strong>
-            </div>
-            <div>
-              <span>{shell.masteryRequirement}</span>
-              <strong>{masteryRequirementLabel(selectedRow.masteryRequirement, $locale)}</strong>
-            </div>
-          </div>
-
-          <details class="explanation" open>
-            <summary>{shell.whyPrice}</summary>
-            <ul>
-              {#each activeRecommendation.reasons as reason}
-                <li>{priceReasonMessage(reason, $locale)}</li>
-              {/each}
-            </ul>
-          </details>
-
-          <section class="history-panel" aria-labelledby="history-heading">
-            <div class="history-heading">
-              <h3 id="history-heading">{shell.priceHistory}</h3>
-              <div class="history-ranges" role="group" aria-label={shell.historyRange}>
-                {#each [7, 30, 90] as days}
-                  <button
-                    type="button"
-                    aria-pressed={historyRange === days}
-                    onclick={() => changeHistoryRange(days as 7 | 30 | 90)}
-                  >{days}{shell.dayShort}</button>
-                {/each}
-              </div>
-            </div>
-
-            <div class="history-status" aria-live="polite">
-              {#if historyLoading}
-                {shell.loadingHistory}
-              {:else if historyError}
-                <strong>{historyError}</strong>
-              {:else if historyView && historyIdentity === selectedIdentity}
-                {shell.historyCoverage(historyView.points.length, historyView.coverage.dayCount)}
-              {:else}
-                {shell.selectForHistory}
-              {/if}
-            </div>
-
-            {#if historyView && historyIdentity === selectedIdentity}
-              <dl class="trend-grid">
-                <div><dt>{shell.median} {historyRange}{shell.dayShort}</dt><dd>{formatPlatinum(trendMedian(historyView.trend, historyRange), $locale)}</dd></div>
-                <div><dt>{shell.change}</dt><dd>{formatChange(trendChange(historyView.trend, historyRange), $locale)}</dd></div>
-                <div><dt>{shell.averageVolume}</dt><dd>{formatVolume(trendVolume(historyView.trend, historyRange), $locale)}</dd></div>
-              </dl>
-              {#if historyView.trend.timing}
-                <p class={`timing timing--${historyView.trend.timing}`}>
-                  {timingLabel(historyView.trend.timing, $locale)}
-                </p>
-              {/if}
-              {#if historyView.points.length >= 2}
-                <HistoryChart points={historyView.points} />
-              {:else}
-                <p class="history-empty">{shell.insufficientChart}</p>
-              {/if}
-            {/if}
-          </section>
-
+          {#key selectedIdentity}
+            <MarketItemDetail row={selectedRow} recommendation={activeRecommendation}
+              live={liveIdentity === selectedIdentity ? liveResult : null}
+              liveLoading={liveRequestIdentity === selectedIdentity && liveLoading} liveError={liveRequestIdentity === selectedIdentity ? liveError : ""}
+              history={historyIdentity === selectedIdentity ? historyView : null}
+              historyLoading={historyRequestIdentity === selectedIdentity && historyLoading} historyError={historyRequestIdentity === selectedIdentity ? historyError : ""} {historyRange}
+              marketMessage={marketActionMessage}
+              onRefresh={() => selectedRow && loadLivePrice(selectedRow)}
+              onHistory={changeHistoryRange}
+              onMarket={openSelectedMarketItem}
+              onInventory={() => { inventoryInitialQuery = selectedRow?.displayName ?? ""; navigateTo("inventory"); }}
+              onBack={() => revealElement(detailTrigger?.isConnected ? detailTrigger : document.getElementById("results-heading"))} />
+          {/key}
         {:else}
-          <div class="detail-placeholder">
-            <h2 id="detail-heading">{shell.itemDetails}</h2>
-            <p>{shell.selectItem}</p>
-          </div>
+          <div class="detail-placeholder"><h2 id="detail-heading">{shell.itemDetails}</h2><p>{shell.selectItem}</p></div>
         {/if}
       </aside>
     </div>
   {/if}
   {:else if activeScreen === "inventory"}
-    <SellNowScreen
+    <SellNowScreen initialQuery={inventoryInitialQuery}
       onInventoryChange={() => void loadStatus()}
       onOpenMarketSales={openMarketSales}
     />
