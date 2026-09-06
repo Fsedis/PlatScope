@@ -53,9 +53,8 @@
     withCheckedPrice,
     isCheckedPriceCurrent,
     inventoryPage,
-    summarizeInventoryRows,
+    inventoryUnitPrice,
     type LiveSellNowResult,
-    type EquippedFilter,
     type SellNowPreset,
     type SellNowRow,
     type SellNowSortDirection,
@@ -63,6 +62,7 @@
     type SellNowView,
   } from "./sellNow";
   import {
+    DEFAULT_SELL_NOW_VIEW,
     loadSellNowViewPreferences,
     saveSellNowViewPreferences,
   } from "./viewPreferences";
@@ -170,37 +170,47 @@
   let query = "";
   let category: InventoryCategoryFilter = "all";
   let preset: SellNowPreset = "all";
-  let equipped: EquippedFilter = "all";
-  let sortKey: SellNowSortKey = "priority";
+  let sortKey: SellNowSortKey = "name";
   let detailTrigger: HTMLElement | null = null;
-  let sortDirection: SellNowSortDirection = "desc";
+  let sortDirection: SellNowSortDirection = "asc";
   let viewPreferencesReady = false;
   let page = 1;
   let listScroll: HTMLDivElement | undefined;
   let detailOpen = false;
-  let morePresets: HTMLDetailsElement;
   let reserveMenu: HTMLDetailsElement;
-  let moreFiltersOpen = false;
   $: t = $locale === "ru" ? (ru: string, _en: string) => ru : (_ru: string, en: string) => en;
-  $: extraPresets = [{ value: "sell_now", label: c.sellNow }, { value: "hold", label: c.hold }, { value: "unpriced", label: c.unpriced }, { value: "attention", label: c.attention }] as const;
-  $: morePresetLabel = extraPresets.find(item => item.value === preset)?.label ?? t("Ещё", "More");
+  $: filterOptions = [
+    { value: "all", label: t("Без ограничений", "No restrictions"), hint: "" },
+    { value: "sellable", label: t("Есть копии для продажи", "Has sellable copies"), hint: t("Есть хотя бы одна копия после резерва и защиты надетых предметов. Наличие цены не обязательно.", "At least one copy remains after reserves and protection. A price is not required.") },
+    { value: "unavailable", label: t("Нет копий для продажи", "No sellable copies"), hint: t("Копии оставлены себе, защищены или пока не распознаны для рынка.", "Copies are reserved, protected, or not yet matched to the market.") },
+    { value: "duplicates", label: t("Две копии и больше", "Two or more copies"), hint: t("От двух копий одного варианта, включая оставленные себе. Разные ранги считаются отдельно.", "At least two copies of the same variant, including reserved copies. Ranks are counted separately.") },
+    { value: "equipped", label: t("Есть надетые копии", "Has equipped copies"), hint: t("Предмет используется в сборках. Другие его копии могут быть доступны для продажи.", "Used in loadouts. Other copies may still be sellable.") },
+    { value: "unpriced", label: t("Нет оценки цены", "No price estimate"), hint: t("Для этих вариантов нет оценки цены. Это не означает, что их нельзя продать.", "These variants have no price estimate. This does not mean they cannot be sold.") },
+    { value: "attention", label: t("Не распознаны для рынка", "Needs market matching"), hint: t("Не определён точный вариант или возможность обмена. Причина указана в карточке предмета.", "The exact variant or tradeability is unknown. See the item details for the reason.") },
+  ] as const;
+  $: filterHint = filterOptions.find(option => option.value === preset)?.hint ?? "";
+  $: sortOptions = [
+    { key: "name", direction: "asc", label: t("По названию: А → Я", "Name: A → Z") },
+    { key: "fair", direction: "desc", label: t("Сначала дороже", "Highest price first") },
+    { key: "fair", direction: "asc", label: t("Сначала дешевле", "Lowest price first") },
+    { key: "owned", direction: "desc", label: t("Больше копий в наличии", "Most owned copies first") },
+    { key: "sellable", direction: "desc", label: t("Больше копий к продаже", "Most sellable copies first") },
+  ] as const;
   let viewRequest = 0;
   let accountRequest = 0;
   let liveRequest = 0;
   let destroyed = false;
   let orderPriceEdited = false;
-  $: filterSignature = JSON.stringify([query, category, preset, equipped, sortKey, sortDirection]);
-  $: if (filterSignature) { page = 1; detailOpen = false; resetListScroll(); }
-  $: hasFilters = Boolean(query.trim() || category !== "all" || preset !== "all" || equipped !== "all");
+  $: filterSignature = JSON.stringify([query, category, preset, sortKey, sortDirection]);
+  $: if (filterSignature) { page = 1; detailOpen = false; selectedIdentity = ""; liveError = ""; resetListScroll(); }
+  $: hasFilters = Boolean(query.trim() || category !== "all" || preset !== "all");
+  $: canReset = hasFilters || sortKey !== "name" || sortDirection !== "asc";
   $: displayRows = (view?.rows ?? []).map(row => withCheckedPrice(row, checkedPrices.get(sellNowRowIdentity(row)), quoteNow, quoteTtlSeconds));
-  $: scopeRows = filterAndSortSellNowRows(displayRows, { query, category, preset: "all", equipped, sortKey, sortDirection });
-  $: scopeSummary = summarizeInventoryRows(scopeRows);
 
   $: if (viewPreferencesReady) {
     saveSellNowViewPreferences({
       category,
       preset,
-      equipped,
       sortKey,
       sortDirection,
     });
@@ -209,16 +219,13 @@
     query,
     category,
     preset,
-    equipped,
     sortKey,
     sortDirection,
   });
   $: priorityRanks = sellPriorityRanks(view?.rows ?? []);
-  $: categories = INVENTORY_CATEGORIES.filter((candidate) =>
-    view?.rows.some((row) => inventoryCategory(row.inventory) === candidate),
-  );
+  $: categories = INVENTORY_CATEGORIES.filter(candidate => candidate === category || view?.rows.some(row => inventoryCategory(row.inventory) === candidate));
   $: pageView = inventoryPage(visibleRows, page);
-  $: selectedRow = resolveSellNowSelection(pageView.rows, selectedIdentity);
+  $: selectedRow = resolveSellNowSelection(visibleRows, selectedIdentity, pageView.rows);
   $: currentOrder = selectedRow
     ? matchingSellOrder(selectedRow.inventory, accountView)
     : null;
@@ -263,7 +270,7 @@
       const stillExists = result?.rows.some(
         (row) => sellNowRowIdentity(row) === selectedIdentity,
       );
-      if (!stillExists) selectedIdentity = result?.rows[0] ? sellNowRowIdentity(result.rows[0]) : "";
+      if (!stillExists) selectedIdentity = "";
       quoteNow = Date.now();
     } catch (error) {
       if (destroyed || request !== viewRequest) return;
@@ -443,17 +450,13 @@
   }
 
   function resetFilters(): void {
-    query = ""; category = "all"; preset = "all"; equipped = "all";
+    query = ""; category = DEFAULT_SELL_NOW_VIEW.category; preset = DEFAULT_SELL_NOW_VIEW.preset;
+    sortKey = DEFAULT_SELL_NOW_VIEW.sortKey; sortDirection = DEFAULT_SELL_NOW_VIEW.sortDirection;
     page = 1; detailOpen = false;
   }
 
-  function selectPreset(next: SellNowPreset): void {
-    preset = next;
-    if (morePresets) morePresets.open = false;
-  }
-
   function dismissPopovers(event: MouseEvent | KeyboardEvent): void {
-    for (const menu of [morePresets, reserveMenu]) {
+    for (const menu of [reserveMenu]) {
       if (!menu?.open) continue;
       if (event instanceof KeyboardEvent) {
         if (event.key === "Escape") { menu.open = false; menu.querySelector("summary")?.focus(); }
@@ -476,6 +479,8 @@
   async function loadLive(row: SellNowRow): Promise<void> {
     if (!row.inventory.key) return;
     const identity = sellNowRowIdentity(row);
+    // Проверка может изменить порядок цен и страницу строки, но не выбранный предмет.
+    selectedIdentity = identity;
     const request = ++liveRequest;
     liveLoading = true;
     liveError = "";
@@ -507,13 +512,10 @@
     }
   }
 
-  function changeSort(nextKey: SellNowSortKey): void {
-    if (sortKey === nextKey) {
-      sortDirection = sortDirection === "asc" ? "desc" : "asc";
-    } else {
-      sortKey = nextKey;
-      sortDirection = nextKey === "name" ? "asc" : "desc";
-    }
+  function changeSort(event: Event): void {
+    const value = (event.currentTarget as HTMLSelectElement).value;
+    const option = sortOptions.find(option => `${option.key}:${option.direction}` === value);
+    if (option) { sortKey = option.key; sortDirection = option.direction; }
   }
 
   function sortAria(
@@ -562,7 +564,6 @@
     const savedView = loadSellNowViewPreferences();
     category = savedView.category;
     preset = savedView.preset;
-    equipped = savedView.equipped;
     sortKey = savedView.sortKey;
     sortDirection = savedView.sortDirection;
     viewPreferencesReady = true;
@@ -604,7 +605,7 @@
       </time>
       <InventoryAutoRefresh compact onBusy={(busy) => refreshingInBackground = busy} />
       <details class="inventory-settings" bind:this={reserveMenu}>
-        <summary>{t("Оставлять:", "Keep:")} {view.keepCopies}</summary>
+        <summary>{t("Оставлять себе:", "Keep:")} {view.keepCopies}</summary>
         <div class="reserve-popover">
           <label for="keep-copies">{c.reserve}</label>
           <select id="keep-copies" value={String(view.keepCopies)} disabled={reserveUpdating || scanning || refreshingInBackground} onchange={updateReserve}>
@@ -643,62 +644,46 @@
       <div class="sell-now-layout" class:detail-open={detailOpen}>
         <section class="results-panel sell-results" aria-labelledby="sell-results-heading">
           <h2 id="sell-results-heading" class="sr-only" tabindex="-1">{t("Предметы инвентаря", "Inventory items")}</h2>
-          <div class="inventory-list-tools">
-            <div class="inventory-views" role="group" aria-label={c.view}>
-              <button type="button" aria-pressed={preset === "all"} onclick={() => selectPreset("all")}>{t("Все", "All")} <span>{scopeRows.length.toLocaleString(localeCode($locale))}</span></button>
-              <button type="button" aria-pressed={preset === "sellable"} onclick={() => selectPreset("sellable")}>{t("К продаже", "For sale")} <span>{scopeSummary.candidateRows.toLocaleString(localeCode($locale))}</span></button>
-              <button type="button" aria-pressed={preset === "duplicates"} onclick={() => selectPreset("duplicates")}>{c.duplicates}</button>
-              <details class="inventory-more-views" class:has-selection={extraPresets.some(item => item.value === preset)} bind:this={morePresets}>
-                <summary>{morePresetLabel}</summary>
-                <div>{#each extraPresets as option}<button type="button" aria-pressed={preset === option.value} onclick={() => selectPreset(option.value)}>{option.label}</button>{/each}</div>
-              </details>
-            </div>
-            <div class="list-sort">
-              <label class="sr-only" for="inventory-sort">{t("Сортировка", "Sort by")}</label>
-              <select id="inventory-sort" value={sortKey} onchange={(event) => changeSort(event.currentTarget.value as SellNowSortKey)}>
-                <option value="priority">{c.priority}</option><option value="name">{t("Название", "Name")}</option>
-                <option value="sellable">{t("Количество к продаже", "Sellable quantity")}</option><option value="fair">{c.price}</option>
-                <option value="volume">{c.salesPerDay}</option><option value="trend">{c.priceTrend90}</option>
-              </select>
-              <button type="button" class="secondary" onclick={() => changeSort(sortKey)} aria-label={t("Изменить направление сортировки", "Reverse sort order")}>{sortDirection === "desc" ? "↓" : "↑"}</button>
-            </div>
-          </div>
-          <div class="inventory-searchbar">
-            <label class="inventory-search" for="sell-search">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 5 5" /></svg>
-              <span class="sr-only">{c.search}</span>
-              <input id="sell-search" type="search" bind:value={query} maxlength="80" autocomplete="off" placeholder={t("Найти предмет…", "Find an item…")} />
+          <div class="inventory-filters" role="group" aria-label={c.filters}>
+            <label class="inventory-search-field" for="sell-search">
+              <span>{c.search}</span>
+              <div class="inventory-search">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 5 5" /></svg>
+                <input id="sell-search" type="search" bind:value={query} maxlength="80" autocomplete="off" placeholder={c.searchExample} />
+              </div>
             </label>
-            <label class="sr-only" for="sell-category">{c.category}</label>
-            <select id="sell-category" value={category} onchange={changeCategory}>
-              <option value="all">{c.allCategories}</option>
-              {#each categories as itemCategory}<option value={itemCategory}>{categoryLabels[itemCategory]}</option>{/each}
-            </select>
-            <button class="secondary filter-toggle" type="button" aria-expanded={moreFiltersOpen} aria-controls="inventory-extra-filters" onclick={() => moreFiltersOpen = !moreFiltersOpen}>
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 17h16M9 4v6M15 14v6" /></svg>{t("Фильтры", "Filters")}{equipped !== "all" ? " · 1" : ""}
-            </button>
+            <label for="sell-category">
+              <span>{c.category}</span>
+              <select id="sell-category" value={category} onchange={changeCategory}>
+                <option value="all">{c.allCategories}</option>
+                {#each categories as itemCategory}<option value={itemCategory}>{categoryLabels[itemCategory]}</option>{/each}
+              </select>
+            </label>
+            <label for="sell-filter">
+              <span>{t("Отбор предметов", "Item filter")}</span>
+              <select id="sell-filter" bind:value={preset} aria-describedby={filterHint ? "inventory-filter-hint" : undefined}>
+                {#each filterOptions as option}<option value={option.value}>{option.label}</option>{/each}
+              </select>
+            </label>
+            <label for="inventory-sort">
+              <span>{t("Порядок в списке", "List order")}</span>
+              <select id="inventory-sort" value={sortKey + ":" + sortDirection} onchange={changeSort}>
+                {#each sortOptions as option}<option value={option.key + ":" + option.direction}>{option.label}</option>{/each}
+              </select>
+            </label>
           </div>
-          {#if moreFiltersOpen}
-            <div class="inventory-extra-filters" id="inventory-extra-filters">
-              <label for="sell-equipped">{c.usage}</label>
-              <select id="sell-equipped" bind:value={equipped}><option value="all">{c.allUsage}</option><option value="free">{u.free}</option><option value="equipped">{c.equippedOnly}</option></select>
-            </div>
-          {/if}
-          {#if hasFilters && visibleRows.length}
-            <div class="active-inventory-filters">
-              <span>{t("Найдено:", "Found:")} {visibleRows.length}
-                {#if equipped !== "all"}<button type="button" onclick={() => equipped = "all"} aria-label={t("Сбросить фильтр использования", "Clear equipped filter")}>{equipped === "free" ? u.free : c.equippedOnly} ×</button>{/if}
-              </span>
-              <button type="button" class="text-action" onclick={resetFilters}>{c.reset}</button>
-            </div>
-          {/if}
+          <div class="inventory-result-bar">
+            <span>{t("Найдено", "Found")} <strong>{visibleRows.length.toLocaleString(localeCode($locale))}</strong> {t("из", "of")} {displayRows.length.toLocaleString(localeCode($locale))} {t("позиций", "entries")}</span>
+            {#if canReset}<button type="button" class="text-action" onclick={resetFilters}>{t("Сбросить всё", "Reset all")}</button>{/if}
+          </div>
+          {#if filterHint}<p class="inventory-filter-hint" id="inventory-filter-hint">{filterHint}</p>{/if}
           {#if visibleRows.length}
             <div class="table-wrap" bind:this={listScroll}>
               <table class="sell-table">
                 <caption class="sr-only">{t("Предметы, общее и доступное количество, оценка цены за штуку", "Items, owned and sellable quantities, price estimate per item")}</caption>
                 <thead><tr>
                   <th scope="col" aria-sort={sortAria("name", sortKey, sortDirection)}>{c.item}</th>
-                  <th scope="col">{t("Всего", "Owned")}</th>
+                  <th scope="col" aria-sort={sortAria("owned", sortKey, sortDirection)}>{t("Всего", "Owned")}</th>
                   <th scope="col" aria-sort={sortAria("sellable", sortKey, sortDirection)}>{t("К продаже", "For sale")}</th>
                   <th scope="col" aria-sort={sortAria("fair", sortKey, sortDirection)}>{u.price}</th>
                 </tr></thead>
@@ -720,9 +705,8 @@
                       <td class="numeric inventory-owned" data-label={t("Всего", "Owned")}>{row.inventory.ownedQuantity.toLocaleString(localeCode($locale))}</td>
                       <td class="numeric inventory-available" class:zero={!row.inventory.sellableQuantity} data-label={t("К продаже", "For sale")}>{row.inventory.sellableQuantity.toLocaleString(localeCode($locale))}</td>
                       <td class="numeric inventory-estimate" data-label={u.price}>
-                        <strong>{row.recommendation?.listPrice != null || row.recommendation?.fairPrice != null ? displayPrice(row.recommendation?.listPrice ?? row.recommendation?.fairPrice) : "—"}</strong>
+                        <strong>{inventoryUnitPrice(row) !== null ? displayPrice(inventoryUnitPrice(row)) : "—"}</strong>
                         {#if checkedPrices.has(sellNowRowIdentity(row)) && isCheckedPriceCurrent(checkedPrices.get(sellNowRowIdentity(row))!, quoteNow, quoteTtlSeconds)}<small class="checked-price">✓ {u.checked}</small>{/if}
-                        {#if (preset === "sell_now" || preset === "hold") && row.inventory.sellableQuantity}<small class="inventory-timing">{shortTiming(row)}</small>{/if}
                       </td>
                     </tr>
                   {/each}
@@ -736,7 +720,7 @@
               {/if}
             </nav>
           {:else}
-            <div class="no-results"><span class="empty-symbol" aria-hidden="true">⌕</span><h3>{c.noFiltered}</h3><p>{c.changeFilters}</p><button type="button" class="secondary" onclick={resetFilters}>{c.reset}</button></div>
+            <div class="no-results"><span class="empty-symbol" aria-hidden="true">⌕</span><h3>{c.noFiltered}</h3><p>{t("Измените поиск или выбранные условия выше.", "Change the search or the conditions above.")}</p></div>
           {/if}
         </section>
 
@@ -855,11 +839,11 @@
   .item-mode-switch button[aria-pressed="true"] { background:var(--surface-1); color:var(--text); box-shadow:0 1px 3px #3b251718; }
   .inventory-sync { display:flex; flex-wrap:wrap; align-items:center; gap:.6rem 1rem; font-size:.78rem; }
   .inventory-sync time { color:var(--text-muted); font-size:.73rem; }
-  .refresh-inventory,.filter-toggle { display:flex; gap:.4rem; align-items:center; justify-content:center; white-space:nowrap; }
+  .refresh-inventory { display:flex; gap:.4rem; align-items:center; justify-content:center; white-space:nowrap; }
   svg { width:1rem; height:1rem; fill:none; stroke:currentColor; stroke-width:1.65; stroke-linecap:round; stroke-linejoin:round; flex-shrink:0; }
-  .inventory-settings,.inventory-more-views { position:relative; }
-  .inventory-settings summary,.inventory-more-views summary { cursor:pointer; list-style:none; border-radius:.45rem; }
-  .inventory-settings summary::after,.inventory-more-views summary::after { content:"⌄"; padding-left:.45rem; }
+  .inventory-settings { position:relative; }
+  .inventory-settings summary { cursor:pointer; list-style:none; border-radius:.45rem; }
+  .inventory-settings summary::after { content:"⌄"; padding-left:.45rem; }
   .inventory-settings summary { color:var(--text-muted); padding:.5rem .3rem; }
   .inventory-settings summary:hover { color:var(--text); }
   .reserve-popover { position:absolute; right:0; top:calc(100% + .45rem); z-index:6; width:20rem; max-width:calc(100vw - 2rem); border:1px solid var(--border); border-radius:.7rem; background:var(--surface-1); padding:1rem; box-shadow:0 .65rem 2rem #44271420; }
@@ -870,29 +854,16 @@
   .sell-results,.sell-detail { background:var(--surface-1); border:1px solid var(--border); border-radius:.85rem; box-shadow:0 2px 6px #3b25170a; }
   .sell-results { overflow:visible; min-width:0; }
   .sell-results:only-child { grid-column:1/-1; }
-  .inventory-list-tools { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:.5rem 1rem; padding:.85rem 1rem .5rem; }
-  .inventory-views { display:flex; flex-wrap:wrap; align-items:center; gap:.2rem; min-width:0; }
-  .inventory-views > button,.inventory-more-views summary { border:0; background:transparent; color:var(--text-muted); padding:.45rem .65rem; font-size:.8rem; font-weight:600; box-shadow:none; white-space:nowrap; }
-  .inventory-views > button span { font-size:.72rem; padding-left:.3rem; font-weight:400; }
-  .inventory-views > button[aria-pressed="true"],.inventory-more-views.has-selection summary { background:var(--accent-soft); color:var(--accent-strong); border-radius:.4rem; }
-  .inventory-more-views > div { position:absolute; left:0; top:calc(100% + .4rem); z-index:5; display:grid; min-width:13rem; border:1px solid var(--border); border-radius:.55rem; padding:.3rem; background:var(--surface-1); box-shadow:0 .5rem 1.5rem #44271420; }
-  .inventory-more-views > div button { text-align:left; border:0; background:transparent; color:var(--text); padding:.6rem; white-space:nowrap; box-shadow:none; }
-  .inventory-more-views > div button:hover,.inventory-more-views > div button[aria-pressed="true"] { background:var(--surface-2); }
-  .list-sort { gap:.2rem; }
-  .list-sort select { max-width:12rem; border-color:transparent; background:transparent; font-size:.73rem; padding:.4rem .1rem; }
-  .list-sort button { background:transparent; border-color:transparent; color:var(--text-muted); padding:.35rem .55rem; }
-  .inventory-searchbar { display:flex; align-items:stretch; gap:.6rem; padding:.25rem 1rem .85rem; }
-  .inventory-search { display:flex; align-items:center; gap:.6rem; flex:1; min-width:8rem; border:1px solid var(--border); border-radius:.5rem; padding:0 .7rem; background:var(--surface-2); color:var(--text-muted); }
+  .inventory-filters { display:grid; grid-template-columns:minmax(12rem,1.6fr) repeat(3,minmax(11rem,1fr)); gap:.75rem; padding:1rem 1rem .75rem; }
+  .inventory-filters > label { display:flex; flex-direction:column; gap:.4rem; min-width:0; font-size:.75rem; color:var(--text-muted); font-weight:600; }
+  .inventory-filters select { width:100%; min-width:0; min-height:2.6rem; padding:.45rem .65rem; border:1px solid var(--border); border-radius:.5rem; background:var(--surface-1); color:var(--text); font-size:.82rem; font-weight:400; }
+  .inventory-search { display:flex; align-items:center; gap:.5rem; min-width:0; min-height:2.6rem; border:1px solid var(--border); border-radius:.5rem; padding:0 .65rem; background:var(--surface-1); color:var(--text-muted); }
   .inventory-search:focus-within { border-color:var(--accent); outline:2px solid var(--accent-soft); }
-  .inventory-search input { width:100%; min-width:0; border:0; outline:none; background:transparent; padding:.65rem 0; font-size:.875rem; box-shadow:none; }
+  .inventory-search input { width:100%; min-width:0; border:0; outline:none; background:transparent; padding:.6rem 0; font-size:.82rem; font-weight:400; box-shadow:none; }
   .inventory-search input:focus-visible { outline:none; }
-  .inventory-searchbar > select { width:11rem; min-width:0; border:1px solid var(--border); border-radius:.5rem; padding:.4rem .6rem; font-size:.8rem; }
-  .filter-toggle { padding:.45rem .65rem; font-size:.8rem; }
-  .inventory-extra-filters { display:flex; align-items:center; gap:.6rem; padding:.7rem 1rem; border-top:1px solid var(--border); background:var(--surface-2); font-size:.8rem; }
-  .inventory-extra-filters select { border:1px solid var(--border); border-radius:.4rem; padding:.4rem; max-width:100%; font:inherit; }
-  .active-inventory-filters { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:.35rem; padding:0 1rem .7rem; font-size:.75rem; color:var(--text-muted); }
-  .active-inventory-filters > span { display:flex; flex-wrap:wrap; gap:.5rem; align-items:center; }
-  .active-inventory-filters > span button { border:1px solid var(--border); background:var(--surface-2); color:var(--text-muted); font-size:.72rem; padding:.15rem .4rem; }
+  .inventory-result-bar { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:.5rem; padding:0 1rem .75rem; color:var(--text-muted); font-size:.78rem; min-height:1.7rem; }
+  .inventory-result-bar strong { color:var(--text); }
+  .inventory-filter-hint { font-size:.78rem; line-height:1.5; color:var(--text-muted); background:var(--surface-2); margin:0; padding:.65rem 1rem; border-top:1px solid var(--border); }
   .text-action { display:inline-flex; align-items:center; width:auto; padding:.25rem 0; border:0; background:transparent; color:var(--accent-strong); box-shadow:none; font-size:.78rem; font-weight:600; }
   .text-action:hover:not(:disabled) { background:transparent; text-decoration:underline; }
   .sell-results > .table-wrap { max-height:min(70vh,52rem); overflow:auto; overscroll-behavior:contain; scrollbar-gutter:stable; border-top:1px solid var(--border); }
@@ -907,7 +878,7 @@
   .sell-table td { padding:.55rem 1rem; height:3.75rem; border-color:color-mix(in srgb,var(--border) 55%,transparent); }
   .sell-table tr.selected { background:color-mix(in srgb,var(--accent-soft) 45%,var(--surface-1)); box-shadow:3px 0 0 var(--accent) inset; }
   .item-button { width:100%; display:flex; align-items:center; gap:.7rem; min-width:0; padding:0; }
-  .sell-table .item-button { font-size:.875rem; }
+  .sell-table .item-button { font-size:.875rem; scroll-margin-block-start:3rem; scroll-margin-block-end:1rem; }
   .item-button__copy { min-width:0; flex:1; text-align:left; }
   .item-button__copy > span { line-height:1.35; font-weight:650; }
   .sell-table .item-button__copy small { color:var(--text-muted); margin-top:.2rem; font-size:.72rem; }
@@ -919,7 +890,7 @@
   .inventory-available { font-weight:700; color:var(--text); }
   .inventory-available.zero { color:var(--text-muted); font-weight:400; }
   .inventory-estimate strong { font-size:.9rem; color:var(--text); font-variant-numeric:tabular-nums; }
-  .checked-price,.inventory-timing { display:block; margin-top:.2rem; color:var(--success,#46613d); font-size:.68rem; font-weight:500; }
+  .checked-price { display:block; margin-top:.2rem; color:var(--success,#46613d); font-size:.68rem; font-weight:500; }
   .inventory-pagination { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:.5rem; padding:.7rem 1rem; border-top:1px solid var(--border); font-size:.75rem; color:var(--text-muted); }
   .inventory-pagination > div { display:flex; align-items:center; gap:.7rem; }
   .inventory-pagination button { padding:.35rem .6rem; font-size:.75rem; }
@@ -981,8 +952,7 @@
   .empty-symbol { display:block; color:var(--text-muted); font-size:2.5rem; margin-bottom:.6rem; }
   @media (max-width:90rem) {
     .sell-now-layout { grid-template-columns:minmax(0,1fr) 21rem; gap:.75rem; }
-    .inventory-list-tools { align-items:flex-start; }
-    .list-sort { margin-left:auto; }
+    .inventory-filters { grid-template-columns:repeat(2,minmax(0,1fr)); }
     .sell-table td,.sell-table th { padding-left:.7rem; padding-right:.7rem; }
     .sell-table th:first-child { width:46%; }.sell-table th:nth-child(2) { width:13%; }.sell-table th:nth-child(3) { width:17%; }.sell-table th:nth-child(4) { width:24%; }
     .inventory-sync { gap:.5rem .75rem; }
@@ -994,8 +964,8 @@
     .inventory-back { display:inline-flex; }
   }
   @media (max-width:46rem) {
-    .inventory-searchbar { flex-wrap:wrap; }.inventory-search { flex-basis:100%; }
-    .inventory-searchbar > select { flex:1; }.inventory-sync time { flex-basis:100%; }
+    .inventory-filters { grid-template-columns:minmax(0,1fr); }
+    .inventory-sync time { flex-basis:100%; }
     .sell-table thead { display:table-header-group; }.sell-table tbody tr { display:table-row; }
     .sell-table td { display:table-cell; }.sell-table td::before { display:none; }
     .sell-table th:first-child { width:46%; }.sell-table th:nth-child(2) { width:12%; }.sell-table th:nth-child(3) { width:17%; }.sell-table th:nth-child(4) { width:25%; }

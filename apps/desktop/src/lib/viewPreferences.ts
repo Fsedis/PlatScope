@@ -1,7 +1,6 @@
 import type { InventoryCategoryFilter } from "./inventory";
 import type { MarketSortKey, PriceFilter, SortDirection } from "./market";
 import type {
-  EquippedFilter,
   SellNowPreset,
   SellNowSortDirection,
   SellNowSortKey,
@@ -21,7 +20,6 @@ export interface MarketViewPreferences {
 export interface SellNowViewPreferences {
   category: InventoryCategoryFilter;
   preset: SellNowPreset;
-  equipped: EquippedFilter;
   sortKey: SellNowSortKey;
   sortDirection: SellNowSortDirection;
 }
@@ -47,9 +45,8 @@ export const DEFAULT_MARKET_VIEW: MarketViewPreferences = {
 export const DEFAULT_SELL_NOW_VIEW: SellNowViewPreferences = {
   category: "all",
   preset: "all",
-  equipped: "all",
-  sortKey: "priority",
-  sortDirection: "desc",
+  sortKey: "name",
+  sortDirection: "asc",
 };
 
 export const DEFAULT_INSIGHTS_VIEW: InsightsViewPreferences = {
@@ -57,7 +54,8 @@ export const DEFAULT_INSIGHTS_VIEW: InsightsViewPreferences = {
 };
 
 const MARKET_KEY = "platscope.market-view.v1";
-const SELL_NOW_KEY = "platscope.sell-now-view.v1";
+// Старые составные фильтры не переносим: в новом экране нет скрытого отбора.
+const SELL_NOW_KEY = "platscope.sell-now-view.v2";
 const INSIGHTS_KEY = "platscope.insights-view.v1";
 
 const priceFilters = ["all", "priced", "unpriced"] as const;
@@ -65,22 +63,19 @@ const marketSortKeys = ["name", "fair", "volume"] as const;
 const sortDirections = ["asc", "desc"] as const;
 const sellNowPresets = [
   "sellable",
-  "sell_now",
-  "hold",
+  "unavailable",
+  "equipped",
   "all",
   "duplicates",
   "unpriced",
   "attention",
 ] as const;
 const sellNowSortKeys = [
-  "priority",
   "name",
+  "owned",
   "sellable",
   "fair",
-  "volume",
-  "trend",
 ] as const;
-const equippedFilters = ["all", "free", "equipped"] as const;
 const insightsViewModes = [
   "overview",
   "resources",
@@ -116,16 +111,12 @@ export function loadSellNowViewPreferences(
   storage: ViewPreferenceStorage | null = defaultStorage(),
 ): SellNowViewPreferences {
   const value = readRecord(SELL_NOW_KEY, storage);
+  const sortKey = allowed(value?.sortKey, sellNowSortKeys, DEFAULT_SELL_NOW_VIEW.sortKey);
   return {
     category: validCategory(value?.category),
     preset: allowed(value?.preset, sellNowPresets, DEFAULT_SELL_NOW_VIEW.preset),
-    equipped: allowed(value?.equipped, equippedFilters, DEFAULT_SELL_NOW_VIEW.equipped),
-    sortKey: allowed(value?.sortKey, sellNowSortKeys, DEFAULT_SELL_NOW_VIEW.sortKey),
-    sortDirection: allowed(
-      value?.sortDirection,
-      sortDirections,
-      DEFAULT_SELL_NOW_VIEW.sortDirection,
-    ),
+    sortKey,
+    sortDirection: sortKey === "fair" ? allowed(value?.sortDirection, sortDirections, "desc") : sortKey === "name" ? "asc" : "desc",
   };
 }
 

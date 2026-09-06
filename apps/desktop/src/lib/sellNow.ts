@@ -69,21 +69,19 @@ export interface LiveSellNowResult {
 
 export type SellNowPreset =
   | "sellable"
-  | "sell_now"
-  | "hold"
+  | "unavailable"
+  | "equipped"
   | "all"
   | "duplicates"
   | "unpriced"
   | "attention";
-export type SellNowSortKey = "priority" | "name" | "sellable" | "fair" | "volume" | "trend";
+export type SellNowSortKey = "priority" | "name" | "owned" | "sellable" | "fair" | "volume" | "trend";
 export type SellNowSortDirection = "asc" | "desc";
-export type EquippedFilter = "all" | "free" | "equipped";
 
 export interface SellNowFilters {
   query: string;
   category: InventoryCategoryFilter;
   preset: SellNowPreset;
-  equipped: EquippedFilter;
   sortKey: SellNowSortKey;
   sortDirection: SellNowSortDirection;
 }
@@ -95,8 +93,7 @@ export function filterAndSortSellNowRows(
   const words = normalizeInventorySearch(filters.query).split(" ").filter(Boolean);
   return rows
     .filter((row) => {
-      const fair = row.recommendation?.fairPrice ?? null;
-      const timing = row.trend?.timing ?? null;
+      const price = inventoryUnitPrice(row);
       const searchable = normalizeInventorySearch(`${row.inventory.displayName} ${row.inventory.key?.slug ?? ""}`);
       const matchesQuery = words.every(word => searchable.includes(word));
       const matchesCategory =
@@ -104,30 +101,34 @@ export function filterAndSortSellNowRows(
         inventoryCategory(row.inventory) === filters.category;
       const matchesPreset =
         filters.preset === "all" ||
-        (filters.preset === "sellable" && row.inventory.sellableQuantity > 0) ||
-        (filters.preset === "sell_now" &&
-          row.inventory.sellableQuantity > 0 &&
-          fair !== null &&
-          (timing === "sell" || timing === "peak")) ||
-        (filters.preset === "hold" &&
-          row.inventory.sellableQuantity > 0 &&
-          timing === "hold") ||
+        (filters.preset === "sellable" && hasSellableCopies(row)) ||
+        (filters.preset === "unavailable" && !hasSellableCopies(row)) ||
+        (filters.preset === "equipped" && row.inventory.equippedQuantity > 0) ||
         (filters.preset === "duplicates" && row.inventory.ownedQuantity > 1) ||
-        (filters.preset === "unpriced" && fair === null) ||
+        (filters.preset === "unpriced" && price === null) ||
         (filters.preset === "attention" &&
           (row.inventory.resolution !== "resolved" || row.inventory.unknownQuantity > 0));
-      const matchesEquipped =
-        filters.equipped === "all" ||
-        (filters.equipped === "free" && row.inventory.ownedQuantity > row.inventory.equippedQuantity) ||
-        (filters.equipped === "equipped" && row.inventory.equippedQuantity > 0);
-      return matchesQuery && matchesCategory && matchesPreset && matchesEquipped;
+      return matchesQuery && matchesCategory && matchesPreset;
     })
     .sort((left, right) => {
       const missingOrder = nullableSortOrder(left, right, filters.sortKey);
       if (missingOrder !== 0) return missingOrder;
       const comparison = compareRows(left, right, filters.sortKey);
-      return filters.sortDirection === "asc" ? comparison : -comparison;
+      return (filters.sortDirection === "asc" ? comparison : -comparison)
+        || left.inventory.displayName.localeCompare(right.inventory.displayName, "ru", { numeric: true })
+        || sellNowRowIdentity(left).localeCompare(sellNowRowIdentity(right), "en", { numeric: true });
     });
+}
+
+/** Одна оценка для таблицы, сортировки и отбора «без цены». */
+export function inventoryUnitPrice(row: SellNowRow): number | null {
+  const price = row.recommendation?.listPrice ?? row.recommendation?.fairPrice;
+  return price != null && Number.isFinite(price) && price > 0 ? price : null;
+}
+
+export function hasSellableCopies(row: SellNowRow): boolean {
+  return row.inventory.sellableQuantity > 0 && row.inventory.resolution === "resolved"
+    && row.inventory.key !== null && row.inventory.itemId !== null;
 }
 
 function normalizeInventorySearch(value: string): string {
@@ -185,9 +186,10 @@ export function sellNowRowDomKey(row: SellNowRow, position: number): string {
 export function resolveSellNowSelection(
   visibleRows: SellNowRow[],
   selectedIdentity: string,
+  pageRows: SellNowRow[] = visibleRows,
 ): SellNowRow | null {
   return visibleRows.find((row) => sellNowRowIdentity(row) === selectedIdentity)
-    ?? visibleRows[0]
+    ?? pageRows[0]
     ?? null;
 }
 
@@ -257,11 +259,13 @@ function compareRows(left: SellNowRow, right: SellNowRow, key: SellNowSortKey): 
     case "priority":
       return left.priority.score - right.priority.score;
     case "name":
-      return left.inventory.displayName.localeCompare(right.inventory.displayName, "ru");
+      return left.inventory.displayName.localeCompare(right.inventory.displayName, "ru", { numeric: true });
+    case "owned":
+      return left.inventory.ownedQuantity - right.inventory.ownedQuantity;
     case "sellable":
       return left.inventory.sellableQuantity - right.inventory.sellableQuantity;
     case "fair":
-      return compareNullable(left.recommendation?.fairPrice, right.recommendation?.fairPrice);
+      return compareNullable(inventoryUnitPrice(left), inventoryUnitPrice(right));
     case "volume":
       return compareNullable(left.recommendation?.closedVolume, right.recommendation?.closedVolume);
     case "trend":
@@ -282,7 +286,7 @@ function nullableSortOrder(
 ): number {
   const value = (row: SellNowRow): number | null | undefined => {
     switch (key) {
-      case "fair": return row.recommendation?.fairPrice;
+      case "fair": return inventoryUnitPrice(row);
       case "volume": return row.recommendation?.closedVolume;
       case "trend": return row.trend?.change90d;
       default: return 0;

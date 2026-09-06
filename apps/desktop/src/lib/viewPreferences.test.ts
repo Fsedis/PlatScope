@@ -43,8 +43,7 @@ describe("saved working views", () => {
     }, storage)).toBe(true);
     expect(saveSellNowViewPreferences({
       category: "arcane_enhancement",
-      preset: "sell_now",
-      equipped: "all",
+      preset: "sellable",
       sortKey: "fair",
       sortDirection: "desc",
     }, storage)).toBe(true);
@@ -55,10 +54,32 @@ describe("saved working views", () => {
       sortKey: "name",
       sortDirection: "asc",
     });
-    expect(loadSellNowViewPreferences(storage).preset).toBe("sell_now");
+    expect(loadSellNowViewPreferences(storage).preset).toBe("sellable");
     expect(loadSellNowViewPreferences(storage).category).toBe("arcane_enhancement");
     expect(loadInsightsViewPreferences(storage)).toEqual({ mode: "complete_sets" });
     expect(storage.values.size).toBe(3);
+  });
+
+  it("does not restore hidden intersecting filters from the old inventory screen", () => {
+    const storage = new MemoryStorage();
+    storage.values.set("platscope.sell-now-view.v1", JSON.stringify({ version: 1, category: "mod", preset: "hold", equipped: "free", sortKey: "priority", sortDirection: "desc" }));
+    expect(loadSellNowViewPreferences(storage)).toEqual(DEFAULT_SELL_NOW_VIEW);
+    expect(DEFAULT_SELL_NOW_VIEW).toEqual({ category: "all", preset: "all", sortKey: "name", sortDirection: "asc" });
+    saveSellNowViewPreferences({ ...DEFAULT_SELL_NOW_VIEW, preset: "duplicates" }, storage);
+    expect(loadSellNowViewPreferences(storage).preset).toBe("duplicates");
+    expect(storage.getItem("platscope.sell-now-view.v2")).not.toContain("equipped");
+  });
+
+  it("normalizes saved ordering to a choice actually present in the inventory UI", () => {
+    const storage = new MemoryStorage();
+    for (const sortKey of ["priority", "trend", "missing", "name"]) {
+      storage.values.set("platscope.sell-now-view.v2", JSON.stringify({ version: 1, sortKey, sortDirection: "desc" }));
+      expect(loadSellNowViewPreferences(storage)).toMatchObject({ sortKey: "name", sortDirection: "asc" });
+    }
+    for (const sortKey of ["owned", "sellable"]) {
+      storage.values.set("platscope.sell-now-view.v2", JSON.stringify({ version: 1, sortKey, sortDirection: "asc" }));
+      expect(loadSellNowViewPreferences(storage)).toMatchObject({ sortKey, sortDirection: "desc" });
+    }
   });
 
   it("fails closed for corrupt, stale, and out-of-domain values", () => {
@@ -67,14 +88,14 @@ describe("saved working views", () => {
     expect(loadMarketViewPreferences(corrupt)).toEqual(DEFAULT_MARKET_VIEW);
 
     const stale = new MemoryStorage();
-    stale.values.set("platscope.sell-now-view.v1", JSON.stringify({
+    stale.values.set("platscope.sell-now-view.v2", JSON.stringify({
       version: 0,
       preset: "sell_now",
     }));
     expect(loadSellNowViewPreferences(stale)).toEqual(DEFAULT_SELL_NOW_VIEW);
 
     const invalid = new MemoryStorage();
-    invalid.values.set("platscope.sell-now-view.v1", JSON.stringify({
+    invalid.values.set("platscope.sell-now-view.v2", JSON.stringify({
       version: 1,
       category: "<script>",
       preset: "everything",

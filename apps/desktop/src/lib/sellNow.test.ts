@@ -13,6 +13,7 @@ import {
   isCheckedPriceCurrent,
   withCheckedPrice,
   summarizeInventoryRows,
+  inventoryUnitPrice,
   type LiveSellNowResult,
   type SellNowFilters,
   type SellNowRow,
@@ -22,7 +23,6 @@ const filters: SellNowFilters = {
   query: "",
   category: "all",
   preset: "all",
-  equipped: "all",
   sortKey: "priority",
   sortDirection: "desc",
 };
@@ -205,12 +205,12 @@ describe("sell now presentation", () => {
     }
   });
 
-  it("sell now preset requires priced SELL or PEAK timing", () => {
+  it("sellable filter does not hide items because of a trend or missing price", () => {
     const result = filterAndSortSellNowRows(
-      [row("hold", 40, 20, "hold"), row("sell", 60, 20, "sell")],
-      { ...filters, preset: "sell_now" },
+      [row("hold", 40, 20, "hold"), row("sell", 60, 20, "sell"), row("unpriced", 0, null, null)],
+      { ...filters, preset: "sellable" },
     );
-    expect(result.map((item) => item.inventory.canonicalGameId)).toEqual(["sell"]);
+    expect(result.map((item) => item.inventory.canonicalGameId)).toEqual(["sell", "hold", "unpriced"]);
   });
 
   it("uses one row set for selling and full inventory views", () => {
@@ -235,20 +235,21 @@ describe("sell now presentation", () => {
     })).toEqual([attention]);
   });
 
-  it("filters equipped rows independently from sell recommendations", () => {
+  it("has one equipment filter, while sellable includes spare equipped mod copies", () => {
     const free = row("free", 30, 10, "neutral");
     const equipped = row("equipped", 30, 10, "neutral");
     equipped.inventory.equippedQuantity = 1;
     const fullyEquipped = row("fully_equipped", 30, 10, "neutral");
     fullyEquipped.inventory.equippedQuantity = fullyEquipped.inventory.ownedQuantity;
+    fullyEquipped.inventory.sellableQuantity = 0;
 
     expect(filterAndSortSellNowRows([free, equipped, fullyEquipped], {
       ...filters,
-      equipped: "free",
-    })).toEqual([free, equipped]);
+      preset: "sellable",
+    })).toEqual([equipped, free]);
     expect(filterAndSortSellNowRows([free, equipped], {
       ...filters,
-      equipped: "equipped",
+      preset: "equipped",
     })).toEqual([equipped]);
   });
 
@@ -262,6 +263,65 @@ describe("sell now presentation", () => {
     }
     expect(filterAndSortSellNowRows([flow, blueprint], { ...filters, query: "чертеж акбронко" })).toEqual([blueprint]);
     expect(filterAndSortSellNowRows([flow, blueprint], { ...filters, query: "поток акбронко" })).toEqual([]);
+  });
+
+  it("sorts by exactly the price shown and treats a live-only estimate as priced", () => {
+    const lowFair = row("low_fair", 1, 5, null);
+    lowFair.recommendation!.listPrice = 40;
+    const highFair = row("high_fair", 1, 30, null);
+    highFair.recommendation!.listPrice = 10;
+    const liveOnly = row("live_only", 1, null, null);
+    liveOnly.recommendation!.listPrice = 20;
+    const missing = row("missing", 1, null, null);
+    const rows = [missing, lowFair, highFair, liveOnly];
+    expect(inventoryUnitPrice(liveOnly)).toBe(20);
+    expect(filterAndSortSellNowRows(rows, { ...filters, sortKey: "fair" })).toEqual([lowFair, liveOnly, highFair, missing]);
+    expect(filterAndSortSellNowRows(rows, { ...filters, sortKey: "fair", sortDirection: "asc" })).toEqual([highFair, liveOnly, lowFair, missing]);
+    expect(filterAndSortSellNowRows(rows, { ...filters, preset: "unpriced" })).toEqual([missing]);
+  });
+
+  it("separates duplicates from sellability and keeps the reserve intact", () => {
+    const reservedPair = row("pair", 1, 4, null);
+    reservedPair.inventory.sellableQuantity = 0;
+    const single = row("single", 1, 4, null);
+    single.inventory.ownedQuantity = 1;
+    const unmatched = row("unmatched", 1, 4, null);
+    unmatched.inventory.resolution = "exact_variant_unavailable";
+    const rows = [single, reservedPair, unmatched];
+    expect(filterAndSortSellNowRows(rows, { ...filters, preset: "duplicates" })).toEqual([reservedPair, unmatched]);
+    expect(filterAndSortSellNowRows(rows, { ...filters, preset: "sellable" })).toEqual([single]);
+    expect(filterAndSortSellNowRows(rows, { ...filters, preset: "unavailable" })).toEqual([reservedPair, unmatched]);
+    expect(reservedPair.inventory.sellableQuantity).toBe(0);
+  });
+
+  it("combines only the visible search, type and single filter", () => {
+    const mod = row("primed_flow", 1, 4, null);
+    mod.inventory.tags = ["mod"];
+    mod.inventory.displayName = "Поток Прайм";
+    const set = row("nyx_prime_set", 1, 4, null);
+    set.inventory.tags = ["warframe", "set"];
+    expect(filterAndSortSellNowRows([mod, set], { ...filters, query: "primed flow", category: "mod", preset: "sellable" })).toEqual([mod]);
+    expect(filterAndSortSellNowRows([mod, set], { ...filters, query: "primed flow", category: "warframe", preset: "all" })).toEqual([]);
+    expect(filterAndSortSellNowRows([mod, set], { ...filters, sortKey: "name", sortDirection: "asc" })).toHaveLength(2);
+  });
+
+  it("orders equal values consistently regardless of incoming snapshot order", () => {
+    const second = row("same", 1, 4, null);
+    second.inventory.key!.rank = 10;
+    const first = row("same", 1, 4, null);
+    first.inventory.key!.rank = 2;
+    for (const sortDirection of ["asc", "desc"] as const) {
+      expect(filterAndSortSellNowRows([second, first], { ...filters, sortKey: "fair", sortDirection })).toEqual([first, second]);
+      expect(filterAndSortSellNowRows([first, second], { ...filters, sortKey: "fair", sortDirection })).toEqual([first, second]);
+    }
+  });
+
+  it("keeps the checked item selected if a price change moves it off the current page", () => {
+    const checked = row("checked", 1, 100, null);
+    const first = row("first", 1, 2, null);
+    expect(resolveSellNowSelection([first, checked], sellNowRowIdentity(checked), [first])).toBe(checked);
+    expect(resolveSellNowSelection([first, checked], "", [checked])).toBe(checked);
+    expect(resolveSellNowSelection([first], sellNowRowIdentity(checked), [first])).toBe(first);
   });
 
   it("paginates large inventories and clamps after filtering", () => {
