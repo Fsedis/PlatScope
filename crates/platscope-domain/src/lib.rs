@@ -57,6 +57,14 @@ pub struct LiveOrder {
     pub quantity: u32,
     pub per_trade: u32,
     pub user_status: UserStatus,
+    #[serde(default)]
+    pub order_id: Option<String>,
+    #[serde(default)]
+    pub user_ingame_name: Option<String>,
+    #[serde(default)]
+    pub user_slug: Option<String>,
+    #[serde(default)]
+    pub user_reputation: Option<i32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

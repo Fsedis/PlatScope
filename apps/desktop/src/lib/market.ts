@@ -96,6 +96,7 @@ export interface PriceRecommendation {
 export interface MarketSearchRow {
   itemId: string;
   displayName: string;
+  displayNameEn?: string;
   imageUrl?: string | null;
   itemKind: MarketItemKind;
   masteryRequirement: number | null;
@@ -127,6 +128,10 @@ export interface LiveOrderView {
   quantity: number;
   perTrade: number;
   userStatus: LiveUserStatus;
+  orderId?: string | null;
+  userIngameName?: string | null;
+  userSlug?: string | null;
+  userReputation?: number | null;
 }
 
 export interface LivePricingResult {

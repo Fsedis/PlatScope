@@ -879,6 +879,113 @@ impl Database {
         Ok(points)
     }
 
+    /// Читает дни архива и версии их схем в заданном календарном окне.
+    /// Наличие снимка не означает наличие данных каждого отдельного варианта.
+    ///
+    /// # Errors
+    ///
+    /// Возвращает [`StorageError`] при ошибке SQLite или некорректной дате/версии.
+    pub fn history_dates_with_schema(
+        &self,
+        as_of: NaiveDate,
+        days: u16,
+    ) -> Result<Vec<(NaiveDate, u32)>, StorageError> {
+        if days == 0 {
+            return Ok(Vec::new());
+        }
+        let first_date = as_of - chrono::Duration::days(i64::from(days - 1));
+        let mut statement = self.connection.prepare_cached(
+            "SELECT source_date, schema_version FROM market_history_snapshots
+             WHERE source_date BETWEEN ?1 AND ?2 ORDER BY source_date ASC",
+        )?;
+        let mut rows = statement.query(params![first_date.to_string(), as_of.to_string()])?;
+        let mut dates = Vec::new();
+        while let Some(row) = rows.next()? {
+            let schema = u32::try_from(row.get::<_, i64>(1)?)
+                .map_err(|_| StorageError::Invariant("invalid history schema version".into()))?;
+            dates.push((row.get::<_, String>(0)?.parse()?, schema));
+        }
+        Ok(dates)
+    }
+
+    /// Читает до 500 точных вариантов одним запросом, без сетевых обращений.
+    /// Для regular допускается старое NULL-имя подтипа, только если точной строки
+    /// за этот день нет. Rank 0, заряды и звёзды не подменяются отсутствующим значением.
+    ///
+    /// # Errors
+    ///
+    /// Возвращает [`StorageError`] при превышении лимита или ошибке SQLite/JSON/даты.
+    pub fn market_history_batch(
+        &self,
+        keys: &[MarketVariantKey],
+        days: u16,
+        as_of: NaiveDate,
+        charges_schema_version: u32,
+    ) -> Result<Vec<Vec<MarketHistoryPoint>>, StorageError> {
+        if keys.len() > 500 {
+            return Err(StorageError::Invariant(
+                "history batch exceeds 500 variants".into(),
+            ));
+        }
+        let mut result = vec![Vec::new(); keys.len()];
+        if keys.is_empty() || days == 0 {
+            return Ok(result);
+        }
+        let first_date = as_of - chrono::Duration::days(i64::from(days - 1));
+        let mut statement = self.connection.prepare_cached(
+            "WITH requested AS (
+                SELECT CAST(key AS INTEGER) AS request_index,
+                       json_extract(value, '$.slug') AS slug,
+                       json_extract(value, '$.platform') AS platform,
+                       json_extract(value, '$.rank') AS rank,
+                       json_extract(value, '$.charges') AS charges,
+                       json_extract(value, '$.subtype') AS subtype,
+                       json_extract(value, '$.amberStars') AS amber_stars,
+                       json_extract(value, '$.cyanStars') AS cyan_stars
+                FROM json_each(?1)
+             ), matching AS (
+                SELECT r.request_index, h.source_date, h.closed_median, h.closed_volume,
+                       h.sell_median, h.buy_median,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY r.request_index, h.source_date
+                           ORDER BY (h.subtype IS r.subtype) DESC
+                       ) AS preference
+                FROM requested r
+                JOIN market_history h
+                  ON h.item_slug = r.slug AND h.platform = r.platform
+                 AND h.rank IS r.rank AND h.charges IS r.charges
+                 AND h.amber_stars IS r.amber_stars AND h.cyan_stars IS r.cyan_stars
+                 AND (h.subtype IS r.subtype OR (r.subtype = 'regular' AND h.subtype IS NULL))
+                JOIN market_history_snapshots s ON s.id = h.snapshot_id
+                WHERE h.source_date BETWEEN ?2 AND ?3
+                  AND s.schema_version >= CASE WHEN r.charges IS NOT NULL THEN ?4 ELSE 1 END
+             )
+             SELECT request_index, source_date, closed_median, closed_volume, sell_median, buy_median
+             FROM matching WHERE preference = 1 ORDER BY request_index ASC, source_date ASC",
+        )?;
+        let mut rows = statement.query(params![
+            serde_json::to_string(keys)?,
+            first_date.to_string(),
+            as_of.to_string(),
+            i64::from(charges_schema_version),
+        ])?;
+        while let Some(row) = rows.next()? {
+            let index = usize::try_from(row.get::<_, i64>(0)?)
+                .map_err(|_| StorageError::Invariant("invalid history batch index".into()))?;
+            let points = result.get_mut(index).ok_or_else(|| {
+                StorageError::Invariant("history batch index out of range".into())
+            })?;
+            points.push(MarketHistoryPoint {
+                source_date: row.get::<_, String>(1)?.parse()?,
+                closed_median: row.get(2)?,
+                closed_volume: row.get(3)?,
+                sell_median: row.get(4)?,
+                buy_median: row.get(5)?,
+            });
+        }
+        Ok(result)
+    }
+
     /// Читает metadata текущего LKG snapshot без загрузки price rows.
     ///
     /// # Errors
@@ -2191,6 +2298,149 @@ mod tests {
                 raw_json: "{}".into(),
             }],
         }
+    }
+
+    #[test]
+    fn history_batch_keeps_exact_variants_and_input_order() {
+        let mut database = Database::open_in_memory().expect("database opens");
+        database
+            .promote_catalog(&fixture_catalog())
+            .expect("catalog");
+        let mut snapshot = fixture_snapshot("test_item", "batch");
+        snapshot.metadata.schema_version = 2;
+        let plain = snapshot.records[0].key.clone();
+        let rank_zero = MarketVariantKey::new("test_item", Platform::Pc, Some(0), None::<String>)
+            .expect("rank zero");
+        let charged = rank_zero.clone().with_charges(Some(2));
+        let other_charge = rank_zero.clone().with_charges(Some(3));
+        let stars = charged.clone().with_stars(Some(2), Some(1));
+        let mut regular = charged.clone();
+        regular.subtype = Some("regular".into());
+        let keys = vec![plain, rank_zero, charged, other_charge, stars, regular];
+        let template = snapshot.records[0].clone();
+        snapshot.records = keys
+            .iter()
+            .enumerate()
+            .map(|(index, key)| {
+                let mut record = template.clone();
+                record.key = key.clone();
+                record.volume = f64::from(u32::try_from(index).expect("small index") + 1);
+                record
+            })
+            .collect();
+        snapshot.metadata.record_count =
+            u64::try_from(snapshot.records.len()).expect("small count");
+        database
+            .promote_history_snapshot(&snapshot)
+            .expect("history");
+        let mut request = keys.clone();
+        request.reverse();
+        let points = database
+            .market_history_batch(&request, 14, snapshot.metadata.source_date, 2)
+            .expect("batch");
+        assert_eq!(points.len(), keys.len());
+        for (index, series) in points.iter().enumerate() {
+            assert_eq!(series.len(), 1);
+            let expected = f64::from(u32::try_from(keys.len() - index).expect("small count"));
+            assert!((series[0].closed_volume - expected).abs() < f64::EPSILON);
+        }
+        let missing = keys[0].clone().with_charges(Some(0));
+        let absent = database
+            .market_history_batch(&[missing], 14, snapshot.metadata.source_date, 2)
+            .expect("missing batch");
+        assert!(absent[0].is_empty());
+    }
+
+    #[test]
+    fn history_batch_regular_fallback_is_per_day_and_prefers_exact_record() {
+        let mut database = Database::open_in_memory().expect("database opens");
+        database
+            .promote_catalog(&fixture_catalog())
+            .expect("catalog");
+        let mut snapshot = fixture_snapshot("test_item", "legacy");
+        database
+            .promote_history_snapshot(&snapshot)
+            .expect("legacy day");
+        let mut regular_key = snapshot.records[0].key.clone();
+        regular_key.subtype = Some("regular".into());
+        let mut exact = snapshot.records[0].clone();
+        exact.key = regular_key.clone();
+        exact.median = Some(33.0);
+        snapshot.records.push(exact);
+        snapshot.metadata.record_count = 2;
+        snapshot.metadata.source_date += chrono::Duration::days(1);
+        for record in &mut snapshot.records {
+            record.observed_at += chrono::Duration::days(1);
+        }
+        database
+            .promote_history_snapshot(&snapshot)
+            .expect("mixed day");
+        let points = database
+            .market_history_batch(&[regular_key], 14, snapshot.metadata.source_date, 2)
+            .expect("batch");
+        assert_eq!(points[0].len(), 2);
+        assert_eq!(points[0][0].closed_median, Some(10.0));
+        assert_eq!(points[0][1].closed_median, Some(33.0));
+    }
+
+    #[test]
+    fn history_batch_respects_charge_schema_calendar_bounds_and_batch_limit() {
+        let mut database = Database::open_in_memory().expect("database opens");
+        database
+            .promote_catalog(&fixture_catalog())
+            .expect("catalog");
+        let mut snapshot = fixture_snapshot("test_item", "old-schema");
+        snapshot.records[0].key.charges = Some(2);
+        let key = snapshot.records[0].key.clone();
+        database
+            .promote_history_snapshot(&snapshot)
+            .expect("old day");
+        snapshot.metadata.schema_version = 2;
+        snapshot.metadata.source_date += chrono::Duration::days(1);
+        snapshot.records[0].observed_at += chrono::Duration::days(1);
+        database
+            .promote_history_snapshot(&snapshot)
+            .expect("new day");
+        let as_of = snapshot.metadata.source_date;
+        let dates = database
+            .history_dates_with_schema(as_of, 14)
+            .expect("dates");
+        assert_eq!(dates.len(), 2);
+        assert_eq!(dates[0].1, 1);
+        assert_eq!(dates[1].1, 2);
+        let points = database
+            .market_history_batch(std::slice::from_ref(&key), 14, as_of, 2)
+            .expect("batch");
+        assert_eq!(points[0].len(), 1);
+        assert_eq!(points[0][0].source_date, as_of);
+        let old_window = database
+            .market_history_batch(
+                std::slice::from_ref(&key),
+                14,
+                as_of - chrono::Duration::days(1),
+                2,
+            )
+            .expect("older window");
+        assert!(old_window[0].is_empty());
+        let expired = database
+            .market_history_batch(
+                std::slice::from_ref(&key),
+                14,
+                as_of + chrono::Duration::days(14),
+                2,
+            )
+            .expect("expired window");
+        assert!(expired[0].is_empty());
+        let maximum = database
+            .market_history_batch(&vec![key.clone(); 500], 14, as_of, 2)
+            .expect("500 variants");
+        assert_eq!(maximum.len(), 500);
+        assert!(maximum.iter().all(|series| series.len() == 1));
+        assert!(
+            database
+                .market_history_batch(&vec![key; 501], 14, as_of, 2)
+                .is_err()
+        );
     }
 
     #[test]

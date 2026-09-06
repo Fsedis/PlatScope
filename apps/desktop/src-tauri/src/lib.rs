@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 
 mod inventory_refresh;
+mod market_account;
+mod market_profiles;
 mod trade_log;
 
 use std::collections::{HashMap, HashSet};
@@ -601,6 +603,15 @@ fn market_history(
         .map_err(|error| error.to_string())
 }
 
+#[tauri::command(async)]
+#[allow(clippy::needless_pass_by_value)] // Tauri deserializes command values by ownership.
+fn market_history_batch(
+    keys: Vec<MarketVariantKey>,
+    state: State<'_, AppState>,
+) -> Result<platscope_core::MarketAnalyticsBatch, String> {
+    HistoryService::view_batch(&state.database, &keys).map_err(|error| error.to_string())
+}
+
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)] // Tauri command extractor owns State.
 async fn bootstrap_history(state: State<'_, AppState>) -> Result<HistoryBootstrapOutcome, String> {
@@ -1170,10 +1181,12 @@ async fn account_create_listing(
 async fn account_update_listing(
     id: String,
     input: UpdateListingInput,
+    expected_order: Option<AccountOrder>,
     confirmed: bool,
     state: State<'_, AppState>,
 ) -> Result<AccountOrder, String> {
     input.validate().map_err(|error| error.to_string())?;
+    let _trade_guard = state.trade_reconciliation_lock.lock().await;
     let account = state
         .account_service
         .view()
@@ -1212,7 +1225,12 @@ async fn account_update_listing(
     }
     let order = state
         .account_service
-        .update_listing(&id, &input, confirmed)
+        .update_listing_if_unchanged(
+            &id,
+            &input,
+            expected_order.as_ref().or(Some(current)),
+            confirmed,
+        )
         .await
         .map_err(|error| error.to_string())?;
     tracing::info!(
@@ -1226,12 +1244,14 @@ async fn account_update_listing(
 #[allow(clippy::needless_pass_by_value)] // Tauri deserializes command values by ownership.
 async fn account_delete_listing(
     id: String,
+    expected_order: Option<AccountOrder>,
     confirmed: bool,
     state: State<'_, AppState>,
 ) -> Result<AccountOrder, String> {
+    let _trade_guard = state.trade_reconciliation_lock.lock().await;
     let order = state
         .account_service
-        .delete_listing(&id, confirmed)
+        .delete_listing_if_unchanged(&id, expected_order.as_ref(), confirmed)
         .await
         .map_err(|error| error.to_string())?;
     tracing::info!(
@@ -2354,6 +2374,7 @@ fn reward_market_row(
         let details = catalog.get(slug);
         MarketSearchRow {
             item_id: item_id.to_owned(),
+            display_name_en: String::new(),
             display_name: fallback_name
                 .map(str::to_owned)
                 .or_else(|| details.map(|(name, _)| name.clone()))
@@ -3957,6 +3978,10 @@ pub fn run() {
             world_activity,
             open_market_items,
             account_status,
+            market_account::account_set_orders_visibility,
+            market_profiles::open_trade_partner_profile,
+            market_profiles::open_market_user_profile,
+            market_profiles::market_trade_events,
             account_connect,
             account_disconnect,
             account_create_listing,
@@ -3975,6 +4000,7 @@ pub fn run() {
             price_current_variant,
             live_price_current_variant,
             market_history,
+            market_history_batch,
             bootstrap_history,
             scan_read_only_inventory,
             inventory_refresh::inventory_refresh_status,

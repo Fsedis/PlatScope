@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+mod account_market;
+
 mod mastery;
 pub use mastery::{MasteryService, MasteryView};
 mod world_activity;
@@ -578,6 +580,24 @@ pub struct MarketHistoryView {
     pub coverage: HistoryCoverage,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketAnalyticsItem {
+    pub key: MarketVariantKey,
+    pub supported: bool,
+    pub covered_dates: Vec<NaiveDate>,
+    pub points: Vec<MarketHistoryPoint>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketAnalyticsBatch {
+    pub as_of: NaiveDate,
+    pub latest_available_date: Option<NaiveDate>,
+    pub requested_days: u16,
+    pub items: Vec<MarketAnalyticsItem>,
+}
+
 pub struct PricingService;
 
 impl PricingService {
@@ -705,6 +725,14 @@ pub struct LiveOrderView {
     pub quantity: u32,
     pub per_trade: u32,
     pub user_status: UserStatus,
+    #[serde(default)]
+    pub order_id: Option<String>,
+    #[serde(default)]
+    pub user_ingame_name: Option<String>,
+    #[serde(default)]
+    pub user_slug: Option<String>,
+    #[serde(default)]
+    pub user_reputation: Option<i32>,
 }
 
 struct CachedLiveQuote {
@@ -890,6 +918,10 @@ fn bounded_live_orders(active_orders: &[&LiveOrder]) -> Vec<LiveOrderView> {
             quantity: order.quantity,
             per_trade: order.per_trade,
             user_status: order.user_status,
+            order_id: order.order_id.clone(),
+            user_ingame_name: order.user_ingame_name.clone(),
+            user_slug: order.user_slug.clone(),
+            user_reputation: order.user_reputation,
         })
         .collect()
 }
@@ -909,6 +941,8 @@ pub const MAX_MARKET_QUERY_CHARACTERS: usize = 80;
 pub struct MarketSearchRow {
     pub item_id: String,
     pub display_name: String,
+    #[serde(default)]
+    pub display_name_en: String,
     pub image_url: Option<String>,
     pub item_kind: MarketItemKind,
     pub mastery_requirement: Option<u8>,
@@ -985,6 +1019,7 @@ impl MarketBrowserService {
                 // platform while an explicit live request uses that platform.
                 bundle.key.platform = platform;
                 let item_kind = market_item_kind(&bundle.tags, &bundle.key);
+                let display_name_en = bundle.display_name_en.clone();
                 let display_name = match language {
                     Language::Russian => bundle
                         .display_name_ru
@@ -1011,6 +1046,7 @@ impl MarketBrowserService {
                     }),
                     item_id: bundle.item_id,
                     display_name,
+                    display_name_en,
                     item_kind,
                     mastery_requirement: mastery_requirements.get(&bundle.key.slug).copied(),
                     recommendation,
@@ -4881,6 +4917,70 @@ fn merge_vault_status(
 }
 
 impl HistoryService {
+    /// Возвращает две последние завершённые недели для всех объявлений из SQLite.
+    /// Здесь нет HTTP-запросов: общий архив обновляется существующим bootstrap.
+    /// Старый кеш не сдвигает календарное окно, а неизвестные дни остаются пустыми.
+    ///
+    /// # Errors
+    ///
+    /// Возвращает [`CoreError`] при превышении 500 вариантов или ошибке SQLite.
+    pub fn view_batch(
+        database: &Mutex<Database>,
+        keys: &[MarketVariantKey],
+    ) -> Result<MarketAnalyticsBatch, CoreError> {
+        Self::view_batch_at(
+            database,
+            keys,
+            Utc::now().date_naive() - ChronoDuration::days(1),
+        )
+    }
+
+    fn view_batch_at(
+        database: &Mutex<Database>,
+        keys: &[MarketVariantKey],
+        as_of: NaiveDate,
+    ) -> Result<MarketAnalyticsBatch, CoreError> {
+        if keys.len() > 500 {
+            return Err(CoreError::MarketData(
+                "history batch exceeds 500 variants".into(),
+            ));
+        }
+        let database = lock_database(database)?;
+        let dates = database.history_dates_with_schema(as_of, HISTORY_TARGET_DAYS)?;
+        let first_date = as_of - ChronoDuration::days(13);
+        let series = database.market_history_batch(keys, 14, as_of, MARKET_PRICE_SCHEMA_VERSION)?;
+        let items = keys
+            .iter()
+            .zip(series)
+            .map(|(key, points)| {
+                let supported = key.platform == Platform::Pc;
+                let minimum_schema = if key.charges.is_some() {
+                    MARKET_PRICE_SCHEMA_VERSION
+                } else {
+                    1
+                };
+                MarketAnalyticsItem {
+                    key: key.clone(),
+                    supported,
+                    covered_dates: dates
+                        .iter()
+                        .filter(|(date, schema)| {
+                            supported && *date >= first_date && *schema >= minimum_schema
+                        })
+                        .map(|(date, _)| *date)
+                        .collect(),
+                    points: if supported { points } else { Vec::new() },
+                }
+            })
+            .collect();
+        Ok(MarketAnalyticsBatch {
+            as_of,
+            latest_available_date: dates.last().map(|(date, _)| *date),
+            requested_days: 14,
+            items,
+        })
+    }
+
     /// Создаёт incremental history bootstrap на основе immutable relics.run dumps.
     ///
     /// # Errors
@@ -6678,6 +6778,10 @@ mod tests {
                 quantity: 2,
                 per_trade: 1,
                 user_status: UserStatus::InGame,
+                order_id: None,
+                user_ingame_name: None,
+                user_slug: None,
+                user_reputation: None,
             });
         }
         for price in [20, 26, 21, 25, 22, 24, 23] {
@@ -6687,6 +6791,10 @@ mod tests {
                 quantity: 1,
                 per_trade: 1,
                 user_status: UserStatus::InGame,
+                order_id: None,
+                user_ingame_name: None,
+                user_slug: None,
+                user_reputation: None,
             });
         }
         orders.push(LiveOrder {
@@ -6695,6 +6803,10 @@ mod tests {
             quantity: 1,
             per_trade: 1,
             user_status: UserStatus::Offline,
+            order_id: None,
+            user_ingame_name: None,
+            user_slug: None,
+            user_reputation: None,
         });
         orders.push(LiveOrder {
             side: LiveOrderSide::Sell,
@@ -6702,6 +6814,10 @@ mod tests {
             quantity: 1,
             per_trade: 1,
             user_status: UserStatus::Online,
+            order_id: None,
+            user_ingame_name: None,
+            user_slug: None,
+            user_reputation: None,
         });
         let active: Vec<_> = orders
             .iter()
@@ -6732,13 +6848,20 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![26, 25, 24, 23, 22]
         );
+    }
 
+    #[test]
+    fn current_orders_keep_trader_identity_when_sorting_by_unit_price() {
         let cheap_lot = LiveOrder {
             side: LiveOrderSide::Sell,
             platinum: 18,
             quantity: 6,
             per_trade: 3,
             user_status: UserStatus::InGame,
+            order_id: Some("lot-order".to_owned()),
+            user_ingame_name: Some("LotTrader".to_owned()),
+            user_slug: Some("lot-trader-profile".to_owned()),
+            user_reputation: Some(42),
         };
         let expensive_single = LiveOrder {
             side: LiveOrderSide::Sell,
@@ -6746,11 +6869,20 @@ mod tests {
             quantity: 1,
             per_trade: 1,
             user_status: UserStatus::InGame,
+            order_id: None,
+            user_ingame_name: None,
+            user_slug: None,
+            user_reputation: None,
         };
         let mixed = [&expensive_single, &cheap_lot];
         let sorted = bounded_live_orders(&mixed);
         assert_eq!(sorted[0].platinum, 18);
         assert_eq!(sorted[0].per_trade, 3);
+        assert_eq!(sorted[0].order_id.as_deref(), Some("lot-order"));
+        assert_eq!(sorted[0].user_ingame_name.as_deref(), Some("LotTrader"));
+        assert_eq!(sorted[0].user_slug.as_deref(), Some("lot-trader-profile"));
+        assert_eq!(sorted[0].user_reputation, Some(42));
+        assert!(sorted[1].user_slug.is_none());
     }
 
     #[test]
@@ -6956,6 +7088,30 @@ mod tests {
             Some("regular")
         );
         assert_eq!(search.rows[0].recommendation.fair_price, Some(10.0));
+    }
+
+    #[test]
+    fn batch_analytics_retains_requested_calendar_without_fabricating_coverage() {
+        let database = Mutex::new(Database::open_in_memory().expect("database opens"));
+        let pc = MarketVariantKey::new("test_item", Platform::Pc, Some(0), None::<String>)
+            .expect("PC key");
+        let mut switch = pc.clone();
+        switch.platform = Platform::Switch;
+        let as_of = NaiveDate::from_ymd_opt(2026, 9, 5).expect("date");
+        let batch =
+            HistoryService::view_batch_at(&database, &[pc.clone(), switch], as_of).expect("batch");
+        assert_eq!(batch.as_of, as_of);
+        assert_eq!(batch.requested_days, 14);
+        assert_eq!(batch.latest_available_date, None);
+        assert!(batch.items[0].supported);
+        assert!(!batch.items[1].supported);
+        assert!(
+            batch
+                .items
+                .iter()
+                .all(|item| item.points.is_empty() && item.covered_dates.is_empty())
+        );
+        assert!(HistoryService::view_batch_at(&database, &vec![pc; 501], as_of).is_err());
     }
 
     #[test]

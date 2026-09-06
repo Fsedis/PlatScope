@@ -9,6 +9,7 @@
   import WorldActivityScreen from "./lib/WorldActivityScreen.svelte";
   import { startWorldActivityAlerts, worldPreferences } from "./lib/worldActivityStore";
   import EquippedModsScreen from "./lib/EquippedModsScreen.svelte";
+  import MarketActionIcon from "./lib/MarketActionIcon.svelte";
   import MarketItemDetail from "./lib/MarketItemDetail.svelte";
   import InsightsScreen from "./lib/InsightsScreen.svelte";
   import MarketTradingShift from "./lib/MarketTradingShift.svelte";
@@ -78,13 +79,13 @@
       refreshing: "Обновляем данные…", refresh: "Обновить данные", openingStorage: "Открываем сохранённые данные…", validatingSnapshot: "Загружаем и проверяем новые цены…", providersUnavailable: "Источники временно недоступны. Показываем последние сохранённые данные.", checkStorage: "Проверить данные",
       noSnapshot: "Данные рынка ещё не загружены", loadMarket: "Загрузите цены рынка", loadMarketBody: "Обновление цен и 90-дневной истории находится в настройках.", loadingMarket: "Загружаем данные…", loadData: "Открыть настройки обновления",
       marketFilters: "Поиск и фильтры рынка", searchItem: "Поиск предмета", searchExample: "Например, Никс Прайм или nyx prime", clear: "Очистить", shortcut: "Быстрый доступ:", priceAvailability: "Наличие оценки", allVariants: "Все варианты", priced: "Есть оценка", unpriced: "Оценки пока нет",
-      results: "Результаты", snapshot: "Данные от", marketCaption: "Предметы, цены, продажи и актуальность данных", item: "Предмет", trades: "Сделки", freshness: "Актуальность",
+      results: "Результаты", snapshot: "Данные от", marketCaption: "Предметы, цены, продажи и актуальность данных", item: "Предмет", trades: "Объём", freshness: "Актуальность",
       first60: "Поиск ограничен первыми 60 вариантами. Уточните название предмета, чтобы найти нужный.", noQuery: (query: string) => `По запросу «${query}» ничего не найдено`, noFilter: "Для этого фильтра ничего не найдено", checkSpelling: "Проверьте название предмета.", choosePriceFilter: "Выберите другой фильтр цены.", clearSearch: "Очистить поиск",
       relic: "Реликвия", riven: "Мод разлома", marketItem: "Предмет рынка", gettingLive: "Получаем текущие цены…", updateLive: "Обновить текущие цены", getLive: "Проверить текущие цены", liveHint: "Покажет ордера игроков, которые сейчас в игре.", dataDate: "Цена рассчитана по данным от", masteryRequirement: "Ранг мастерства", whyPrice: "Как рассчитана цена?",
       marketData: "Данные рынка", dataReady: "Загружены", dataMissing: "Не загружены",
       fair: "Цена", fairPrice: "Оценка рынка", listPrice: "Ориентир размещения", closedVolume: "Закрытые сделки", lowestAsk: "Минимальная цена продажи", depthThree: "Средняя цена до 3 шт.", depthPrice: "Средняя цена до 5 шт.", quickSell: "Лучшая заявка на покупку", sell: "продажа", buy: "покупка", currentOrders: "Ордера игроков в игре", side: "Тип", price: "Цена", quantityLot: "Количество · лот", playerStatus: "Статус", sellOrder: "Продажа", buyOrder: "Покупка", noActiveOrders: "Сейчас в игре нет ордеров для этого варианта.",
       priceHistory: "История цены", historyRange: "Период", dayShort: "д", loadingHistory: "Загружаем историю…", historyCoverage: (points: number, coverage: number) => `${points} дней · доступно ${coverage} дней истории`, selectForHistory: "Выберите строку, чтобы посмотреть историю цены.", median: "Медиана", change: "Изменение", averageVolume: "Средний объём", insufficientChart: "Пока недостаточно данных для графика. История накопится после обновлений рынка.", itemDetails: "Подробности предмета", selectItem: "Выберите предмет в таблице, чтобы увидеть цену и расчёт.",
-      marketModeLabel: "Режим рынка", mySales: "Мои продажи", marketSearch: "Найти предмет",
+      marketModeLabel: "Режим рынка", mySales: "Мои объявления", marketSearch: "Найти предмет",
     },
     en: {
       skip: "Skip to content",
@@ -118,7 +119,7 @@
       marketData: "Market data", dataReady: "Loaded", dataMissing: "Not loaded",
       fair: "Fair", fairPrice: "Fair price", listPrice: "List price", closedVolume: "Closed volume", lowestAsk: "Lowest ask", depthThree: "Up to 3 units average", depthPrice: "Up to 5 units average", quickSell: "Quick Sell", sell: "sell", buy: "buy", currentOrders: "Orders from players in game", side: "Side", price: "Price", quantityLot: "Quantity · lot", playerStatus: "Player status", sellOrder: "Sell", buyOrder: "Buy", noActiveOrders: "No players in game have orders for this exact variant.",
       priceHistory: "Price history", historyRange: "History range", dayShort: "d", loadingHistory: "Loading local aggregates…", historyCoverage: (points: number, coverage: number) => `${points} days for this variant · ${coverage} local days covered`, selectForHistory: "Select a row to open compact history for the exact variant.", median: "Median", change: "Change", averageVolume: "Average volume", insufficientChart: "Not enough points for a chart. Background bootstrap adds up to seven days per launch.", itemDetails: "Item details", selectItem: "Select an item in the table to see its calculation and explanation.",
-      marketModeLabel: "Market mode", mySales: "My sales", marketSearch: "Find an item",
+      marketModeLabel: "Market mode", mySales: "My orders", marketSearch: "Find an item",
     },
   } as const;
 
@@ -136,7 +137,7 @@
   let historyView: MarketHistoryView | null = null;
   let historyIdentity = "";
   let historyRange: 7 | 30 | 90 = 7;
-  type MarketWorkspace = "sales" | "browse";
+  type MarketWorkspace = "sales" | "browse" | "history";
 
   let sidebarCompact = false;
   let activeScreen: AppScreen = $worldPreferences.startHere ? "world_activity" : "inventory";
@@ -220,6 +221,11 @@
         timer = setTimeout(() => reject(new Error("market_read_timeout")), 20_000);
       })]);
     } finally { clearTimeout(timer!); }
+  }
+
+  async function openMarketRow(row: MarketSearchRow): Promise<void> {
+    try { await invoke("open_market_items", {slugs:[row.recommendation.key.slug]}); }
+    catch { errorMessage = "Не удалось открыть Warframe Market."; }
   }
 
   async function openSelectedMarketItem(): Promise<void> {
@@ -566,11 +572,14 @@
         aria-pressed={marketWorkspace === "browse"}
         onclick={() => (marketWorkspace = "browse")}
       >{shell.marketSearch}</button>
+      <button type="button" aria-pressed={marketWorkspace === "history"} onclick={() => marketWorkspace = "history"}>{$locale === "ru" ? "История сделок" : "Trade history"}</button>
     </div>
   </section>
 
-  {#if marketWorkspace === "sales"}
+  {#if marketWorkspace === "sales" || marketWorkspace === "history"}
     <MarketTradingShift
+      view={marketWorkspace === "history" ? "history" : "orders"}
+      onHistory={() => marketWorkspace = "history"}
       onOpenInventory={() => { inventoryInitialQuery = ""; navigateTo("inventory"); }}
       onBrowseMarket={() => (marketWorkspace = "browse")}
     />
@@ -653,7 +662,7 @@
                   </th>
                   <th scope="col" aria-sort={sortAria("volume", sortKey, sortDirection)}>
                     <button type="button" onclick={() => changeSort("volume")}>
-                      {$locale === "ru" ? "Сделок в данных" : "Recorded trades"} <span aria-hidden="true">{sortMarker("volume", sortKey, sortDirection)}</span>
+                      {$locale === "ru" ? "Объём торгов" : "Trade volume"} <span aria-hidden="true">{sortMarker("volume", sortKey, sortDirection)}</span>
                     </button>
                   </th>
                 </tr>
@@ -661,16 +670,17 @@
               <tbody>
                 {#each visibleRows as row (rowIdentity(row))}
                   <tr class:selected={rowIdentity(row) === selectedIdentity}>
-                    <td data-label={shell.item}>
+                    <td data-label={shell.item}><div class="market-result-item">
                       <button class="item-button" type="button" aria-pressed={rowIdentity(row) === selectedIdentity} onclick={() => selectRow(row)}>
                         {#if row.imageUrl}
                           <img class="item-thumb" src={row.imageUrl} alt="" loading="lazy" decoding="async" />
                         {/if}
                         <span class="item-button__copy">
                         <span>{row.displayName}</span>
+                        {#if row.displayNameEn && row.displayNameEn !== row.displayName}<small lang="en" translate="no">{row.displayNameEn}</small>{/if}
                         {#if variantLabel(row.recommendation.key, $locale) !== ($locale === "ru" ? "базовый вариант" : "base variant")}<small>{variantLabel(row.recommendation.key, $locale)}</small>{/if}
                         </span>
-                      </button>
+                      </button><button class="market-direct-link" title="Открыть на Warframe Market" aria-label={"Открыть Warframe Market: " + row.displayName} onclick={() => openMarketRow(row)}><MarketActionIcon name="external"/></button></div>
                     </td>
                     <td class="numeric price-cell" data-label={$locale === "ru" ? "Оценка / шт." : "Estimate / item"}>
                       {row.recommendation.fairPrice === null ? ($locale === "ru" ? "Нет оценки" : "No estimate") : formatPlatinum(row.recommendation.fairPrice, $locale).replace(/p$/, $locale === "ru" ? " пл." : "p")}

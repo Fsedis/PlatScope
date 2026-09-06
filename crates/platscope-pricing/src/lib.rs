@@ -691,6 +691,10 @@ mod tests {
             quantity,
             per_trade,
             user_status: status,
+            order_id: None,
+            user_ingame_name: None,
+            user_slug: None,
+            user_reputation: None,
         }
     }
 

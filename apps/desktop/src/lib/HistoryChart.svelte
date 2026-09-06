@@ -7,7 +7,7 @@
 
   const locale = useLocale();
   const copy = {
-    ru: { caption: "Медиана закрытых сделок по дням", title: "История closed median", range: (min: string, max: string, from: string, to: string) => `От ${min} до ${max} за период с ${from} по ${to}.`, volume: "объём", data: "Данные графика истории цены", date: "Дата", closed: "Closed median", volumeHeading: "Объём" },
+    ru: { caption: "Медиана закрытых сделок по дням", title: "История цены закрытых сделок", range: (min: string, max: string, from: string, to: string) => `От ${min} до ${max} за период с ${from} по ${to}.`, volume: "объём", data: "Данные графика истории цены", date: "Дата", closed: "Медиана цены", volumeHeading: "Объём" },
     en: { caption: "Daily median of closed trades", title: "Closed-median history", range: (min: string, max: string, from: string, to: string) => `From ${min} to ${max} between ${from} and ${to}.`, volume: "volume", data: "Price history chart data", date: "Date", closed: "Closed median", volumeHeading: "Volume" },
   } as const;
   $: c = copy[$locale];

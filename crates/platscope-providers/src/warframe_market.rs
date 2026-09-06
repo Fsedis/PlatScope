@@ -272,6 +272,7 @@ struct TopOrders {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RawOrder {
+    id: Option<String>,
     #[serde(rename = "type")]
     order_type: String,
     platinum: u32,
@@ -288,8 +289,12 @@ struct RawOrder {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct RawUser {
     status: String,
+    ingame_name: Option<String>,
+    slug: Option<String>,
+    reputation: Option<i32>,
 }
 
 fn default_per_trade() -> u32 {
@@ -357,7 +362,27 @@ fn normalize_order(order: &RawOrder, key: &MarketVariantKey) -> Option<LiveOrder
         quantity: order.quantity,
         per_trade: order.per_trade,
         user_status: UserStatus::InGame,
+        order_id: public_identifier(order.id.as_deref()),
+        user_ingame_name: order.user.ingame_name.as_deref().and_then(|name| {
+            let name = name.trim();
+            (!name.is_empty() && name.len() <= 256 && !name.chars().any(char::is_control))
+                .then(|| name.to_owned())
+        }),
+        user_slug: public_identifier(order.user.slug.as_deref()),
+        user_reputation: order.user.reputation,
     })
+}
+
+fn public_identifier(value: Option<&str>) -> Option<String> {
+    let value = value?;
+    (!value.is_empty()
+        && value.len() <= 128
+        && value != "."
+        && value != ".."
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.')))
+    .then(|| value.to_owned())
 }
 
 fn exact_variant_query(key: &MarketVariantKey) -> Vec<(&'static str, String)> {
@@ -429,6 +454,40 @@ mod tests {
         assert_eq!(book.orders.len(), 1);
         assert_eq!(book.orders[0].side, LiveOrderSide::Sell);
         assert_eq!(book.orders[0].platinum, 30);
+        assert_eq!(book.orders[0].order_id.as_deref(), Some("sell-30"));
+        assert!(book.orders[0].user_ingame_name.is_none());
+        assert!(book.orders[0].user_slug.is_none());
+        assert!(book.orders[0].user_reputation.is_none());
+    }
+
+    #[test]
+    fn top_orders_preserve_public_trader_identity_without_guessing() {
+        let mut body: Value = serde_json::from_slice(FIXTURE).expect("fixture JSON");
+        body["data"]["sell"][0]["user"]["ingameName"] = Value::from("Trader.Name");
+        body["data"]["sell"][0]["user"]["slug"] = Value::from("different-profile-slug");
+        body["data"]["sell"][0]["user"]["reputation"] = Value::from(120);
+        let key = MarketVariantKey::new("primed_flow", Platform::Pc, Some(10), None::<String>)
+            .expect("valid key");
+        let book = normalize_top_orders(&serde_json::to_vec(&body).unwrap(), &key).unwrap();
+        assert_eq!(
+            book.orders[0].user_ingame_name.as_deref(),
+            Some("Trader.Name")
+        );
+        assert_eq!(
+            book.orders[0].user_slug.as_deref(),
+            Some("different-profile-slug")
+        );
+        assert_eq!(book.orders[0].user_reputation, Some(120));
+
+        for invalid_slug in ["../outside?bad=true", ".", "..", ""] {
+            body["data"]["sell"][0]["user"]["slug"] = Value::from(invalid_slug);
+            let book = normalize_top_orders(&serde_json::to_vec(&body).unwrap(), &key).unwrap();
+            assert!(book.orders[0].user_slug.is_none());
+            assert_eq!(
+                book.orders[0].user_ingame_name.as_deref(),
+                Some("Trader.Name")
+            );
+        }
     }
 
     #[test]

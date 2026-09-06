@@ -228,7 +228,7 @@ function localizedName(slug: string, fallback: string): string {
 
 function localizeMarketRow(row: MarketSearchRow): MarketSearchRow {
   const scoped = marketRowForPlatform(row, appSettings.platform);
-  return { ...scoped, displayName: localizedName(scoped.recommendation.key.slug, scoped.displayName) };
+  return { ...scoped, displayNameEn:scoped.displayNameEn ?? englishNames[scoped.recommendation.key.slug], displayName: localizedName(scoped.recommendation.key.slug, scoped.displayName) };
 }
 
 function marketRowForPlatform(
@@ -335,6 +335,7 @@ export async function installMarketBrowserMock(): Promise<void> {
   let inventoryRefreshEnabled = true;
   let inventoryPriceChecks = 0;
   let accountReads = 0;
+  let mutationReads = 0;
   const salesScenario = mockOptions.get("mockSales");
   if (salesScenario) {
     account = connectedDemoAccount();
@@ -357,6 +358,24 @@ export async function installMarketBrowserMock(): Promise<void> {
         receivedItems: index % 3 ? [{ name: "Primed Flow", quantity: 1 }] : [],
       }));
     }
+  }
+  if (salesScenario === "many") {
+    const originals = [...account.orders];
+    account.orders = Array.from({length:84},(_,index) => {
+      const baseOrder = originals[index % originals.length];
+      if (index < originals.length) return baseOrder;
+      const originalItem = account.orderItems![baseOrder.itemId!]!;
+      const originalRow = rows.find(row => row.itemId === baseOrder.itemId)!;
+      const originalInventory = inventory.items.find(item => item.itemId === baseOrder.itemId)!;
+      const itemId = `qa-market-${index}`;
+      const slug = `${originalItem.slug}_qa_${index}`;
+      const key = {...originalRow.recommendation.key,slug};
+      const displayName = `${originalItem.displayName} · ${index + 1}`;
+      account.orderItems![itemId] = {...originalItem,slug,displayName,displayNameEn:`${originalItem.displayNameEn} ${index + 1}`};
+      rows.push({...originalRow,itemId,displayName,displayNameEn:account.orderItems![itemId].displayNameEn,recommendation:{...originalRow.recommendation,key}});
+      inventory.items.push({...originalInventory,itemId,canonicalGameId:slug,displayName,key});
+      return {...baseOrder,id:`qa-order-${index}`,itemId,quantity:index%15+1,platinum:index%3===0?35+index:index%3===1?42:9,visible:index%5!==0,type:index>=72?"buy":"sell"};
+    });
   }
   if (mockOptions.get("mockInsights") === "1") {
     account = { ...connectedDemoAccount(), orders: [] };
@@ -505,9 +524,28 @@ export async function installMarketBrowserMock(): Promise<void> {
       account = { ...account, orders: [...account.orders, order] };
       return order;
     }
+    if (command === "account_set_orders_visibility") {
+      if (mockOptions.get("mockMarketError") === "save") throw new Error("test connection unavailable");
+      const request = args as {orderType:string; visible:boolean; confirmed:boolean};
+      if (!request.confirmed) throw new Error("explicit confirmation required");
+      const targets = account.orders.filter(order => order.type === request.orderType && order.visible !== request.visible);
+      account = {...account,orders:account.orders.map(order => order.type === request.orderType ? {...order,visible:request.visible,updatedAt:new Date().toISOString()} : order)};
+      return {updated:targets.length};
+    }
+    if (command === "open_market_user_profile") return true;
+    if (command === "open_trade_partner_profile") {
+      const failure = mockOptions.get("mockProfile");
+      if (failure) throw new Error(failure === "missing" ? "profile_not_found" : failure === "mismatch" ? "profile_name_mismatch" : "profile_unavailable");
+      return true;
+    }
     if (command === "account_update_listing") {
       if (mockOptions.get("mockMarketError") === "save") throw new Error("test connection unavailable");
-      const request = args as { id?: string; input?: UpdateListingInput; confirmed?: boolean };
+      const request = args as { id?: string; input?: UpdateListingInput; expectedOrder?: AccountOrder; confirmed?: boolean };
+      if (salesScenario === "changed" && ++mutationReads === 1) account = {...account,orders:account.orders.map(order => order.id === request.id ? {...order,platinum:order.platinum+10} : order)};
+      if (request.expectedOrder) {
+        const latest = account.orders.find(order => order.id === request.id);
+        if (!latest || Object.entries(request.expectedOrder).some(([key,value]) => latest[key as keyof AccountOrder] !== value)) throw new Error("Объявление уже изменилось или было удалено");
+      }
       if (!request.id || !request.input || !request.confirmed) throw new Error("explicit confirmation required");
       let updated: AccountOrder | null = null;
       account = {
@@ -519,6 +557,7 @@ export async function installMarketBrowserMock(): Promise<void> {
             platinum: request.input?.platinum ?? order.platinum,
             quantity: request.input?.quantity ?? order.quantity,
             visible: request.input?.visible ?? order.visible,
+            perTrade: request.input?.perTrade ?? order.perTrade,
             updatedAt: new Date().toISOString(),
           };
           return updated;
@@ -535,7 +574,7 @@ export async function installMarketBrowserMock(): Promise<void> {
       account = { ...account, orders: account.orders.filter((candidate) => candidate.id !== request.id) };
       return order;
     }
-    if (command === "trade_events") {
+    if (command === "trade_events" || command === "market_trade_events") {
       if (mockOptions.get("mockMarketError") === "history") throw new Error("test history unavailable");
       return tradeEvents;
     }
@@ -760,15 +799,26 @@ export async function installMarketBrowserMock(): Promise<void> {
         sellOrderCount: 5,
         buyOrderCount: 1,
         orders: [
-          { side: "sell", platinum: fair === null ? 30 : fair + 2, quantity: 3, perTrade: 1, userStatus: "in_game" },
-          { side: "sell", platinum: fair === null ? 32 : fair + 3, quantity: 5, perTrade: 1, userStatus: "in_game" },
-          { side: "sell", platinum: fair === null ? 33 : fair + 4, quantity: 1, perTrade: 1, userStatus: "in_game" },
-          { side: "sell", platinum: fair === null ? 34 : fair + 5, quantity: 2, perTrade: 1, userStatus: "in_game" },
-          { side: "sell", platinum: fair === null ? 35 : fair + 6, quantity: 4, perTrade: 1, userStatus: "in_game" },
-          { side: "buy", platinum: fair === null ? 18 : Math.max(1, fair - 10), quantity: 2, perTrade: 1, userStatus: "in_game" },
+          { userIngameName:"MarketTenno", userSlug:"market-tenno", userReputation:127, side: "sell", platinum: fair === null ? 30 : fair + 2, quantity: 3, perTrade: 1, userStatus: "in_game" },
+          { userIngameName:"MarketTenno", userSlug:"market-tenno", userReputation:127, side: "sell", platinum: fair === null ? 32 : fair + 3, quantity: 5, perTrade: 1, userStatus: "in_game" },
+          { userIngameName:"MarketTenno", userSlug:"market-tenno", userReputation:127, side: "sell", platinum: fair === null ? 33 : fair + 4, quantity: 1, perTrade: 1, userStatus: "in_game" },
+          { userIngameName:"MarketTenno", userSlug:"market-tenno", userReputation:127, side: "sell", platinum: fair === null ? 34 : fair + 5, quantity: 2, perTrade: 1, userStatus: "in_game" },
+          { userIngameName:"MarketTenno", userSlug:"market-tenno", userReputation:127, side: "sell", platinum: fair === null ? 35 : fair + 6, quantity: 4, perTrade: 1, userStatus: "in_game" },
+          { userIngameName:"BuyerTenno", userSlug:"buyer-tenno", userReputation:42, side: "buy", platinum: fair === null ? 18 : Math.max(1, fair - 10), quantity: 2, perTrade: 1, userStatus: "in_game" },
         ],
         warning: null,
       } satisfies LivePricingResult;
+    }
+    if (command === "market_history_batch") {
+      if (mockOptions.get("mockAnalytics") === "error") throw new Error("analytics unavailable");
+      const request = args as {keys:MarketSearchRow["recommendation"]["key"][]};
+      const end = new Date(); end.setUTCHours(0,0,0,0); end.setUTCDate(end.getUTCDate()-1);
+      const dates = Array.from({length:14},(_,i) => new Date(end.getTime()-(13-i)*86400000).toISOString().slice(0,10));
+      return {asOf:dates[13],latestAvailableDate:dates[13],requestedDays:14,items:request.keys.map((key,index) => {
+        const base = rows.find(row => row.recommendation.key.slug === key.slug)?.recommendation.fairPrice ?? 40;
+        const missing = mockOptions.get("mockAnalytics") === "missing" || index % 11 === 10;
+        return {key,supported:key.platform === "pc",coveredDates:dates,points:missing ? [] : dates.filter((_,i) => mockOptions.get("mockAnalytics") !== "partial" || i % 3 !== 0).map((sourceDate,i) => ({sourceDate,closedMedian:Math.max(1,Math.round(base*(.9+i*(index%3===0?.018:index%3===1?-.01:0)))),closedVolume:Math.max(1,15+index%20+(index%2 ? -1 : 2)*i),sellMedian:null,buyMedian:null}))};
+      })};
     }
     if (command === "market_history") {
       if (mockOptions.get("mockMarketError") === "history") throw new Error("test history unavailable");
@@ -1000,11 +1050,11 @@ export async function installMarketBrowserMock(): Promise<void> {
         sellOrderCount: 3,
         buyOrderCount: 2,
         orders: [
-          { side: "sell", platinum: fair === null ? 30 : fair + 2, quantity: 1, perTrade: 1, userStatus: "in_game" },
-          { side: "sell", platinum: fair === null ? 31 : fair + 3, quantity: 3, perTrade: 1, userStatus: "in_game" },
-          { side: "sell", platinum: fair === null ? 32 : fair + 4, quantity: 5, perTrade: 1, userStatus: "in_game" },
-          { side: "buy", platinum: fair === null ? 18 : Math.max(1, fair - 9), quantity: 2, perTrade: 1, userStatus: "in_game" },
-          { side: "buy", platinum: fair === null ? 17 : Math.max(1, fair - 10), quantity: 4, perTrade: 1, userStatus: "in_game" },
+          { userIngameName:"MarketTenno", userSlug:"market-tenno", userReputation:127, side: "sell", platinum: fair === null ? 30 : fair + 2, quantity: 1, perTrade: 1, userStatus: "in_game" },
+          { userIngameName:"MarketTenno", userSlug:"market-tenno", userReputation:127, side: "sell", platinum: fair === null ? 31 : fair + 3, quantity: 3, perTrade: 1, userStatus: "in_game" },
+          { userIngameName:"MarketTenno", userSlug:"market-tenno", userReputation:127, side: "sell", platinum: fair === null ? 32 : fair + 4, quantity: 5, perTrade: 1, userStatus: "in_game" },
+          { userIngameName:"BuyerTenno", userSlug:"buyer-tenno", userReputation:42, side: "buy", platinum: fair === null ? 18 : Math.max(1, fair - 9), quantity: 2, perTrade: 1, userStatus: "in_game" },
+          { userIngameName:"BuyerTenno", userSlug:"buyer-tenno", userReputation:42, side: "buy", platinum: fair === null ? 17 : Math.max(1, fair - 10), quantity: 4, perTrade: 1, userStatus: "in_game" },
         ],
         warning: null,
       } satisfies LiveSellNowResult;

@@ -24,6 +24,7 @@ platscope-core = { path = "../../../crates/platscope-core" }
 platscope-domain = { path = "../../../crates/platscope-domain" }
 platscope-readonly-scan = { path = "../../../crates/platscope-readonly-scan" }
 platscope-storage = { path = "../../../crates/platscope-storage" }
+platscope-wfm = { path = "../../../crates/platscope-wfm" }
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true

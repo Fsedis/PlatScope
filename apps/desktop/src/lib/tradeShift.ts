@@ -152,10 +152,11 @@ export function buildTradeShiftRows(
   inventory: InventoryView | null,
   recommendations: ReadonlyMap<string, PriceRecommendation | null>,
   _now = new Date(),
+  orderType: "sell" | "buy" = "sell",
 ): TradeShiftRow[] {
   const platform = account.profile?.platform || "pc";
   return account.orders
-    .filter((order) => order.type === "sell")
+    .filter((order) => order.type === orderType)
     .map((order) => {
       const item = order.itemId ? account.orderItems?.[order.itemId] : undefined;
       const key = orderVariantKey(order, item, platform);
@@ -163,7 +164,10 @@ export function buildTradeShiftRows(
       const recommendation = key
         ? recommendations.get(recommendationIdentity(key)) ?? null
         : null;
-      const result = evaluateOrder(order, owned, recommendation, Boolean(inventory));
+      const result = order.type === "sell" ? evaluateOrder(order, owned, recommendation, Boolean(inventory)) : {
+        health: (order.visible ? "healthy" : "hidden") as OrderHealth,
+        suggestedPrice: null, suggestedQuantity: null, needsAction: false,
+      };
       return {
         order,
         item: item ?? null,

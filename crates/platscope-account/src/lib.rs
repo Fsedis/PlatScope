@@ -24,6 +24,19 @@ pub enum AccountOrderType {
     Sell,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OrderGroupVisibilityInput {
+    visible: bool,
+    #[serde(rename = "type")]
+    order_type: AccountOrderType,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub struct OrderGroupVisibilityResult {
+    pub updated: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountProfile {
@@ -344,6 +357,32 @@ impl WfmAccountClient {
     pub async fn my_orders(&self, token: &AccountToken) -> Result<Vec<AccountOrder>, AccountError> {
         self.auth_json(Method::GET, "orders/my", token, None::<&()>)
             .await
+    }
+
+    /// Меняет видимость всех своих объявлений строго указанного типа одним запросом.
+    ///
+    /// Поле `type` обязательно в клиенте, хотя WFM допускает его отсутствие:
+    /// действие для продаж не должно случайно затрагивать заявки на покупку.
+    ///
+    /// # Errors
+    ///
+    /// Возвращает [`AccountError`] при отсутствии авторизации или отклонённом запросе.
+    pub async fn set_order_group_visibility(
+        &self,
+        token: &AccountToken,
+        order_type: AccountOrderType,
+        visible: bool,
+    ) -> Result<OrderGroupVisibilityResult, AccountError> {
+        self.auth_json(
+            Method::PATCH,
+            "orders/group/all",
+            token,
+            Some(&OrderGroupVisibilityInput {
+                visible,
+                order_type,
+            }),
+        )
+        .await
     }
 
     /// Завершает текущую server session.
@@ -670,6 +709,26 @@ mod tests {
             .expect("serialize close-order body");
         assert_eq!(value, serde_json::json!({ "quantity": 3 }));
         assert!(value.get("Quantity").is_none());
+    }
+
+    #[test]
+    fn group_visibility_always_scopes_the_order_side() {
+        for (order_type, expected) in [
+            (AccountOrderType::Sell, "sell"),
+            (AccountOrderType::Buy, "buy"),
+        ] {
+            for visible in [false, true] {
+                let body = serde_json::to_value(OrderGroupVisibilityInput {
+                    visible,
+                    order_type,
+                })
+                .expect("serialize group visibility");
+                assert_eq!(
+                    body,
+                    serde_json::json!({"type": expected, "visible": visible})
+                );
+            }
+        }
     }
 
     #[test]
