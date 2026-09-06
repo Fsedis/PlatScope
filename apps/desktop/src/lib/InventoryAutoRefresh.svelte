@@ -5,7 +5,7 @@
   import { useLocale } from "./i18n";
   import { inventoryRefreshHint, type InventoryRefreshStatus } from "./inventoryRefresh";
 
-  let { onBusy = (_busy: boolean) => {} } = $props<{ onBusy?: (busy: boolean) => void }>();
+  let { onBusy = (_busy: boolean) => {}, compact = false } = $props<{ onBusy?: (busy: boolean) => void; compact?: boolean }>();
   const locale = useLocale();
   let status = $state<InventoryRefreshStatus | null>(null);
   let saving = $state(false);
@@ -56,11 +56,12 @@
   });
 </script>
 
-<div class="inventory-auto-refresh">
+<div class="inventory-auto-refresh" class:compact>
   <label title={$locale === "ru" ? "Инвентарь — после событий игры. Магазин Норы — при смене ротации." : "Inventory follows game events. Nora’s shop follows its rotation."}>
     <input type="checkbox" checked={status?.enabled ?? false} disabled={!status || saving} onchange={change} />
-    <span>{$locale === "ru" ? "Обновлять автоматически" : "Update automatically"}</span>
+    <span>{compact ? ($locale === "ru" ? "Автообновление" : "Auto-update") : ($locale === "ru" ? "Обновлять автоматически" : "Update automatically")}</span>
   </label>
+  {#if !compact || failed || status?.enabled && !status.waitingForGame && (status.inventoryError || status.nightwaveError)}
   <small role="status" class:warning={failed || status?.enabled && !status.waitingForGame && (status.inventoryError || status.nightwaveError)}>
     {#if failed}
       {$locale === "ru" ? "Не удалось загрузить или сохранить настройку." : "Could not load or save this setting."}
@@ -71,6 +72,7 @@
       {$locale === "ru" ? "Загружаем настройку…" : "Loading setting…"}
     {/if}
   </small>
+  {/if}
 </div>
 
 <style>

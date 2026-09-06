@@ -92,16 +92,13 @@ export function filterAndSortSellNowRows(
   rows: SellNowRow[],
   filters: SellNowFilters,
 ): SellNowRow[] {
-  const query = filters.query.trim().toLocaleLowerCase("ru");
+  const words = normalizeInventorySearch(filters.query).split(" ").filter(Boolean);
   return rows
     .filter((row) => {
       const fair = row.recommendation?.fairPrice ?? null;
       const timing = row.trend?.timing ?? null;
-      const matchesQuery =
-        !query ||
-        row.inventory.displayName.toLocaleLowerCase("ru").includes(query) ||
-        row.inventory.canonicalGameId.toLocaleLowerCase("ru").includes(query) ||
-        row.inventory.key?.slug.includes(query);
+      const searchable = normalizeInventorySearch(`${row.inventory.displayName} ${row.inventory.key?.slug ?? ""}`);
+      const matchesQuery = words.every(word => searchable.includes(word));
       const matchesCategory =
         filters.category === "all" ||
         inventoryCategory(row.inventory) === filters.category;
@@ -121,7 +118,7 @@ export function filterAndSortSellNowRows(
           (row.inventory.resolution !== "resolved" || row.inventory.unknownQuantity > 0));
       const matchesEquipped =
         filters.equipped === "all" ||
-        (filters.equipped === "free" && row.inventory.equippedQuantity === 0) ||
+        (filters.equipped === "free" && row.inventory.ownedQuantity > row.inventory.equippedQuantity) ||
         (filters.equipped === "equipped" && row.inventory.equippedQuantity > 0);
       return matchesQuery && matchesCategory && matchesPreset && matchesEquipped;
     })
@@ -131,6 +128,43 @@ export function filterAndSortSellNowRows(
       const comparison = compareRows(left, right, filters.sortKey);
       return filters.sortDirection === "asc" ? comparison : -comparison;
     });
+}
+
+function normalizeInventorySearch(value: string): string {
+  return value.toLocaleLowerCase("ru").replaceAll("ё", "е").replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+}
+
+/** Снимок количества всегда новый; проверка цены не может воскресить проданные копии. */
+export function withCheckedPrice(row: SellNowRow, quote: LiveSellNowResult | undefined, now: number, ttlSeconds = 90): SellNowRow {
+  if (!quote || !isCheckedPriceCurrent(quote, now, ttlSeconds) || sellNowRowIdentity(row) !== sellNowRowIdentity(quote.row)) return row;
+  const fair = quote.row.recommendation?.fairPrice ?? null;
+  return {
+    ...row,
+    recommendation: quote.row.recommendation,
+    nominalValue: fair === null ? null : fair * row.inventory.sellableQuantity,
+  };
+}
+
+export function isCheckedPriceCurrent(quote: LiveSellNowResult, now: number, ttlSeconds = 90): boolean {
+  const age = now - Date.parse(quote.fetchedAt);
+  return Number.isFinite(age) && age >= 0 && age <= Math.max(15, Math.min(600, ttlSeconds)) * 1000 && quote.quoteState !== "stale_cache";
+}
+
+export function inventoryPage(rows: SellNowRow[], requested: number, size = 50) {
+  size = Math.max(1, Number.isFinite(size) ? Math.trunc(size) : 50);
+  const count = Math.max(1, Math.ceil(rows.length / size));
+  const page = Math.max(1, Math.min(Number.isFinite(requested) ? Math.trunc(requested) : 1, count));
+  return { page, count, rows: rows.slice((page - 1) * size, page * size), from: rows.length ? (page - 1) * size + 1 : 0, to: Math.min(page * size, rows.length) };
+}
+
+export function summarizeInventoryRows(rows: SellNowRow[]) {
+  const candidates = rows.filter(row => row.inventory.sellableQuantity > 0 && row.inventory.resolution === "resolved");
+  return {
+    candidateRows: candidates.length,
+    pricedRows: candidates.filter(row => row.recommendation?.fairPrice != null).length,
+    highPriorityRows: candidates.filter(row => row.priority.band === "high").length,
+    nominalValue: candidates.reduce((sum, row) => sum + (row.nominalValue ?? 0), 0),
+  };
 }
 
 export function sellNowRowIdentity(row: SellNowRow): string {

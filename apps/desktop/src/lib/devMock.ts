@@ -144,7 +144,7 @@ let inventory: InventoryView = {
       canonicalGameId: "primary_deadhead",
       itemId: "demo-primary_deadhead",
       bulkTradable: true,
-      displayName: "Primary Deadhead",
+      displayName: "Мистическое Обезглавливание: Основное",
       tags: ["arcane_enhancement", "rare"],
       key: {
         slug: "primary_deadhead",
@@ -332,6 +332,7 @@ function connectedDemoAccount(): AccountView {
 export async function installMarketBrowserMock(): Promise<void> {
   const mockOptions = new URLSearchParams(window.location.search);
   let inventoryRefreshEnabled = true;
+  let inventoryPriceChecks = 0;
   if (mockOptions.get("mockInsights") === "1") {
     account = { ...connectedDemoAccount(), orders: [] };
   }
@@ -772,6 +773,9 @@ export async function installMarketBrowserMock(): Promise<void> {
       } satisfies MarketHistoryView;
     }
     if (command === "sell_now") {
+      if (mockOptions.get("mockInventory") === "error") throw new Error("test inventory unavailable");
+      if (mockOptions.get("mockInventory") === "loading") return new Promise(() => {});
+      if (mockOptions.get("mockInventory") === "missing") return null;
       return makeSellNowView();
     }
     if (command === "load_mastery") {
@@ -879,6 +883,8 @@ export async function installMarketBrowserMock(): Promise<void> {
       } satisfies GameMetadataRefreshOutcome;
     }
     if (command === "sell_now_live") {
+      inventoryPriceChecks += 1;
+      if (mockOptions.get("mockLiveFailure") === "all" || (mockOptions.get("mockLiveFailure") === "after-first" && inventoryPriceChecks > 1)) throw new Error("test network unavailable");
       const key = (args as { key?: MarketSearchRow["recommendation"]["key"] })?.key;
       const sellNow = makeSellNowView();
       const candidate = sellNow.rows.find((row) => row.inventory.key?.slug === key?.slug);
@@ -919,8 +925,8 @@ export async function installMarketBrowserMock(): Promise<void> {
       };
       return {
         row,
-        fetchedAt: "2026-08-27T06:45:00Z",
-        quoteState: "network",
+        fetchedAt: new Date().toISOString(),
+        quoteState: mockOptions.get("mockLiveFailure") === "stale" ? "stale_cache" : "network",
         sellOrderCount: 3,
         buyOrderCount: 2,
         orders: [
@@ -943,8 +949,8 @@ export async function installMarketBrowserMock(): Promise<void> {
         sellableQuantity:
           item.resolution === "resolved" && item.unknownQuantity === 0
             ? Math.min(
-                item.tradeableQuantity,
-                Math.max(0, item.ownedQuantity - Math.max(keepCopies, item.untradeableQuantity)),
+                Math.max(0, item.tradeableQuantity - item.equippedQuantity),
+                Math.max(0, item.ownedQuantity - Math.max(keepCopies, item.untradeableQuantity + item.equippedQuantity)),
               )
             : 0,
       }));
@@ -1367,6 +1373,30 @@ function makeInsightsView(): InsightsView {
 
 function makeSellNowView(): SellNowView {
   const scopedInventory = localizeInventoryView(inventory);
+  // Изолированные сценарии проверки длинного списка; настоящие данные пользователя не используются.
+  const scenario = new URLSearchParams(window.location.search).get("mockInventory");
+  if (scenario === "empty") scopedInventory.items = [];
+  if (scenario === "reserved") scopedInventory.items = scopedInventory.items.map(item => ({ ...item, ownedQuantity: 1, tradeableQuantity: 1, untradeableQuantity: 0, unknownQuantity: 0, leveledQuantity: Math.min(1, item.leveledQuantity), equippedQuantity: Math.min(1, item.equippedQuantity), sellableQuantity: 0 }));
+  if (scenario === "large") {
+    const source = scopedInventory.items;
+    scopedInventory.items = Array.from({ length: 1206 }, (_, index) => {
+      const item = structuredClone(source[index % source.length]);
+      item.canonicalGameId += `/demo-${index}`;
+      if (item.itemId) item.itemId += `-demo-${index}`;
+      item.displayName += index < 3 ? "" : ` · ${index + 1}`;
+      item.ownedQuantity = index % 13 + 1;
+      item.leveledQuantity = Math.min(item.leveledQuantity, item.ownedQuantity);
+      item.equippedQuantity = index % 3 === 1 ? 1 : 0;
+      item.untradeableQuantity = index % 7 === 0 ? 1 : 0;
+      item.unknownQuantity = index % 11 === 0 ? 1 : 0;
+      if (item.untradeableQuantity + item.unknownQuantity > item.ownedQuantity) item.unknownQuantity = 0;
+      item.tradeableQuantity = Math.max(0, item.ownedQuantity - item.untradeableQuantity - item.unknownQuantity);
+      item.equippedQuantity = Math.min(item.equippedQuantity, item.tradeableQuantity);
+      item.sellableQuantity = Math.max(0, Math.min(item.tradeableQuantity - item.equippedQuantity, item.ownedQuantity - Math.max(inventory.keepCopies, item.untradeableQuantity + item.unknownQuantity + item.equippedQuantity)));
+      if (index % 17 === 0) { item.key = null; item.resolution = "exact_variant_unavailable"; item.sellableQuantity = 0; }
+      return item;
+    });
+  }
   const sellRows = scopedInventory.items
     .map((item): SellNowRow => {
       const marketRow = rows.find((candidate) => candidate.recommendation.key.slug === item.key?.slug);
@@ -1418,6 +1448,15 @@ function makeSellNowView(): SellNowView {
       };
     })
     .sort((left, right) => right.priority.score - left.priority.score);
+  if (scenario === "large") {
+    // Разные точные варианты должны оставаться отдельными строками и отдельными проверками цены.
+    for (const row of sellRows) {
+      if (row.inventory.key) {
+        row.inventory.key = { ...row.inventory.key, slug: `${row.inventory.key.slug}_demo_${row.inventory.canonicalGameId.split("demo-").at(-1)}` };
+        if (row.recommendation) row.recommendation = { ...row.recommendation, key: row.inventory.key };
+      }
+    }
+  }
   return {
     inventoryMetadata: scopedInventory.metadata,
     inventorySummary: scopedInventory.summary,

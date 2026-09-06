@@ -30,6 +30,7 @@ describe("saved working views", () => {
     const storage = new MemoryStorage();
     expect(loadMarketViewPreferences(storage)).toEqual(DEFAULT_MARKET_VIEW);
     expect(loadSellNowViewPreferences(storage)).toEqual(DEFAULT_SELL_NOW_VIEW);
+    expect(loadSellNowViewPreferences(storage).preset).toBe("all");
     expect(loadInsightsViewPreferences(storage)).toEqual(DEFAULT_INSIGHTS_VIEW);
   });
 

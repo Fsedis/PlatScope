@@ -9,6 +9,11 @@ import {
   sellNowRowDomKey,
   sellPriorityRanks,
   sellNowRowIdentity,
+  inventoryPage,
+  isCheckedPriceCurrent,
+  withCheckedPrice,
+  summarizeInventoryRows,
+  type LiveSellNowResult,
   type SellNowFilters,
   type SellNowRow,
 } from "./sellNow";
@@ -234,15 +239,83 @@ describe("sell now presentation", () => {
     const free = row("free", 30, 10, "neutral");
     const equipped = row("equipped", 30, 10, "neutral");
     equipped.inventory.equippedQuantity = 1;
+    const fullyEquipped = row("fully_equipped", 30, 10, "neutral");
+    fullyEquipped.inventory.equippedQuantity = fullyEquipped.inventory.ownedQuantity;
 
-    expect(filterAndSortSellNowRows([free, equipped], {
+    expect(filterAndSortSellNowRows([free, equipped, fullyEquipped], {
       ...filters,
       equipped: "free",
-    })).toEqual([free]);
+    })).toEqual([free, equipped]);
     expect(filterAndSortSellNowRows([free, equipped], {
       ...filters,
       equipped: "equipped",
     })).toEqual([equipped]);
+  });
+
+  it("searches English slugs as words and treats ё, punctuation and word order consistently", () => {
+    const flow = row("primed_flow", 30, 10, "neutral");
+    flow.inventory.displayName = "Поток Прайм";
+    const blueprint = row("akbronco_prime_blueprint", 20, 4, "neutral");
+    blueprint.inventory.displayName = "Чертёж: Акбронко Прайм";
+    for (const query of ["Primed Flow", "flow primed", "primed_flow", "прайм поток"]) {
+      expect(filterAndSortSellNowRows([flow, blueprint], { ...filters, query })).toEqual([flow]);
+    }
+    expect(filterAndSortSellNowRows([flow, blueprint], { ...filters, query: "чертеж акбронко" })).toEqual([blueprint]);
+    expect(filterAndSortSellNowRows([flow, blueprint], { ...filters, query: "поток акбронко" })).toEqual([]);
+  });
+
+  it("paginates large inventories and clamps after filtering", () => {
+    const rows = Array.from({ length: 1206 }, (_, i) => row(`part_${i}`, i, 5, "neutral"));
+    const page = inventoryPage(rows, 2);
+    expect(page.rows).toEqual(rows.slice(50, 100));
+    expect([page.from, page.to, page.count]).toEqual([51, 100, 25]);
+    expect(inventoryPage(rows, 99).rows).toHaveLength(6);
+    expect(inventoryPage(rows.slice(0, 3), 25).page).toBe(1);
+    expect(inventoryPage([], -1)).toMatchObject({ from: 0, to: 0, count: 1, page: 1, rows: [] });
+    expect(inventoryPage(rows, NaN, 0).rows).toHaveLength(1);
+  });
+
+  function quote(quotedRow: SellNowRow): LiveSellNowResult {
+    return { row: quotedRow, fetchedAt: "2026-09-06T12:00:00Z", quoteState: "network", sellOrderCount: 2, buyOrderCount: 1, orders: [], warning: null };
+  }
+
+  it("retains a checked price across inventory refresh without restoring old quantities or priority", () => {
+    const checked = quote(row("flow", 80, 40, "peak"));
+    checked.row.inventory.sellableQuantity = 10;
+    const freshInventory = row("flow", 20, 30, "hold");
+    freshInventory.inventory.sellableQuantity = 2;
+    const merged = withCheckedPrice(freshInventory, checked, Date.parse(checked.fetchedAt) + 10_000);
+    expect(merged.recommendation?.fairPrice).toBe(40);
+    expect(merged.inventory).toBe(freshInventory.inventory);
+    expect(merged.nominalValue).toBe(80);
+    expect(merged.priority).toBe(freshInventory.priority);
+    expect(merged.trend).toBe(freshInventory.trend);
+    freshInventory.inventory.sellableQuantity = 0;
+    expect(withCheckedPrice(freshInventory, checked, Date.parse(checked.fetchedAt)).nominalValue).toBe(0);
+  });
+
+  it("rejects stale, future, invalid and different-variant checked prices", () => {
+    const original = row("flow", 20, 30, "hold");
+    const checked = quote(row("flow", 80, 40, "peak"));
+    const now = Date.parse(checked.fetchedAt);
+    expect(isCheckedPriceCurrent(checked, now + 89_999)).toBe(true);
+    for (const time of [now + 90_001, now - 1, NaN]) {
+      expect(withCheckedPrice(original, checked, time)).toBe(original);
+    }
+    expect(withCheckedPrice(original, { ...checked, quoteState: "stale_cache" }, now)).toBe(original);
+    expect(withCheckedPrice(original, { ...checked, fetchedAt: "bad date" }, now)).toBe(original);
+    expect(isCheckedPriceCurrent(checked, now + 120_000, 300)).toBe(true);
+    expect(isCheckedPriceCurrent(checked, now + 30_001, 30)).toBe(false);
+    checked.row.inventory.key!.rank = 10;
+    expect(withCheckedPrice(original, checked, now)).toBe(original);
+  });
+
+  it("counts only sellable entries with known prices in the estimate", () => {
+    const priced = row("priced", 60, 10, "sell");
+    const reserved = row("reserved", 60, 100, "sell");
+    reserved.inventory.sellableQuantity = 0;
+    const missing = row("missing", 0, null, null);
+    expect(summarizeInventoryRows([priced, reserved, missing])).toEqual({ candidateRows: 2, pricedRows: 1, highPriorityRows: 1, nominalValue: 10 });
   });
 
   it("filters mutually exclusive item types", () => {

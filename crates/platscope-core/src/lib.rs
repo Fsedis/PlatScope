@@ -4292,7 +4292,7 @@ impl SellNowService {
         }))
     }
 
-    /// Обогащает одну sellable строку live WFM, не создавая сетевой burst по всей таблице.
+    /// Проверяет цену одного точного варианта, в том числе оставленных себе копий.
     ///
     /// # Errors
     ///
@@ -4306,11 +4306,7 @@ impl SellNowService {
         let Some(inventory) = InventoryService::view(database, settings)? else {
             return Ok(None);
         };
-        let Some(item) = aggregate_inventory_items(inventory.items.iter().filter(|item| {
-            item.sellable_quantity > 0
-                && item.resolution == InventoryResolution::Resolved
-                && item.key.as_ref() == Some(key)
-        })) else {
+        let Some(item) = inventory_variant_for_price(&inventory.items, key) else {
             return Ok(None);
         };
         let item_kind = market_item_kind(&item.tags, key);
@@ -4320,7 +4316,7 @@ impl SellNowService {
                 key,
                 item_kind,
                 settings,
-                Some(item.sellable_quantity),
+                Some(item.sellable_quantity.max(1)),
             )
             .await?
         else {
@@ -4353,6 +4349,18 @@ impl SellNowService {
             warning,
         }))
     }
+}
+
+/// Цена доступна и для защищённых копий; разрешение на продажу здесь не меняется.
+fn inventory_variant_for_price(
+    items: &[InventoryViewItem],
+    key: &MarketVariantKey,
+) -> Option<InventoryViewItem> {
+    aggregate_inventory_items(items.iter().filter(|item| {
+        item.owned_quantity > 0
+            && item.resolution == InventoryResolution::Resolved
+            && item.key.as_ref() == Some(key)
+    }))
 }
 
 fn build_sell_now_row(
@@ -6280,6 +6288,34 @@ mod tests {
             sellable_quantity: 0,
             resolution: InventoryResolution::ExactVariantUnavailable,
         }));
+    }
+
+    #[test]
+    fn inventory_price_check_allows_reserved_copies_without_unlocking_sale() {
+        let mut snapshot = nightwave_inventory_fixture(Utc::now());
+        let key = MarketVariantKey::new("primed_flow", Platform::Pc, Some(10), None::<String>)
+            .expect("exact key");
+        let item = &mut snapshot.items[0];
+        item.key = Some(key.clone());
+        item.resolution = InventoryResolution::Resolved;
+        item.owned_quantity = 1;
+        item.tradeable_quantity = 1;
+        item.untradeable_quantity = 0;
+        item.unknown_quantity = 0;
+        let mut view = inventory_view_from_snapshot(&snapshot, Language::Russian, Platform::Pc, 1);
+        view.items[0].sellable_quantity = 0;
+        let result =
+            inventory_variant_for_price(&view.items, &key).expect("reserved item is priceable");
+        assert_eq!(result.sellable_quantity, 0);
+        assert_eq!(result.owned_quantity, 1);
+        let mut other_rank = key.clone();
+        other_rank.rank = Some(0);
+        assert!(inventory_variant_for_price(&view.items, &other_rank).is_none());
+        view.items[0].resolution = InventoryResolution::ExactVariantUnavailable;
+        assert!(inventory_variant_for_price(&view.items, &key).is_none());
+        view.items[0].resolution = InventoryResolution::Resolved;
+        view.items[0].owned_quantity = 0;
+        assert!(inventory_variant_for_price(&view.items, &key).is_none());
     }
 
     #[test]

@@ -46,7 +46,7 @@ export const DEFAULT_MARKET_VIEW: MarketViewPreferences = {
 
 export const DEFAULT_SELL_NOW_VIEW: SellNowViewPreferences = {
   category: "all",
-  preset: "sell_now",
+  preset: "all",
   equipped: "all",
   sortKey: "priority",
   sortDirection: "desc",
