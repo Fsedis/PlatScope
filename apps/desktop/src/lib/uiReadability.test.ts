@@ -33,8 +33,8 @@ describe("читаемость рабочего интерфейса", () => {
     }
   });
 
-  it("не уменьшает подписи ордеров и заказов ниже 12 px при базовых 16 px", () => {
-    for (const filename of ["MarketTradingShift.svelte", "BountyHunterScreen.svelte"]) {
+  it("не уменьшает подписи ордеров, заказов и событий ниже 12 px при базовых 16 px", () => {
+    for (const filename of ["MarketTradingShift.svelte", "BountyHunterScreen.svelte", "WorldActivityScreen.svelte", "PrimeResurgence.svelte"]) {
       const source = readFileSync(new URL(filename, import.meta.url), "utf8");
       for (const match of source.matchAll(/font-size:\s*([\d.]+)rem/g)) {
         expect(Number(match[1]), `${filename}: ${match[0]}`).toBeGreaterThanOrEqual(.75);
