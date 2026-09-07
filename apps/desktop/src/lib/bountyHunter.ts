@@ -16,6 +16,7 @@ export interface BountyRewardView {
 
 export interface BountyJobView {
   id: string;
+  expiry?: string | null;
   title: string;
   minLevel: number;
   maxLevel: number;
@@ -39,6 +40,7 @@ export interface BountyRegionView {
 
 export interface BountyHunterView {
   fetchedAt: string;
+  refreshFailed?: boolean;
   marketSourceDate?: string | null;
   regions: BountyRegionView[];
 }
@@ -91,7 +93,7 @@ function validTimestamp(value: string | null | undefined): number | null {
 export function bountyRotationAt(view: BountyHunterView | null): number | null {
   if (!view) return null;
   const expiries = view.regions
-    .map((region) => validTimestamp(region.expiry))
+    .flatMap((region) => [validTimestamp(region.expiry), ...region.jobs.map(job => validTimestamp(job.expiry))])
     .filter((value): value is number => value !== null);
   return expiries.length > 0 ? Math.min(...expiries) : null;
 }
@@ -129,7 +131,9 @@ function normalized(value: string): string {
 }
 
 export function activeBountyView(view: BountyHunterView | null, now: number): BountyHunterView | null {
-  return view ? { ...view, regions: view.regions.filter(region => (validTimestamp(region.expiry) ?? 0) > now) } : null;
+  return view ? { ...view, regions: view.regions.filter(region => (validTimestamp(region.expiry) ?? 0) > now)
+    .map(region => ({ ...region, jobs: region.jobs.filter(job => !job.expiry || (validTimestamp(job.expiry) ?? 0) > now) }))
+    .filter(region => region.jobs.length > 0) } : null;
 }
 
 export function bountyJobIdentity(row: RankedBountyJob): string {
@@ -168,7 +172,7 @@ export function rankedBountyJobs(
   const rows = activeView.regions.flatMap((region) => region.jobs.map((job) => ({
     regionKey: region.key,
     regionName: region.displayName,
-    expiry: region.expiry,
+    expiry: job.expiry ?? region.expiry,
     job,
   }))).filter((row) => {
     if (options.region !== "all" && row.regionKey !== options.region) return false;

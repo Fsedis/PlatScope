@@ -704,6 +704,21 @@ mod tests {
     }
 
     #[test]
+    fn non_bulk_price_update_omits_per_trade_from_http_body() {
+        let input: UpdateListingInput = serde_json::from_value(serde_json::json!({
+            "platinum": 40, "quantity": 2, "visible": true, "perTrade": null
+        }))
+        .unwrap();
+        input.validate().unwrap();
+        let body = serde_json::to_value(input).unwrap();
+        assert_eq!(
+            body,
+            serde_json::json!({"platinum": 40, "quantity": 2, "visible": true})
+        );
+        assert!(body.get("perTrade").is_none());
+    }
+
+    #[test]
     fn close_order_uses_current_v2_quantity_field() {
         let value = serde_json::to_value(CloseOrderInput { quantity: 3 })
             .expect("serialize close-order body");

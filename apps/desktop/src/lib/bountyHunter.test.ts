@@ -59,6 +59,16 @@ const view: BountyHunterView = {
 };
 
 describe("bounty hunter view helpers", () => {
+  it("убирает заказ Нармер при собственной смене раньше конца ротации региона", () => {
+    const now = Date.parse("2026-09-02T11:10:00Z");
+    const saved = structuredClone(view);
+    saved.regions[0]!.jobs[0]!.expiry = "2026-09-02T11:10:00Z";
+    expect(bountyRotationAt(saved)).toBe(now);
+    const active = activeBountyView(saved, now)!;
+    expect(active.regions[0]!.jobs.map(job => job.id)).toEqual(["priced"]);
+    expect(bountyRotationAt(active)).toBe(Date.parse("2026-09-02T12:00:00Z"));
+    expect(saved.regions[0]!.jobs).toHaveLength(2);
+  });
   it("сортирует по шансу искомой непродаваемой награды, а не первой награды с ценой", () => {
     const mock = makeBountyHunterMock();
     const rows = rankedBountyJobs(mock, { region: "all", onlyPriced: false, query: "аЙя", sort: "reward_chance" });

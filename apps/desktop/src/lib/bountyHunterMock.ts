@@ -1,4 +1,5 @@
 import { bountyEstimate, type BountyHunterView, type BountyJobView, type BountyRewardView } from "./bountyHunter";
+import directSourceViews from "../../../../fixtures/worldstate/views-2026-09-07.json";
 
 // Данные для проверки интерфейса. Цены и вероятности вымышлены, не являются таблицей выпадения.
 // Изображения из публичного каталога https://api.warframe.market/v2/items (06.09.2026).
@@ -26,6 +27,8 @@ function reward(name: string, slug: string | null, chance: number, quantity: num
 }
 
 export function makeBountyHunterMock(scenario: string | null = null, now = Date.now()): BountyHunterView {
+  if (scenario === "direct") return structuredClone(directSourceViews.bounties) as BountyHunterView;
+  if (scenario === "saved-error") return { ...makeBountyHunterMock(null, now), refreshFailed: true };
   const aya = (chance: number) => reward("Айя", null, chance, chance / 85, null);
   const endo = reward("400 эндо", null, 43.5, .52, null);
   const spec: Array<[string, string, string[], BountyRewardView[]]> = [

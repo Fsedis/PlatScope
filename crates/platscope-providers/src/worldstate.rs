@@ -3,8 +3,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::{BoundedHttpClient, ProviderError};
 
-const WORLDSTATE_BASE_URL: &str = "https://api.warframestat.us/pc";
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VoidTraderItem {
@@ -138,7 +136,6 @@ const fn one() -> u32 {
 #[derive(Clone)]
 pub struct WarframeWorldstateProvider {
     client: BoundedHttpClient,
-    base_url: String,
 }
 
 impl WarframeWorldstateProvider {
@@ -150,7 +147,6 @@ impl WarframeWorldstateProvider {
     pub fn production() -> Result<Self, ProviderError> {
         Ok(Self {
             client: BoundedHttpClient::new()?,
-            base_url: WORLDSTATE_BASE_URL.to_owned(),
         })
     }
 
@@ -193,9 +189,14 @@ impl WarframeWorldstateProvider {
         let mut missions: Vec<BountyMission> =
             self.fetch_json("syndicateMissions?language=en").await?;
         missions.retain(|mission| !mission.jobs.is_empty());
+        let now = Utc::now();
+        missions.retain(|mission| mission.activation <= now && now < mission.expiry);
         for mission in &mut missions {
+            let night_starts = mission.expiry - chrono::Duration::minutes(50);
             mission.jobs.retain(|job| {
-                !job.reward_pool_drops.is_empty()
+                job.expiry > now
+                    && (job.time_bound.as_deref() != Some("night") || now >= night_starts)
+                    && !job.reward_pool_drops.is_empty()
                     && job.enemy_levels.len() >= 2
                     && job.reward_pool_drops.iter().all(|drop| {
                         !drop.item.trim().is_empty()
@@ -247,9 +248,9 @@ impl WarframeWorldstateProvider {
         &self,
         path: &str,
     ) -> Result<T, ProviderError> {
-        let url = format!("{}/{path}", self.base_url.trim_end_matches('/'));
-        let body = self.client.get_json(&url, false).await?;
-        serde_json::from_slice(&body).map_err(|error| {
+        let root = crate::worldstate_source::fetch_worldstate(&self.client).await?;
+        let field = path.split('?').next().unwrap_or(path);
+        serde_json::from_value(root[field].clone()).map_err(|error| {
             ProviderError::schema_changed(format!("invalid worldstate JSON for {path}: {error}"))
         })
     }

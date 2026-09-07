@@ -296,7 +296,7 @@ function connectedDemoAccount(): AccountView {
     orders: [
       {
         id: "demo-order-1", itemId: "demo-nyx_prime_set", type: "sell", platinum: 92,
-        quantity: 3, perTrade: null, rank: null, charges: null, subtype: null,
+        quantity: 3, perTrade: 1, rank: null, charges: null, subtype: null,
         amberStars: null, cyanStars: null, visible: true,
         createdAt: "2026-08-26T08:00:00Z", updatedAt: "2026-08-27T06:30:00Z",
       },
@@ -316,15 +316,15 @@ function connectedDemoAccount(): AccountView {
     orderItems: {
       "demo-nyx_prime_set": {
         slug: "nyx_prime_set", displayName: localizedName("nyx_prime_set", "Никс Прайм: комплект"),
-        displayNameEn: "Nyx Prime Set", imageUrl: rows[0].imageUrl ?? null, itemKind: "standard",
+        bulkTradable: false, displayNameEn: "Nyx Prime Set", imageUrl: rows[0].imageUrl ?? null, itemKind: "standard",
       },
       "demo-primed_flow": {
         slug: "primed_flow", displayName: localizedName("primed_flow", "Поток Прайм"),
-        displayNameEn: "Primed Flow", imageUrl: rows[6].imageUrl ?? null, itemKind: "standard",
+        bulkTradable: false, displayNameEn: "Primed Flow", imageUrl: rows[6].imageUrl ?? null, itemKind: "standard",
       },
       "demo-primary_deadhead": {
         slug: "primary_deadhead", displayName: localizedName("primary_deadhead", "Мистическое Обезглавливание: Основное"),
-        displayNameEn: "Primary Deadhead", imageUrl: rows[7].imageUrl ?? null, itemKind: "standard",
+        bulkTradable: true, displayNameEn: "Primary Deadhead", imageUrl: rows[7].imageUrl ?? null, itemKind: "standard",
       },
     },
   };
@@ -547,6 +547,10 @@ export async function installMarketBrowserMock(): Promise<void> {
         if (!latest || Object.entries(request.expectedOrder).some(([key,value]) => latest[key as keyof AccountOrder] !== value)) throw new Error("Объявление уже изменилось или было удалено");
       }
       if (!request.id || !request.input || !request.confirmed) throw new Error("explicit confirmation required");
+      const currentOrder = account.orders.find(order => order.id === request.id);
+      if (request.input.perTrade != null && currentOrder?.itemId && account.orderItems?.[currentOrder.itemId]?.bulkTradable === false) {
+        throw new Error("perTrade: forbidden for a non-bulk item");
+      }
       let updated: AccountOrder | null = null;
       account = {
         ...account,

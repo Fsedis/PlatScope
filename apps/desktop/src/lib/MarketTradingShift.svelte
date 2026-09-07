@@ -12,6 +12,7 @@
   import {
     accountActionErrorMessage,
     orderEnglishName,
+    editableOrderPerTrade,
     validateListingNumbers,
     type AccountOrder,
     type AccountView,
@@ -73,6 +74,7 @@
   let editPlatinum = 1;
   let editQuantity = 1;
   let editPerTrade: number | null = null;
+  let editOriginalPerTrade: number | null = null;
   let editVisible = false;
   let editError = "";
   let orderToRemove: AccountOrder | null = null;
@@ -415,7 +417,8 @@
     editingOrder = { ...row.order };
     editPlatinum = row.order.platinum;
     editQuantity = row.order.quantity;
-    editPerTrade = row.order.perTrade;
+    editOriginalPerTrade = editableOrderPerTrade(row.item, row.inventory, row.order.perTrade);
+    editPerTrade = editOriginalPerTrade;
     editVisible = row.order.visible;
     editError = "";
     errorMessage = "";
@@ -428,7 +431,7 @@
     editError = validateListingNumbers(
       editPlatinum,
       editQuantity,
-      editPerTrade,
+      editOriginalPerTrade === null ? null : editPerTrade,
       "ru",
       editingOrder?.type === "sell" && editVisible ? rows.find((row) => row.order.id === editingOrder?.id)?.inventory?.sellableQuantity ?? null : null,
     ) ?? "";
@@ -447,7 +450,7 @@
         input: updateInput({
           platinum: editPlatinum,
           quantity: editQuantity,
-          perTrade: editPerTrade ?? undefined,
+          perTrade: editOriginalPerTrade === null ? undefined : editPerTrade ?? undefined,
           visible: editVisible,
         }),
         confirmed: true,
@@ -783,11 +786,11 @@
     {#if orderToRemove}<p class="dialog-description">Объявление исчезнет с Warframe Market. Чтобы вернуть его, потребуется новая публикация.</p><div class="confirm-actions"><button class="danger-primary" disabled={applying} onclick={removeManualOrder}>{applying ? "Удаляем…" : "Удалить объявление"}</button><button class="secondary" disabled={applying} onclick={() => orderToRemove = null}>Вернуться к редактированию</button></div>
     {:else}<form class="order-editor" onsubmit={reviewManualEdit}>
       <dl class="edit-context"><div><dt>Ориентир рынка</dt><dd>{editingRow ? money(orderMarketPrice(editingRow)) : "Нет оценки"}</dd></div>{#if editingOrder.type === "sell"}<div><dt>Доступно для продажи</dt><dd>{inventory ? (editingRow?.inventory?.sellableQuantity ?? 0) + " шт." : "Остаток неизвестен"}</dd></div>{/if}</dl>
-      <div class="order-editor__fields"><label>Цена, платина{#if (editingOrder.perTrade ?? 1) > 1}<small>за {editingOrder.perTrade} шт.</small>{/if}<input type="number" inputmode="numeric" bind:value={editPlatinum} min="1" max="900000" step="1" required /></label><label>Количество, шт.<input type="number" inputmode="numeric" bind:value={editQuantity} min="1" max="9999" step="1" required /></label>{#if editingOrder.perTrade !== null}<label>В одной сделке, шт.<input type="number" inputmode="numeric" bind:value={editPerTrade} min="1" max="6" step="1" required /></label>{/if}</div>
+      <div class="order-editor__fields"><label>Цена, платина{#if (editPerTrade ?? 1) > 1}<small>за {editPerTrade} шт.</small>{/if}<input type="number" inputmode="numeric" bind:value={editPlatinum} min="1" max="900000" step="1" required /></label><label>Количество, шт.<input type="number" inputmode="numeric" bind:value={editQuantity} min="1" max="9999" step="1" required /></label>{#if editOriginalPerTrade !== null}<label>В одной сделке, шт.<input type="number" inputmode="numeric" bind:value={editPerTrade} min="1" max="6" step="1" required /></label>{/if}</div>
       {#if editingRow && rowChange(editingRow) && !rowChange(editingRow)?.delete}<button class="text-button use-suggestion" type="button" onclick={() => { if (editingRow.suggestedPrice !== null) editPlatinum = editingRow.suggestedPrice; if (editingRow.suggestedQuantity !== null) editQuantity = editingRow.suggestedQuantity; }}>Подставить предложенные цену и количество</button>{/if}
       <label class="compact-check"><input type="checkbox" bind:checked={editVisible} /> Показывать на Warframe Market</label>
-      <section class="edit-preview" aria-label="Изменения объявления"><strong>Будет сохранено</strong><dl><div><dt>Цена{(editingOrder.perTrade ?? 1) > 1 ? " за партию" : " за штуку"}</dt><dd>{money(editingOrder.platinum)} → {money(editPlatinum ?? null)}</dd></div><div><dt>Количество</dt><dd>{editingOrder.quantity} → {editQuantity ?? "—"} шт.</dd></div>{#if editPerTrade !== null}<div><dt>В одной сделке</dt><dd>{editingOrder.perTrade} → {editPerTrade} шт.</dd></div>{/if}<div><dt>Показ на рынке</dt><dd>{editVisible ? "Включён" : "Выключен"}</dd></div></dl></section>
-      <div class="confirm-actions"><button type="submit" disabled={applying || (editPlatinum === editingOrder.platinum && editQuantity === editingOrder.quantity && editVisible === editingOrder.visible && editPerTrade === editingOrder.perTrade)}>{applying ? "Сохраняем…" : "Сохранить изменения"}</button><button class="text-button danger" type="button" disabled={applying} onclick={() => orderToRemove = editingOrder}>Удалить объявление</button></div>
+      <section class="edit-preview" aria-label="Изменения объявления"><strong>Будет сохранено</strong><dl><div><dt>Цена{(editPerTrade ?? 1) > 1 ? " за партию" : " за штуку"}</dt><dd>{money(editingOrder.platinum)} → {money(editPlatinum ?? null)}</dd></div><div><dt>Количество</dt><dd>{editingOrder.quantity} → {editQuantity ?? "—"} шт.</dd></div>{#if editOriginalPerTrade !== null}<div><dt>В одной сделке</dt><dd>{editOriginalPerTrade} → {editPerTrade} шт.</dd></div>{/if}<div><dt>Показ на рынке</dt><dd>{editVisible ? "Включён" : "Выключен"}</dd></div></dl></section>
+      <div class="confirm-actions"><button type="submit" disabled={applying || (editPlatinum === editingOrder.platinum && editQuantity === editingOrder.quantity && editVisible === editingOrder.visible && editPerTrade === editOriginalPerTrade)}>{applying ? "Сохраняем…" : "Сохранить изменения"}</button><button class="text-button danger" type="button" disabled={applying} onclick={() => orderToRemove = editingOrder}>Удалить объявление</button></div>
     </form>{/if}
   {/if}
 </dialog>

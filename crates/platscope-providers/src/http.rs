@@ -51,6 +51,29 @@ impl BoundedHttpClient {
         allow_text_plain: bool,
         max_response_bytes: usize,
     ) -> Result<Vec<u8>, ProviderError> {
+        self.get_with_limit(url, allow_text_plain, false, max_response_bytes)
+            .await
+    }
+
+    /// Публичный JSON игры DE отдаёт с `text/html`. Исключение ограничено этим URL;
+    /// тело затем обязательно проходит проверку JSON и серверного времени.
+    pub(crate) async fn get_game_worldstate(&self) -> Result<Vec<u8>, ProviderError> {
+        self.get_with_limit(
+            "https://api.warframe.com/cdn/worldState.php",
+            false,
+            true,
+            4 * 1024 * 1024,
+        )
+        .await
+    }
+
+    async fn get_with_limit(
+        &self,
+        url: &str,
+        allow_text_plain: bool,
+        allow_game_html: bool,
+        max_response_bytes: usize,
+    ) -> Result<Vec<u8>, ProviderError> {
         if max_response_bytes == 0 {
             return Err(ProviderError::validation(
                 "HTTP response size limit must be greater than zero",
@@ -105,7 +128,8 @@ impl BoundedHttpClient {
             .to_ascii_lowercase();
         let valid_type = content_type.contains("application/json")
             || content_type.contains("+json")
-            || (allow_text_plain && content_type.contains("text/plain"));
+            || (allow_text_plain && content_type.contains("text/plain"))
+            || (allow_game_html && content_type.contains("text/html"));
         if !valid_type {
             return Err(ProviderError::schema_changed(format!(
                 "unexpected content type: {content_type}"

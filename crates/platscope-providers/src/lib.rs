@@ -8,6 +8,7 @@ mod warframe_market;
 mod wfcd_metadata;
 mod world_activity;
 mod worldstate;
+mod worldstate_source;
 
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, Utc};

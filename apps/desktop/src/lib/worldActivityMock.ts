@@ -1,8 +1,11 @@
 import { CYCLES, type ActivityOffer, type WorldActivityView } from "./worldActivity";
 import realResurgenceOffers from "../../../../fixtures/world-activity/resurgence-offers.json";
+import directSourceViews from "../../../../fixtures/worldstate/views-2026-09-07.json";
 
 /** Только демонстрационные данные фонового браузера, не настройки игрока. */
 export function makeWorldActivityMock(scenario: string | null, now = Date.now()): WorldActivityView {
+  // Зафиксированный результат настоящего резервного загрузчика, без данных аккаунта.
+  if (scenario === "direct") return structuredClone(directSourceViews.world) as WorldActivityView;
   const date = (minutes: number) => new Date(now + minutes * 60_000).toISOString();
   const gear = (name: string, nameEn: string, ref: string, cost: number): ActivityOffer => ({
     gameRef: ref, displayName: name, displayNameEn: nameEn, kind: "equipment",

@@ -274,7 +274,10 @@ fn localize_offer(
         .and_then(|metadata| localized_bundle_name(&offer.game_ref, &metadata.mastery_items));
     WorldActivityOfferView {
         game_ref: offer.game_ref.clone(),
-        display_name: name_ru.or(bundle_name.as_ref()).unwrap_or(&name_en).clone(),
+        display_name: name_ru
+            .or(bundle_name.as_ref())
+            .unwrap_or(&name_en)
+            .replace("Unknown item", "Неизвестный предмет"),
         display_name_en: name_en,
         kind: if mastery.is_some() {
             "equipment"

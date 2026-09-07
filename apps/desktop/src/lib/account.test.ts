@@ -6,6 +6,7 @@ import {
   createListingInputFromInventory,
   matchingSellOrder,
   orderEnglishName,
+  editableOrderPerTrade,
   validateListingNumbers,
   type AccountView,
 } from "./account";
@@ -45,6 +46,28 @@ const row: MarketSearchRow = {
 };
 
 describe("account listing drafts", () => {
+  it("не предлагает партию для комплекта с perTrade: 1 в ответе API", () => {
+    const item = { slug: "styanax_prime_set", displayName: "Стинакс Прайм: Комплект", displayNameEn: "Styanax Prime Set", imageUrl: null, itemKind: "standard" as const, bulkTradable: false };
+    const perTrade = editableOrderPerTrade(item, { bulkTradable: true }, 1);
+    expect(perTrade).toBeNull();
+    expect(validateListingNumbers(40, 2, perTrade)).toBeNull();
+    expect(editableOrderPerTrade(undefined, undefined, 1)).toBeNull();
+  });
+
+  it("сохраняет размер партии у мистификатора и поддерживает покупку без инвентаря", () => {
+    const item = { slug: "primary_deadhead", displayName: "Мистическое Обезглавливание", displayNameEn: "Primary Deadhead", imageUrl: null, itemKind: "standard" as const, bulkTradable: true };
+    expect(editableOrderPerTrade(item, null, 3)).toBe(3);
+    expect(editableOrderPerTrade(item, null, null)).toBe(1);
+    expect(editableOrderPerTrade(undefined, { bulkTradable: true }, 2)).toBe(2);
+    expect(validateListingNumbers(30, 5, editableOrderPerTrade(item, null, 3))).not.toBeNull();
+    expect(validateListingNumbers(30, 6, editableOrderPerTrade(item, null, 3))).toBeNull();
+  });
+
+  it("не объясняет запрещённую партию как ошибочное количество", () => {
+    expect(accountActionErrorMessage("perTrade: forbidden for a non-bulk item")).toContain("не предусмотрен");
+    expect(accountActionErrorMessage("per_trade must divide quantity")).toContain("от 1 до 6");
+  });
+
   it("shows the English market name only when it adds useful context", () => {
     expect(orderEnglishName({
       slug: "primed_flow",

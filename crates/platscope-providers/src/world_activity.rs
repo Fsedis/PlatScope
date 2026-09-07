@@ -91,14 +91,9 @@ impl WorldActivityProvider {
     /// # Errors
     /// Возвращает ошибку сети либо несовместимого корневого документа.
     pub async fn fetch(&self) -> Result<WorldActivitySnapshot, ProviderError> {
-        let body = self
-            .client
-            .get_json_with_limit(
-                "https://api.warframestat.us/pc?language=en",
-                false,
-                4 * 1024 * 1024,
-            )
-            .await?;
+        let document = crate::worldstate_source::fetch_worldstate(&self.client).await?;
+        let body = serde_json::to_vec(&document)
+            .map_err(|error| ProviderError::schema_changed(error.to_string()))?;
         parse_world_activity(&body, Utc::now())
     }
 }

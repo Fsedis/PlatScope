@@ -171,7 +171,15 @@ pub struct ResourceConverterService {
 
 pub struct BountyHunterService {
     provider: WarframeWorldstateProvider,
-    cache: tokio::sync::Mutex<Option<(Instant, BountyState)>>,
+    cache: tokio::sync::Mutex<BountyCache>,
+}
+
+#[derive(Default)]
+struct BountyCache {
+    loaded: bool,
+    state: Option<BountyState>,
+    attempted_at: Option<Instant>,
+    failed: bool,
 }
 
 pub struct AccountService {
@@ -194,6 +202,8 @@ pub struct AccountView {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountOrderItemView {
+    #[serde(default)]
+    pub bulk_tradable: bool,
     pub slug: String,
     pub display_name: String,
     pub display_name_en: String,
@@ -419,6 +429,8 @@ pub struct BountyRewardView {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BountyJobView {
+    #[serde(default)]
+    pub expiry: Option<chrono::DateTime<Utc>>,
     pub id: String,
     pub title: String,
     pub min_level: u16,
@@ -447,6 +459,8 @@ pub struct BountyRegionView {
 #[serde(rename_all = "camelCase")]
 pub struct BountyHunterView {
     pub fetched_at: chrono::DateTime<Utc>,
+    #[serde(default)]
+    pub refresh_failed: bool,
     pub market_source_date: Option<NaiveDate>,
     pub regions: Vec<BountyRegionView>,
 }
@@ -1560,7 +1574,7 @@ impl BountyHunterService {
     pub fn production() -> Result<Self, CoreError> {
         Ok(Self {
             provider: WarframeWorldstateProvider::production()?,
-            cache: tokio::sync::Mutex::new(None),
+            cache: tokio::sync::Mutex::new(BountyCache::default()),
         })
     }
 
@@ -1575,7 +1589,7 @@ impl BountyHunterService {
         settings: &AppSettings,
         force_refresh: bool,
     ) -> Result<Option<BountyHunterView>, CoreError> {
-        let state = self.bounty_state(force_refresh).await?;
+        let (state, refresh_failed) = self.bounty_state(database, force_refresh).await?;
         let database = database.try_lock().map_err(|_| {
             CoreError::DatabaseState("market data is being updated; retry shortly".into())
         })?;
@@ -1585,30 +1599,89 @@ impl BountyHunterService {
         let market_source_date = database
             .current_market_snapshot()?
             .map(|snapshot| snapshot.source_date);
-        build_bounty_hunter_view(&database, settings, &catalog, &state, market_source_date)
-            .map(Some)
+        let mut view =
+            build_bounty_hunter_view(&database, settings, &catalog, &state, market_source_date)?;
+        view.refresh_failed = refresh_failed;
+        Ok(Some(view))
     }
 
-    async fn bounty_state(&self, force_refresh: bool) -> Result<BountyState, CoreError> {
+    async fn bounty_state(
+        &self,
+        database: &Mutex<Database>,
+        force_refresh: bool,
+    ) -> Result<(BountyState, bool), CoreError> {
+        const CACHE_KEY: &str = "bounty_hunter.snapshot.v1";
         let mut cache = self.cache.lock().await;
-        if !force_refresh
-            && let Some((stored_at, state)) = cache.as_ref()
-            && stored_at.elapsed() <= RESOURCE_WORLDSTATE_CACHE_TTL
+        if !cache.loaded
+            && let Ok(database) = database.try_lock()
         {
-            return Ok(state.clone());
+            cache.state = database.get_setting(CACHE_KEY).ok().flatten();
+            cache.loaded = true;
         }
-        let state = tokio::time::timeout(BOUNTY_WORLDSTATE_TIMEOUT, self.provider.fetch_bounties())
-            .await
-            .map_err(|_| {
-                ProviderError::new(
-                    ProviderErrorCode::Timeout,
-                    "bounty worldstate request exceeded 15 seconds",
-                    true,
-                )
-            })??;
-        *cache = Some((Instant::now(), state.clone()));
-        Ok(state)
+        if bounty_cache_due(&cache, force_refresh, Utc::now()) {
+            cache.attempted_at = Some(Instant::now());
+            let result =
+                tokio::time::timeout(BOUNTY_WORLDSTATE_TIMEOUT, self.provider.fetch_bounties())
+                    .await
+                    .map_err(|_| {
+                        ProviderError::new(
+                            ProviderErrorCode::Timeout,
+                            "bounty worldstate request exceeded 15 seconds",
+                            true,
+                        )
+                    })
+                    .and_then(std::convert::identity);
+            match result {
+                Ok(state) => {
+                    if let Ok(database) = database.try_lock() {
+                        let _ = database.set_setting(CACHE_KEY, &state);
+                    }
+                    cache.state = Some(state);
+                    cache.failed = false;
+                }
+                Err(error) => {
+                    tracing::warn!(event = "bounty_refresh_failed", code = ?error.code, "bounty refresh failed; keeping saved rotation");
+                    cache.failed = true;
+                    if cache.state.is_none() {
+                        return Err(error.into());
+                    }
+                }
+            }
+        }
+        let mut state = cache.state.clone().ok_or_else(|| {
+            ProviderError::new(
+                ProviderErrorCode::Unavailable,
+                "public bounty sources unavailable; retry shortly",
+                true,
+            )
+        })?;
+        let now = Utc::now();
+        state
+            .missions
+            .retain(|mission| mission.activation <= now && mission.expiry > now);
+        for mission in &mut state.missions {
+            mission.jobs.retain(|job| job.expiry > now);
+        }
+        Ok((state, cache.failed))
     }
+}
+
+fn bounty_cache_due(cache: &BountyCache, force: bool, now: chrono::DateTime<Utc>) -> bool {
+    if cache
+        .attempted_at
+        .is_some_and(|at| at.elapsed() < Duration::from_secs(30))
+    {
+        return false;
+    }
+    if force || cache.failed {
+        return true;
+    }
+    cache.state.as_ref().is_none_or(|state| {
+        now.signed_duration_since(state.fetched_at).num_seconds() >= 300
+            || state.missions.iter().any(|mission| {
+                mission.expiry <= now || mission.jobs.iter().any(|job| job.expiry <= now)
+            })
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -1689,6 +1762,7 @@ fn build_bounty_hunter_view(
     });
     Ok(BountyHunterView {
         fetched_at: state.fetched_at,
+        refresh_failed: false,
         market_source_date,
         regions,
     })
@@ -1724,6 +1798,7 @@ fn build_bounty_job_view(
     let min_level = job.enemy_levels.first().copied().unwrap_or_default();
     let max_level = job.enemy_levels.get(1).copied().unwrap_or(min_level);
     Ok(BountyJobView {
+        expiry: Some(job.expiry),
         id: bounty_job_view_id(job),
         title: localized_bounty_title(job),
         min_level,
@@ -3772,6 +3847,7 @@ pub fn enrich_account_view(
         .filter(|item| wanted.contains(item.item_id.as_str()))
         .map(|item| {
             let item_kind = market_item_kind_from_slug(&item.tags, &item.slug);
+            let bulk_tradable = catalog_bulk_tradable(item.bulk_tradable, &item.tags);
             let order_set_components = set_components
                 .get(&item.slug)
                 .map(|components| {
@@ -3808,6 +3884,7 @@ pub fn enrich_account_view(
             (
                 item.item_id,
                 AccountOrderItemView {
+                    bulk_tradable,
                     image_url: component_images
                         .get(&item.slug)
                         .cloned()
@@ -5955,6 +6032,44 @@ mod tests {
         assert_eq!(stages[0].len(), 2);
     }
 
+    #[tokio::test]
+    async fn bounty_saved_rotation_survives_restart_and_failed_refresh() {
+        let now = Utc::now();
+        let state: BountyState = serde_json::from_value(serde_json::json!({
+            "fetchedAt": now, "missions": [{"id":"saved", "activation":now - chrono::Duration::minutes(10),
+                "expiry":now + chrono::Duration::minutes(30), "syndicate":"Ostrons", "syndicateKey":"Ostrons",
+                "jobs":[{"id":"job", "uniqueName":"/Lotus/TierATableARewards", "type":"Capture", "expiry":now + chrono::Duration::minutes(5),
+                    "enemyLevels":[5,15], "standingStages":[100,100,200], "rewardPoolDrops":[{"item":"Aya","rarity":"Rare","chance":10}]}]}]
+        })).unwrap();
+        let database = Mutex::new(Database::open_in_memory().unwrap());
+        database
+            .lock()
+            .unwrap()
+            .set_setting("bounty_hunter.snapshot.v1", &state)
+            .unwrap();
+        let service = BountyHunterService::production().unwrap();
+        let (restored, failed) = service.bounty_state(&database, false).await.unwrap();
+        assert_eq!(restored, state);
+        assert!(!failed);
+        {
+            let mut cache = service.cache.lock().await;
+            cache.failed = true;
+            cache.attempted_at = Some(Instant::now());
+            assert!(!bounty_cache_due(&cache, true, now));
+        }
+        let (saved, failed) = service.bounty_state(&database, true).await.unwrap();
+        assert_eq!(saved, state);
+        assert!(failed);
+        let mut cache = service.cache.lock().await;
+        cache.attempted_at = None;
+        cache.failed = false;
+        assert!(bounty_cache_due(
+            &cache,
+            false,
+            now + chrono::Duration::minutes(6)
+        ));
+    }
+
     #[test]
     fn bounty_view_ids_distinguish_jobs_with_the_same_worldstate_id() {
         let make_job = |unique_name: &str| BountyJob {
@@ -6701,6 +6816,60 @@ mod tests {
             assert_eq!(item.display_name_ru.as_deref(), Some("Реликвия Акси N10"));
             assert_eq!(item.sellable_quantity, 2);
         }
+    }
+
+    #[test]
+    fn account_item_capabilities_come_from_catalog_not_order_per_trade() {
+        let (database, mut catalog) = nightwave_market_fixture(Utc::now());
+        let template = catalog.items[0].clone();
+        catalog.metadata.checksum_sha256 = "account-bulk-capabilities".into();
+        catalog.metadata.item_count = 3;
+        catalog.items = [
+            ("styanax_prime_set", false, vec!["warframe", "prime", "set"]),
+            ("primary_deadhead", true, vec!["arcane_enhancement"]),
+            ("axi_n10_relic", false, vec!["relic"]),
+        ]
+        .into_iter()
+        .map(|(slug, bulk_tradable, tags)| {
+            let mut item = template.clone();
+            item.item_id = slug.into();
+            item.slug = slug.into();
+            item.bulk_tradable = bulk_tradable;
+            item.tags = tags.into_iter().map(String::from).collect();
+            item
+        })
+        .collect();
+        database.lock().unwrap().promote_catalog(&catalog).unwrap();
+        let orders = catalog
+            .items
+            .iter()
+            .map(|item| {
+                serde_json::from_value(serde_json::json!({
+                    "id": item.item_id, "itemId": item.item_id, "type": "sell",
+                    "platinum": 40, "quantity": 2, "perTrade": 1, "visible": true,
+                    "createdAt": Utc::now(), "updatedAt": Utc::now()
+                }))
+                .unwrap()
+            })
+            .collect();
+        let view = enrich_account_view(
+            &database,
+            Language::Russian,
+            AccountView {
+                connected: true,
+                profile: None,
+                orders,
+                order_items: HashMap::new(),
+            },
+        )
+        .unwrap();
+        assert!(!view.order_items["styanax_prime_set"].bulk_tradable);
+        assert!(view.order_items["primary_deadhead"].bulk_tradable);
+        assert!(view.order_items["axi_n10_relic"].bulk_tradable);
+        assert_eq!(
+            serde_json::to_value(&view).unwrap()["orderItems"]["styanax_prime_set"]["bulkTradable"],
+            false
+        );
     }
 
     #[test]

@@ -77,14 +77,14 @@
   function acceptView(nextView: BountyHunterView | null): void {
     revision += 1;
     view = nextView;
-    error = "";
+    error = nextView?.refreshFailed ? "Источник заказов временно недоступен. Показываем сохранённые заказы, у которых ещё не истёк срок." : "";
     livePrices = new Map();
     liveMessages = new Map();
     liveBusyJobId = "";
     marketMessage = "";
     nowMs = Date.now();
     const due = bountyAutomaticRefreshAt(nextView);
-    retryAt = nextView && (due === null || due <= nowMs) ? nowMs + BOUNTY_AUTO_RETRY_DELAY_MS : null;
+    retryAt = nextView && (nextView.refreshFailed || due === null || due <= nowMs) ? nowMs + BOUNTY_AUTO_RETRY_DELAY_MS : null;
   }
 
   async function load(forceRefresh = false): Promise<void> {
@@ -99,7 +99,7 @@
     } catch {
       if (disposed || revision !== requestedRevision) return;
       error = view ? "Не удалось обновить заказы. Показываем только те, у которых ещё не истёк срок."
-        : "Не удалось загрузить заказы. Проверьте соединение с интернетом.";
+        : "Не удалось получить заказы от источников игры. Повторим загрузку автоматически.";
       retryAt = Date.now() + BOUNTY_AUTO_RETRY_DELAY_MS;
     } finally {
       if (!disposed) { loading = false; nowMs = Date.now(); }

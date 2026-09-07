@@ -4854,6 +4854,7 @@ mod tests {
             order_items: HashMap::from([(
                 "item-123".into(),
                 AccountOrderItemView {
+                    bulk_tradable: false,
                     slug: "strun_prime_stock".into(),
                     display_name: "Стран Прайм: Приклад".into(),
                     display_name_en: "Strun Prime Stock".into(),
@@ -4897,6 +4898,7 @@ mod tests {
             order_items: HashMap::from([(
                 "transient-fortitude".into(),
                 AccountOrderItemView {
+                    bulk_tradable: false,
                     slug: "transient_fortitude".into(),
                     display_name: "Кратковременное усиление".into(),
                     display_name_en: "Transient Fortitude".into(),
@@ -4938,6 +4940,7 @@ mod tests {
             order_items: HashMap::from([(
                 "toxic-flight".into(),
                 AccountOrderItemView {
+                    bulk_tradable: false,
                     slug: "toxic_flight".into(),
                     display_name: "Токсичный Полёт".into(),
                     display_name_en: "Toxic Flight".into(),
@@ -5002,6 +5005,7 @@ mod tests {
             order_items: HashMap::from([(
                 "hildryn-set".into(),
                 AccountOrderItemView {
+                    bulk_tradable: false,
                     slug: "hildryn_prime_set".into(),
                     display_name: "Хильдрин Прайм: Комплект".into(),
                     display_name_en: "Hildryn Prime Set".into(),

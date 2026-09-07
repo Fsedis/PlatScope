@@ -18,6 +18,7 @@ use crate::scan::{SessionInfo, find_wf_pid, scan_session};
 
 const INVENTORY_URL: &str = "https://api.warframe.com/api/inventory.php";
 const NIGHTWAVE_STATE_URL: &str = "https://api.warframestat.us/pc/nightwave?language=en";
+const DIRECT_WORLDSTATE_URL: &str = "https://api.warframe.com/cdn/worldState.php";
 const VENDOR_INFO_URL: &str = "https://api.warframe.com/api/getVendorInfo.php";
 const MAX_VENDOR_RESPONSE_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_INVENTORY_RESPONSE_BYTES: u64 = 8 * 1024 * 1024;
@@ -137,16 +138,9 @@ fn fetch_nightwave_vendor(
     client: &Client,
     info: &SessionInfo,
 ) -> (Option<NightwaveVendorSnapshot>, NightwaveVendorScanStatus) {
-    let public_state = match client.get(NIGHTWAVE_STATE_URL).send() {
-        Ok(response) if response.status().is_success() => {
-            match bounded_response(response, MAX_VENDOR_RESPONSE_BYTES).and_then(|bytes| {
-                serde_json::from_slice::<NightwavePublicState>(&bytes).map_err(Into::into)
-            }) {
-                Ok(state) => state,
-                Err(_) => return (None, NightwaveVendorScanStatus::PublicStateUnavailable),
-            }
-        }
-        _ => return (None, NightwaveVendorScanStatus::PublicStateUnavailable),
+    let public_state = match fetch_nightwave_public_state(client) {
+        Ok(state) => state,
+        Err(_) => return (None, NightwaveVendorScanStatus::PublicStateUnavailable),
     };
     let Some(vendor_type) = nightwave_vendor_type(&public_state.tag) else {
         return (None, NightwaveVendorScanStatus::SeasonTagInvalid);
@@ -181,6 +175,56 @@ fn fetch_nightwave_vendor(
         }
         Err(_) => (None, NightwaveVendorScanStatus::ResponseInvalid),
     }
+}
+
+fn fetch_nightwave_public_state(client: &Client) -> Result<NightwavePublicState> {
+    // Публичные запросы не содержат accountId, nonce или других реквизитов игры.
+    let direct = client
+        .get(DIRECT_WORLDSTATE_URL)
+        .timeout(Duration::from_secs(8))
+        .send()
+        .map_err(Into::into)
+        .and_then(|response| bounded_response(response, MAX_VENDOR_RESPONSE_BYTES))
+        .and_then(|bytes| parse_direct_nightwave(&bytes, Utc::now()));
+    if let Ok(state) = direct {
+        return Ok(state);
+    }
+    let response = client
+        .get(NIGHTWAVE_STATE_URL)
+        .timeout(Duration::from_secs(8))
+        .send()?;
+    let bytes = bounded_response(response, MAX_VENDOR_RESPONSE_BYTES)?;
+    let state: NightwavePublicState = serde_json::from_slice(&bytes)?;
+    if state.expiry.is_none_or(|expiry| expiry <= Utc::now()) {
+        bail!("public nightwave season expired");
+    }
+    Ok(state)
+}
+
+fn parse_direct_nightwave(bytes: &[u8], now: DateTime<Utc>) -> Result<NightwavePublicState> {
+    let raw: Value = serde_json::from_slice(bytes)?;
+    let server_time = raw["Time"]
+        .as_i64()
+        .and_then(|time| DateTime::from_timestamp(time, 0))
+        .filter(|time| {
+            *time <= now + chrono::Duration::minutes(5)
+                && *time >= now - chrono::Duration::minutes(20)
+        })
+        .ok_or_else(|| anyhow!("public worldstate is stale"))?;
+    let season = &raw["SeasonInfo"];
+    let expiry = mongo_date(&season["Expiry"])
+        .filter(|expiry| *expiry > server_time && *expiry > now)
+        .ok_or_else(|| anyhow!("public nightwave season expired"))?;
+    let tag = season["AffiliationTag"]
+        .as_str()
+        .ok_or_else(|| anyhow!("public nightwave tag missing"))?;
+    if nightwave_vendor_type(tag).is_none() {
+        bail!("public nightwave tag invalid");
+    }
+    Ok(NightwavePublicState {
+        tag: tag.to_owned(),
+        expiry: Some(expiry),
+    })
 }
 
 fn nightwave_vendor_type(tag: &str) -> Option<String> {
@@ -380,6 +424,22 @@ impl InventoryScanner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn direct_nightwave_uses_real_season_and_rejects_stale_worldstate() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../fixtures/worldstate/direct-2026-09-07.json"
+        ))
+        .unwrap();
+        let raw = &fixture["worldstate"];
+        let bytes = serde_json::to_vec(raw).unwrap();
+        let now = DateTime::from_timestamp(raw["Time"].as_i64().unwrap(), 0).unwrap();
+        let state = parse_direct_nightwave(&bytes, now).unwrap();
+        assert_eq!(state.tag, "RadioLegionIntermission16Syndicate");
+        assert!(state.expiry.unwrap() > now);
+        assert!(parse_direct_nightwave(&bytes, now + chrono::Duration::minutes(21)).is_err());
+        assert!(parse_direct_nightwave(b"<html>unavailable</html>", now).is_err());
+    }
 
     #[test]
     fn spaced_season_tag_maps_to_vendor_manifest() {

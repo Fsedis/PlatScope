@@ -38,6 +38,7 @@ export interface AccountView {
 }
 
 export interface AccountOrderItem {
+  bulkTradable?: boolean;
   slug: string;
   displayName: string;
   displayNameEn: string;
@@ -51,6 +52,15 @@ export interface AccountSetComponent {
   requiredQuantity: number;
   displayName: string;
   displayNameEn: string;
+}
+
+/** Наличие perTrade в ответе не означает, что API разрешает изменять это поле. */
+export function editableOrderPerTrade(
+  item: AccountOrderItem | null | undefined,
+  inventory: Pick<InventoryViewItem, "bulkTradable"> | null | undefined,
+  current: number | null,
+): number | null {
+  return (item?.bulkTradable ?? inventory?.bulkTradable ?? false) ? current ?? 1 : null;
 }
 
 export function orderEnglishName(item: AccountOrderItem | undefined): string | null {
@@ -136,6 +146,11 @@ export function accountActionErrorMessage(
 ): string {
   const normalized = reason.toLowerCase();
   if (normalized.includes("pertrade") || normalized.includes("per_trade")) {
+    if (/forbidden|not.allowed|not.supported|not.bulk/.test(normalized)) {
+      return locale === "en"
+        ? "This item does not support bulk orders. Refresh the item data and reopen the order."
+        : "Для этого предмета размер партии не предусмотрен. Обновите данные предметов и откройте объявление заново.";
+    }
     return locale === "en"
       ? "Set how many items are sold per trade. Use a value from 1 to 6 that divides the total quantity evenly."
       : "Укажите предметов за одну сделку: от 1 до 6, без остатка от общего количества.";
