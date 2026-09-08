@@ -35,20 +35,14 @@
     type InventoryCategoryFilter,
   } from "./inventory";
 
-  import { formatChange, timingLabel, timingShortLabel } from "./history";
   import {
     formatPlatinum,
-    formatVolume,
-    freshnessLabel,
-    priceReasonMessage,
     variantLabel,
   } from "./market";
   import {
     filterAndSortSellNowRows,
-    priorityReasonMessages,
     resolveSellNowSelection,
     sellNowRowDomKey,
-    sellPriorityRanks,
     sellNowRowIdentity,
     withCheckedPrice,
     isCheckedPriceCurrent,
@@ -200,6 +194,7 @@
   let viewRequest = 0;
   let accountRequest = 0;
   let liveRequest = 0;
+  let autoQuoteIdentity = "";
   let destroyed = false;
   let orderPriceEdited = false;
   $: filterSignature = JSON.stringify([query, category, preset, sortKey, sortDirection]);
@@ -223,7 +218,6 @@
     sortKey,
     sortDirection,
   });
-  $: priorityRanks = sellPriorityRanks(view?.rows ?? []);
   $: categories = INVENTORY_CATEGORIES.filter(candidate => candidate === category || view?.rows.some(row => inventoryCategory(row.inventory) === candidate));
   $: pageView = inventoryPage(visibleRows, page);
   $: selectedRow = resolveSellNowSelection(visibleRows, selectedIdentity, pageView.rows);
@@ -245,6 +239,18 @@
   $: if (!selectedRow) { pendingListingAction = null; orderDraftSeed = ""; detailOpen = false; }
   $: selectedQuote = selectedRow ? checkedPrices.get(sellNowRowIdentity(selectedRow)) : undefined;
   $: activeLive = selectedQuote && isCheckedPriceCurrent(selectedQuote, quoteNow, quoteTtlSeconds) ? selectedQuote : null;
+  $: sellerOrders = (activeLive?.orders ?? [])
+    .filter(order => order.side === "sell")
+    .sort((a, b) => a.platinum / Math.max(1, a.perTrade) - b.platinum / Math.max(1, b.perTrade));
+  $: if (selectedRow && sellNowRowIdentity(selectedRow) !== autoQuoteIdentity) {
+    autoQuoteIdentity = sellNowRowIdentity(selectedRow);
+    ++liveRequest;
+    liveLoading = false;
+    liveError = "";
+    const quote = checkedPrices.get(autoQuoteIdentity);
+    if (!quote || !isCheckedPriceCurrent(quote, quoteNow, quoteTtlSeconds)) void loadLive(selectedRow);
+  }
+  $: if (!selectedRow) autoQuoteIdentity = "";
   $: resultStatus = loading
     ? c.matching
     : refreshing
@@ -528,29 +534,8 @@
     return direction === "asc" ? "ascending" : "descending";
   }
 
-  function shortTiming(row: SellNowRow): string {
-    if (!row.inventory.sellableQuantity) return $locale === "ru" ? "Нет копий к продаже" : "No sellable copies";
-    return row.trend?.timing ? timingShortLabel(row.trend.timing, $locale) : c.noSignal;
-  }
-
-  function timingDescription(row: SellNowRow): string {
-    if (!row.inventory.sellableQuantity) return shortTiming(row);
-    return row.trend?.timing ? timingLabel(row.trend.timing, $locale) : c.noSignal;
-  }
-
-  function priceTrendText(value: number | null | undefined): string {
-    if (value === null || value === undefined || !Number.isFinite(value)) return c.noPriceTrend;
-    if (Math.abs(value) < 1) return c.priceFlat;
-    const magnitude = formatChange(Math.abs(value), $locale).replace(/^\+/, "");
-    return value > 0 ? c.priceUp(magnitude) : c.priceDown(magnitude);
-  }
-
   function displayPrice(value: number | null | undefined): string {
     return value === null || value === undefined ? c.noPrice : formatPlatinum(value, $locale);
-  }
-
-  function priorityRank(row: SellNowRow): number | null {
-    return priorityRanks.get(sellNowRowIdentity(row)) ?? null;
   }
 
   onMount(() => {
@@ -752,13 +737,28 @@
               <div><span>{t("Оценка за штуку", "Estimate per item")}</span><strong>{formatPlatinum(selectedRow.recommendation?.listPrice ?? selectedRow.recommendation?.fairPrice ?? null, $locale)}</strong>
                 {#if activeLive}<small class="checked-price">✓ {u.checked} {new Date(activeLive.fetchedAt).toLocaleTimeString(localeCode($locale), {hour:"2-digit",minute:"2-digit"})}</small>{/if}
               </div>
-              <button type="button" class="text-action" disabled={liveLoading || !selectedRow.inventory.key} onclick={() => loadLive(selectedRow)}>{liveLoading ? t("Проверяем…", "Checking…") : u.check}</button>
             </div>
-            <div class="live-status" aria-live="polite">
-              {#if activeLive && selectedRow.recommendation?.quickSell != null}<span>{c.quickSell}: <strong>{formatPlatinum(selectedRow.recommendation.quickSell, $locale)}</strong></span>{/if}
-              {#if activeLive?.warning}<strong>{t("Часть ордеров недоступна. Оценка может быть неполной.", "Some orders are unavailable. The estimate may be incomplete.")}</strong>{/if}
-              {#if liveError}<strong class="inline-error">{liveError}</strong>{/if}
-            </div>
+
+            <section class="inventory-sellers" aria-label={t("Цены продавцов", "Seller prices")} aria-busy={liveLoading}>
+              <div class="seller-heading">
+                <h3>{t("Продавцы в игре", "In-game sellers")}</h3>
+                <button type="button" class="text-action" disabled={liveLoading || !selectedRow.inventory.key} onclick={() => loadLive(selectedRow)}>{liveLoading ? t("Загрузка…", "Loading…") : t("Обновить цены", "Refresh prices")}</button>
+              </div>
+              <div class="live-status" aria-live="polite">
+                {#if activeLive?.warning}<strong>{t("Часть ордеров недоступна. Оценка может быть неполной.", "Some orders are unavailable. The estimate may be incomplete.")}</strong>{/if}
+                {#if liveError}<strong class="inline-error">{liveError}</strong>{/if}
+              </div>
+              {#if activeLive && sellerOrders.length}
+                <table class="seller-prices">
+                  <thead><tr><th>{t("Цена / шт.", "Price / item")}</th><th>{t("В наличии", "Available")}</th>{#if selectedRow.inventory.bulkTradable}<th>{t("За сделку", "Per trade")}</th>{/if}</tr></thead>
+                  <tbody>{#each sellerOrders as order, index (index)}
+                    <tr><td>{formatPlatinum(order.platinum / Math.max(1, order.perTrade), $locale)}</td><td>{order.quantity} {t("шт.", "pcs")}</td>{#if selectedRow.inventory.bulkTradable}<td>{order.perTrade} {t("шт.", "pcs")}</td>{/if}</tr>
+                  {/each}</tbody>
+                </table>
+              {:else if !liveError}
+                <p class="seller-empty" role="status">{liveLoading ? t("Загружаем цены продавцов…", "Loading seller prices…") : activeLive ? t("Сейчас нет продавцов в игре.", "No sellers in game right now.") : !selectedRow.inventory.key ? t("Предмет не найден на рынке.", "Item not matched on the market.") : t("Цены устарели. Обновите список.", "Prices expired. Refresh the list.")}</p>
+              {/if}
+            </section>
 
             <section class="wfm-order-panel" aria-label={c.wfmOrder} aria-busy={accountLoading || orderBusy}>
               <div class="wfm-order-status" role="status" aria-live="polite">{orderStatusMessage}</div>
@@ -797,35 +797,6 @@
               {/if}
             </section>
 
-            <details class="inventory-market-details">
-              <summary>{t("Рынок и расчёт цены", "Market and price details")}</summary>
-              {#if activeLive}
-                <h3>{t("Предложения игроков в игре", "Offers from in-game players")}</h3>
-                <div class="live-orders__scroll"><table><thead><tr><th>{c.side}</th><th>{c.price}</th><th>{c.quantityLot}</th></tr></thead>
-                  <tbody>{#each activeLive.orders as order, index (order.side + ":" + index)}
-                    <tr><th scope="row">{order.side === "sell" ? c.sellOrder : c.buyOrder}</th><td>{formatPlatinum(order.platinum, $locale)}</td><td>{order.quantity} · {order.perTrade}</td></tr>
-                  {:else}<tr><td colspan="3">{c.noActiveOrders}</td></tr>{/each}</tbody>
-                </table></div>
-              {/if}
-              <dl class="inventory-market-facts">
-                <div><dt>{c.dataDate}</dt><dd>{selectedRow.recommendation?.sourceDate ?? c.noPrice}</dd></div>
-                <div><dt>{c.fairPrice}</dt><dd>{formatPlatinum(selectedRow.recommendation?.fairPrice ?? null, $locale)}</dd></div>
-                <div><dt>{c.salesPerDay}</dt><dd>{formatVolume(selectedRow.recommendation?.closedVolume ?? null, $locale)}</dd></div>
-                <div><dt>{c.freshness}</dt><dd>{selectedRow.recommendation ? freshnessLabel(selectedRow.recommendation.freshness, $locale) : c.noPrice}</dd></div>
-                <div><dt>{c.moment}</dt><dd>{timingDescription(selectedRow)}</dd></div>
-                <div><dt>{c.priceTrend90}</dt><dd>{priceTrendText(selectedRow.trend?.change90d)}</dd></div>
-                <div><dt>{c.nominal}</dt><dd>{formatPlatinum(selectedRow.nominalValue, $locale)}</dd></div>
-                {#if activeLive}
-                  <div><dt>{c.lowestAsk}</dt><dd>{formatPlatinum(selectedRow.recommendation?.lowestAsk ?? null, $locale)}</dd></div>
-                  <div><dt>{c.depthThree}</dt><dd>{formatPlatinum(selectedRow.recommendation?.depthThree ?? null, $locale)}</dd></div>
-                  <div><dt>{c.depthPrice}</dt><dd>{formatPlatinum(selectedRow.recommendation?.depthPrice ?? null, $locale)}</dd></div>
-                {/if}
-              </dl>
-              <h3>{c.whyPrice}</h3>
-              {#if selectedRow.recommendation?.reasons.length}<ul>{#each selectedRow.recommendation.reasons as reason}<li>{priceReasonMessage(reason, $locale)}</li>{/each}</ul>{:else}<p>{c.noPriceSignal}</p>{/if}
-              <h3>{c.priority}</h3><p>{c.priorityPosition(priorityRank(selectedRow), selectedRow.priority.score)}</p>
-              <ul>{#each priorityReasonMessages(selectedRow, $locale, priorityRank(selectedRow)) as reason}<li>{reason}</li>{/each}</ul><p>{c.nominalWarning}</p>
-            </details>
           </aside>
         {/if}
       </div>
@@ -917,10 +888,8 @@
   .inventory-price-line { display:flex; justify-content:space-between; align-items:center; gap:.5rem; }
   .inventory-price-line > div > span { font-size:.75rem; color:var(--text-muted); }
   .inventory-price-line > div > strong { display:block; font-size:1.85rem; line-height:1.25; color:var(--text); font-variant-numeric:tabular-nums; margin:.15rem 0; }
-  .inventory-price-line > button { text-align:right; max-width:9rem; }
   .live-status { margin-top:.5rem; font-size:.73rem; color:var(--text-muted); }
   .live-status:empty { display:none; }
-  .live-status span strong { color:var(--text); font-size:inherit; }
   .wfm-order-panel { margin:1rem 0 0; padding:1rem 0 0; border:0; border-top:1px solid var(--border); background:transparent; border-radius:0; box-shadow:none; }
   .wfm-order-panel p { font-size:.8rem; line-height:1.5; margin:0 0 .75rem; }
   .wfm-order-status { min-height:0; margin:0; }
@@ -936,17 +905,17 @@
   .wfm-order-confirmation h3 { font-size:1rem; margin:0 0 .65rem; }
   .wfm-order-actions { display:grid; gap:.5rem; }
   .wfm-order-panel .confirmation-visibility { font-size:.75rem; color:var(--text-muted); }
-  .inventory-market-details { border-top:1px solid var(--border); margin-top:1.1rem; padding-top:.8rem; }
-  .inventory-market-details summary { cursor:pointer; font-size:.78rem; color:var(--text-muted); font-weight:500; }
-  .inventory-market-details h3 { font-size:.8rem; margin:1rem 0 .5rem; }
-  .inventory-market-details p,.inventory-market-details li { font-size:.75rem; line-height:1.6; color:var(--text-muted); }
-  .inventory-market-details ul { padding-left:1rem; }
-  .inventory-market-facts { display:grid; gap:.6rem; margin:1rem 0; font-size:.75rem; }
-  .inventory-market-facts > div { display:grid; grid-template-columns:1fr 1fr; gap:.5rem; }
-  .inventory-market-facts dt { color:var(--text-muted); }
-  .inventory-market-facts dd { margin:0; text-align:right; overflow-wrap:anywhere; }
-  .inventory-market-details table { font-size:.7rem; }
-  .inventory-market-details th,.inventory-market-details td { padding:.4rem; }
+  .inventory-sellers { margin-top:.85rem; }
+  .seller-heading { display:flex; align-items:center; justify-content:space-between; gap:.5rem; margin-bottom:.5rem; }
+  .seller-heading h3 { font-size:.8rem; margin:0; }
+  .seller-heading .text-action { font-size:.72rem; white-space:nowrap; }
+  .seller-prices { width:100%; table-layout:fixed; font-size:.78rem; font-variant-numeric:tabular-nums; }
+  .seller-prices th,.seller-prices td { padding:.35rem .5rem; text-align:right; }
+  .seller-prices th { font-size:.65rem; letter-spacing:0; text-transform:none; color:var(--text-muted); background:var(--surface-2); }
+  .seller-prices th:first-child,.seller-prices td:first-child { text-align:left; }
+  .seller-prices td:first-child { font-weight:650; }
+  .seller-prices tbody tr:first-child { background:color-mix(in srgb,var(--accent-soft) 28%,var(--surface-1)); }
+  .seller-empty { font-size:.75rem; color:var(--text-muted); margin:.5rem 0; }
   .no-results { padding:3rem 1rem; text-align:center; }
   .no-results h3 { font-size:1rem; }
   .no-results p { font-size:.85rem; }

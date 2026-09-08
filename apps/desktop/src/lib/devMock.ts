@@ -1023,7 +1023,7 @@ export async function installMarketBrowserMock(): Promise<void> {
           lowestAsk: fair === null ? 30 : fair + 2,
           depthThree: fair === null ? 31 : fair + 2.5,
           depthPrice: fair === null ? 32 : fair + 3,
-          liveSellOrderCount: 3,
+          liveSellOrderCount: mockOptions.get("mockSellers") === "empty" ? 0 : 5,
           liveBuyOrderCount: 2,
           confidence: fair === null ? "low" : candidate.recommendation.confidence,
           reasons: [
@@ -1051,15 +1051,17 @@ export async function installMarketBrowserMock(): Promise<void> {
         row,
         fetchedAt: new Date().toISOString(),
         quoteState: mockOptions.get("mockLiveFailure") === "stale" ? "stale_cache" : "network",
-        sellOrderCount: 3,
+        sellOrderCount: mockOptions.get("mockSellers") === "empty" ? 0 : 5,
         buyOrderCount: 2,
         orders: [
           { userIngameName:"MarketTenno", userSlug:"market-tenno", userReputation:127, side: "sell", platinum: fair === null ? 30 : fair + 2, quantity: 1, perTrade: 1, userStatus: "in_game" },
           { userIngameName:"MarketTenno", userSlug:"market-tenno", userReputation:127, side: "sell", platinum: fair === null ? 31 : fair + 3, quantity: 3, perTrade: 1, userStatus: "in_game" },
           { userIngameName:"MarketTenno", userSlug:"market-tenno", userReputation:127, side: "sell", platinum: fair === null ? 32 : fair + 4, quantity: 5, perTrade: 1, userStatus: "in_game" },
+          { userIngameName:"SellerFour", side: "sell", platinum: fair === null ? 33 : fair + 5, quantity: 2, perTrade: 1, userStatus: "in_game" },
+          { userIngameName:"SellerFive", side: "sell", platinum: fair === null ? 34 : fair + 6, quantity: 4, perTrade: 1, userStatus: "in_game" },
           { userIngameName:"BuyerTenno", userSlug:"buyer-tenno", userReputation:42, side: "buy", platinum: fair === null ? 18 : Math.max(1, fair - 9), quantity: 2, perTrade: 1, userStatus: "in_game" },
           { userIngameName:"BuyerTenno", userSlug:"buyer-tenno", userReputation:42, side: "buy", platinum: fair === null ? 17 : Math.max(1, fair - 10), quantity: 4, perTrade: 1, userStatus: "in_game" },
-        ],
+        ].filter(order => mockOptions.get("mockSellers") !== "empty" || order.side !== "sell") as LiveSellNowResult["orders"],
         warning: null,
       } satisfies LiveSellNowResult;
     }
