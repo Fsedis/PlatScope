@@ -5,6 +5,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import AppNavIcon from "./AppNavIcon.svelte";
+  import brandIcon from "../../src-tauri/icons/128x128.png";
   import { localeCode, type UiLocale } from "./i18n";
   import type { MarketSnapshotSummary } from "./foundation";
 
@@ -24,11 +25,13 @@
     { ru: "Торговля", en: "Trading", screens: ["market", "insights"] },
   ];
   $: copy = locale === "ru" ? {
+    brandTagline: "Помощник в Warframe",
     nav: "Разделы приложения", collapse: "Свернуть меню", expand: "Развернуть меню",
     market: "Данные рынка", loading: "Загружаем данные", missing: "Нет сохранённых цен",
     unavailable: "Данные недоступны", settingsHint: "Проверьте настройки", loadHint: "Загрузите в настройках",
     datePrefix: "Цены за", saved: "Цены сохранены", waiting: "Проверяем сохранённые цены",
   } : {
+    brandTagline: "Warframe companion",
     nav: "Application sections", collapse: "Collapse menu", expand: "Expand menu",
     market: "Market data", loading: "Loading data", missing: "No saved prices",
     unavailable: "Data unavailable", settingsHint: "Check settings", loadHint: "Load in settings",
@@ -50,9 +53,9 @@
 </script>
 
 <aside class="sidebar" class:compact aria-label="PlatScope">
-  <div class="brand">
-    <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M16 2 28 9v14l-12 7L4 23V9z" /><path d="m10 21 6-14 6 14-6-4z" /></svg></span>
-    <span class="brand-copy"><strong>PlatScope</strong><small>Warframe Market</small></span>
+  <div class="brand" title={compact ? "PlatScope" : undefined}>
+    <img class="brand-mark" src={brandIcon} alt="" width="48" height="48" draggable="false" />
+    <span class="brand-copy"><strong translate="no">PlatScope</strong><small>{copy.brandTagline}</small></span>
   </div>
 
   <nav id="app-navigation" class="navigation" aria-label={copy.nav}>
@@ -91,12 +94,11 @@
 
 <style>
   .sidebar { position:sticky; top:0; display:flex; flex-direction:column; gap:1.1rem; height:100dvh; min-height:0; padding:1.25rem .75rem .8rem; border-right:1px solid var(--border); background:linear-gradient(160deg, var(--surface-3), var(--sidebar-bg) 48%, var(--surface-3)); overflow-y:auto; scrollbar-width:thin; }
-  .brand { display:flex; align-items:center; gap:.7rem; padding:0 .4rem .55rem; flex:none; }
-  .brand-mark { display:grid; place-items:center; width:2.4rem; height:2.7rem; flex:none; color:var(--accent-strong); }
-  .brand-mark svg { width:2rem; height:2rem; fill:none; stroke:currentColor; stroke-width:1.4; stroke-linejoin:round; }
+  .brand { display:flex; align-items:center; gap:.65rem; padding:.15rem .25rem .75rem; flex:none; }
+  .brand-mark { display:block; width:3rem; height:3rem; flex:none; object-fit:contain; }
   .brand-copy { min-width:0; }
-  .brand-copy strong { display:block; font:700 1.5rem/1.1 Georgia,"Times New Roman",serif; letter-spacing:-.035em; }
-  .brand-copy small { display:block; margin-top:.3rem; font-size:.75rem; color:var(--text-muted); letter-spacing:.035em; }
+  .brand-copy strong { display:block; color:var(--text); font-size:1.5rem; font-weight:750; line-height:1.1; letter-spacing:-.045em; }
+  .brand-copy small { display:block; margin-top:.3rem; font-size:.75rem; line-height:1.35; color:var(--text-muted); }
   .navigation { display:grid; gap:1.1rem; }
   .nav-group { display:grid; gap:.25rem; }
   .group-label { margin:0 0 .2rem .75rem; color:var(--text-subtle); font-size:.75rem; font-weight:600; }
@@ -135,6 +137,7 @@
   @media (max-width:68rem) {
     .sidebar { position:static; height:auto; display:grid; grid-template-columns:1fr auto; gap:.7rem 1rem; padding:.8rem; border-right:0; border-bottom:1px solid var(--border); overflow:visible; }
     .brand { padding:0 .3rem; }
+    .brand-mark { width:2.5rem; height:2.5rem; }
     .brand-copy strong { font-size:1.35rem; }
     .brand-copy small { margin-top:.2rem; }
     .navigation { grid-column:1 / -1; grid-row:2; grid-template-columns:repeat(3,minmax(0,1fr)); gap:.35rem; }

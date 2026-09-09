@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod app_lifecycle;
 mod inventory_refresh;
 mod market_account;
 mod market_profiles;
@@ -3884,6 +3885,7 @@ async fn refresh_game_metadata_in_background(app_handle: &AppHandle, state: &App
 
 fn desktop_builder() -> tauri::Builder<tauri::Wry> {
     tauri::Builder::default()
+        .on_window_event(app_lifecycle::handle_window_event)
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())

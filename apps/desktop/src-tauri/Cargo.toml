@@ -11,6 +11,10 @@ description = "PlatScope desktop shell"
 name = "platscope"
 path = "src/main.rs"
 
+[[test]]
+name = "app_lifecycle"
+harness = false
+
 [lib]
 name = "platscope_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
