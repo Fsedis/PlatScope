@@ -593,9 +593,6 @@ function evaluateOrder(
   const listPrice = recommendation?.listPrice === null || recommendation?.listPrice === undefined
     ? null
     : recommendation.listPrice * lotSize;
-  const fairPrice = recommendation?.fairPrice === null || recommendation?.fairPrice === undefined
-    ? null
-    : recommendation.fairPrice * lotSize;
   if (inventoryAvailable && (!inventory || order.quantity > inventory.sellableQuantity)) {
     return {
       health: "inventory_mismatch",
@@ -616,7 +613,7 @@ function evaluateOrder(
         needsAction: true,
       };
     }
-    if (fairPrice !== null && order.platinum < fairPrice - Math.max(1, Math.round(fairPrice * 0.1))) {
+    if (order.platinum < listPrice - Math.max(1, Math.round(listPrice * 0.1))) {
       return {
         health: "underpriced",
         suggestedPrice: roundedPrice(listPrice),

@@ -56,6 +56,43 @@ function recommendation(): PriceRecommendation {
 }
 
 describe("торговая смена", () => {
+  it.each([
+    { platinum: 15, visible: true, health: "healthy" },
+    { platinum: 16, visible: true, health: "healthy" },
+    { platinum: 15, visible: false, health: "hidden" },
+    { platinum: 16, visible: false, health: "hidden" },
+  ])("не предлагает повысить цену $platinum при оценке 15 и видимости $visible", ({ platinum, visible, health }) => {
+    const quote = { ...recommendation(), listPrice: 15, fairPrice: 30 };
+    const rows = buildTradeShiftRows(
+      { ...account, orders: [{ ...order, platinum, visible, quantity: 1 }] },
+      inventory,
+      new Map([[recommendationIdentity(quote.key), quote]]),
+    );
+
+    expect(rows[0]).toMatchObject({
+      health,
+      suggestedPrice: null,
+      suggestedQuantity: null,
+      needsAction: false,
+    });
+  });
+
+  it.each([1, 3])("предлагает повышение относительно показанной оценки с учётом партии из %i шт.", (lotSize) => {
+    const quote = { ...recommendation(), listPrice: 20, fairPrice: 10 };
+    const rows = buildTradeShiftRows(
+      { ...account, orders: [{ ...order, platinum: 15 * lotSize, quantity: lotSize, perTrade: lotSize }] },
+      null,
+      new Map([[recommendationIdentity(quote.key), quote]]),
+    );
+
+    expect(rows[0]).toMatchObject({
+      health: "underpriced",
+      suggestedPrice: 20 * lotSize,
+      suggestedQuantity: null,
+      needsAction: true,
+    });
+  });
+
   it("не выдаёт возраст публикации ордера за возраст проверки цены", () => {
     const quote = { ...recommendation(), listPrice: 140, fairPrice: 140 };
     const matchingInventory = {
