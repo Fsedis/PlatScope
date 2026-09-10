@@ -1,13 +1,16 @@
 <script lang="ts">
   import MarketOrderTable from "./MarketOrderTable.svelte";
+  import MarketOrderPrices from "./MarketOrderPrices.svelte";
+  import MarketOrderInsight from "./MarketOrderInsight.svelte";
   import MarketTradeHistory from "./MarketTradeHistory.svelte";
   import { marketAnalyticsKey, summarizeMarketAnalytics, type MarketAnalyticsBatch, type MarketAnalyticsSummary } from "./marketAnalytics";
   import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { onMount, tick } from "svelte";
-  import { orderChange, orderMarketPrice, orderUnchanged, reviewedChanges, reviewedQuantitiesMatch, salesFilterRows, type SalesFilter, type ReviewedOrderChange } from "./marketSales";
+  import { orderChange, orderUnchanged, sortSalesRows, type SalesSort, reviewedChanges, reviewedQuantitiesMatch, salesFilterRows, type SalesFilter, type ReviewedOrderChange } from "./marketSales";
   import { variantLabel } from "./market";
   import { checkedLivePrice } from "./livePriceCheck";
+  import { revealCompactDetail } from "./detailNavigation";
 
   import {
     accountActionErrorMessage,
@@ -89,6 +92,10 @@
   let dataRevision = 0;
   let refreshPromise: Promise<void> | null = null;
   let orderDialog: HTMLDialogElement;
+  let discardDialog: HTMLDialogElement;
+  let pendingSelection: TradeShiftRow | null = null;
+  let detailOpen = false;
+  let orderSort: SalesSort = "priority";
   let batchDialog: HTMLDialogElement;
   let visibilityDialog: HTMLDialogElement;
   let undoDialog: HTMLDialogElement;
@@ -144,7 +151,7 @@
   let batchTrigger: HTMLElement | null = null;
 
   function closeEditor(): void {
-    orderDialog?.close(); editingOrder = null; orderToRemove = null;
+    orderDialog?.close(); orderToRemove = null;
     editorTrigger?.focus({ preventScroll: true });
   }
 
@@ -159,7 +166,28 @@
         failedPriceChecks,
       )
     : [];
-  $: visibleRows = salesFilterRows(filterTradeShiftRows(rows, orderQuery), orderFilter);
+  $: visibleRows = sortSalesRows(salesFilterRows(filterTradeShiftRows(rows, orderQuery), orderFilter), orderSort, analytics);
+  $: editingRow = rows.find(row => row.order.id === editingOrder?.id) ?? null;
+  $: editorDirty = !!editingOrder && (editPlatinum !== editingOrder.platinum || editQuantity !== editingOrder.quantity || editVisible !== editingOrder.visible || editPerTrade !== editOriginalPerTrade);
+  $: if (!applying && !loading && !editorDirty && !reviewOpen && !orderToRemove && view === "orders") synchronizeEditor(visibleRows, editingOrder);
+
+  async function synchronizeEditor(source: TradeShiftRow[], current: AccountOrder | null): Promise<void> {
+    const next = source.find(row => row.order.id === current?.id) ?? source[0];
+    if ((!next && !current) || (next && current && orderUnchanged(current, next.order))) return;
+    // Дождёмся смены списка: зависимые данные карточки должны обновиться вместе с формой.
+    await tick();
+    if (disposed || source !== visibleRows || current !== editingOrder || applying || loading || editorDirty || reviewOpen || orderToRemove || view !== "orders") return;
+    if (!next) { editingOrder = null; detailOpen = false; }
+    else setEditor(next);
+  }
+
+  function acceptQuote(row: TradeShiftRow, result: LivePricingResult): void {
+    if (!row.key || checkedLivePrice(result).state === "failed") return;
+    const key = recommendationIdentity(row.key);
+    recommendations = new Map(recommendations).set(key, result.recommendation);
+    liveCheckedAt.set(key, Date.parse(result.fetchedAt));
+    failedPriceChecks = new Set([...failedPriceChecks].filter(value => value !== key));
+  }
   $: actionableRows = rows.filter((row) => row.needsAction && rowChange(row) !== null);
   $: selectedOrders = rows.filter(row => selectedIds.has(row.order.id));
   $: selectedRows = actionableRows.filter((row) => selectedIds.has(row.order.id));
@@ -172,7 +200,7 @@
     void read<{ live_quote_ttl_seconds: number }>("load_settings").then(settings => {
       if (!disposed) quoteTtlSeconds = settings.live_quote_ttl_seconds;
     }).catch(() => { /* До загрузки настроек действует стандартный срок актуальности. */ });
-    const autoRefresh = () => { if (!document.hidden && !loading && !accountBusy && !refreshingLive && !applying && !editingOrder && !reviewOpen && visibilityIntent === null && !tradeToUndo) void loadAll(true); };
+    const autoRefresh = () => { if (!document.hidden && !loading && !accountBusy && !refreshingLive && !applying && !editorDirty && !reviewOpen && visibilityIntent === null && !tradeToUndo) void loadAll(true); };
     const refreshTimer = window.setInterval(autoRefresh, 60_000);
     document.addEventListener("visibilitychange", autoRefresh);
     void Promise.all([
@@ -223,8 +251,8 @@
       if (summaryResult.status === "fulfilled") tradeSales = summaryResult.value;
       if (inventoryResult.status === "rejected") dataMessage = "Не удалось проверить остатки. Количество в объявлениях пока не сравниваем.";
       if (eventsResult.status === "rejected" || summaryResult.status === "rejected") dataMessage += " История сделок временно недоступна.";
-      loading = false;
       await Promise.all([loadSavedPrices(), loadAnalytics()]);
+      loading = false;
     })().finally(() => { if (!disposed) loading = false; refreshPromise = null; });
     return refreshPromise;
   }
@@ -270,18 +298,6 @@
     finally { if (!disposed && request === analyticsRevision) analyticsLoading = false; }
   }
 
-  async function toggleVisibility(row: TradeShiftRow): Promise<void> {
-    if (applying || !account?.profile?.verification) return;
-    applying = true; errorMessage = ""; actionMessage = "";
-    try {
-      await validateCurrentOrders([row.order]);
-      const updated = await invoke<AccountOrder>("account_update_listing", {id:row.order.id,input:updateInput({visible:!row.order.visible}),expectedOrder:row.order,confirmed:true});
-      if (account) account = {...account,orders:account.orders.map(order => order.id === updated.id ? updated : order)};
-      actionMessage = updated.visible ? "Объявление показано на Warframe Market." : "Объявление скрыто. Цена и количество сохранены.";
-    } catch (error) { errorMessage = changeError(error); }
-    finally { applying = false; }
-  }
-
   async function openMarket(row: TradeShiftRow): Promise<void> {
     if (!row.item) return;
     try { await invoke("open_market_items",{slugs:[row.item.slug]}); }
@@ -293,7 +309,7 @@
     ids.forEach(id => selected ? next.add(id) : next.delete(id)); selectedIds = next;
   }
 
-  function switchType(type: "sell" | "buy"): void { orderType = type; selectedIds = new Set(); orderFilter = "all"; orderQuery = ""; actionMessage = ""; errorMessage = ""; }
+  function switchType(type: "sell" | "buy"): void { editingOrder = null; detailOpen = false; orderType = type; selectedIds = new Set(); orderFilter = "all"; orderQuery = ""; actionMessage = ""; errorMessage = ""; }
 
   async function loadSavedPrices(): Promise<void> {
     if (!account?.connected) return;
@@ -313,6 +329,10 @@
       }
     }
     if (disposed || currentRevision !== dataRevision) return;
+    // Проверка выбранного предмета может закончиться во время чтения сохранённых цен.
+    for (const [key, recommendation] of recommendations) {
+      if (Date.now() - (liveCheckedAt.get(key) ?? 0) < quoteTtlSeconds * 1000) next.set(key, recommendation);
+    }
     recommendations = next;
 
   }
@@ -412,8 +432,7 @@
     await reloadAccount();
   }
 
-  function beginManualEdit(row: TradeShiftRow): void {
-    editorTrigger = document.activeElement as HTMLElement | null;
+  function setEditor(row: TradeShiftRow): void {
     editingOrder = { ...row.order };
     editPlatinum = row.order.platinum;
     editQuantity = row.order.quantity;
@@ -421,9 +440,43 @@
     editPerTrade = editOriginalPerTrade;
     editVisible = row.order.visible;
     editError = "";
+  }
+
+  function beginManualEdit(row: TradeShiftRow): void {
+    if (applying) return;
+    editorTrigger = document.activeElement as HTMLElement | null;
+    if (editorDirty && editingOrder?.id !== row.order.id) {
+      pendingSelection = row;
+      discardDialog.showModal();
+      return;
+    }
+    if (editingOrder?.id !== row.order.id) setEditor(row);
+    detailOpen = true;
+    void revealCompactDetail("order-detail", "(max-width: 1100px)");
+  }
+
+  function discardAndSelect(): void {
+    const next = rows.find(row => row.order.id === pendingSelection?.order.id);
+    discardDialog.close(); pendingSelection = null;
+    if (next) { setEditor(next); detailOpen = true; void revealCompactDetail("order-detail", "(max-width: 1100px)"); }
+  }
+
+  function resetEditor(): void {
+    if (editingRow) setEditor(editingRow);
+    else editingOrder = null;
+  }
+
+  async function backToOrders(): Promise<void> {
+    detailOpen = false;
+    await tick();
+    editorTrigger?.focus({ preventScroll: true });
+  }
+
+  function confirmRemove(): void {
+    if (!editingOrder) return;
+    orderToRemove = { ...editingOrder };
     errorMessage = "";
-    reviewOpen = false;
-    void tick().then(() => orderDialog.showModal());
+    orderDialog.showModal();
   }
 
   function reviewManualEdit(event: SubmitEvent): void {
@@ -433,18 +486,18 @@
       editQuantity,
       editOriginalPerTrade === null ? null : editPerTrade,
       "ru",
-      editingOrder?.type === "sell" && editVisible ? rows.find((row) => row.order.id === editingOrder?.id)?.inventory?.sellableQuantity ?? null : null,
+      editingOrder?.type === "sell" && editVisible && inventory ? rows.find((row) => row.order.id === editingOrder?.id)?.inventory?.sellableQuantity ?? 0 : null,
     ) ?? "";
     if (!editError) void applyManualEdit();
   }
 
   async function applyManualEdit(): Promise<void> {
-    if (!editingOrder || applying) return;
+    if (!editingOrder || applying || !account?.profile?.verification) return;
     applying = true;
     errorMessage = "";
     try {
       await validateCurrentOrders([editingOrder]);
-      await invoke<AccountOrder>("account_update_listing", {
+      const updated = await invoke<AccountOrder>("account_update_listing", {
         id: editingOrder.id,
         expectedOrder: editingOrder,
         input: updateInput({
@@ -456,17 +509,22 @@
         confirmed: true,
       });
       actionMessage = `Объявление «${manualOrderName(editingOrder)}» обновлено.`;
-      closeEditor();
-      await reloadAccount();
+      if (account) account = { ...account, orders: account.orders.map(order => order.id === updated.id ? updated : order) };
+      editingOrder = { ...updated };
+      editPlatinum = updated.platinum; editQuantity = updated.quantity; editVisible = updated.visible;
+      editOriginalPerTrade = editableOrderPerTrade(editingRow?.item, editingRow?.inventory, updated.perTrade);
+      editPerTrade = editOriginalPerTrade;
+      editError = "";
     } catch (error) {
-      editError = changeError(error);
+      editError = changeError(error).replace("Закройте окно и проверьте новые данные перед сохранением.", "Сбросьте изменения, проверьте новые данные и повторите сохранение.");
+      if (String(error).includes("Объявления изменились") || String(error).includes("Объявление уже изменилось")) await reloadAccount();
       } finally {
       applying = false;
     }
   }
 
   async function removeManualOrder(): Promise<void> {
-    if (!orderToRemove || applying) return;
+    if (!orderToRemove || applying || !account?.profile?.verification) return;
     applying = true;
     errorMessage = "";
     try {
@@ -477,7 +535,10 @@
         confirmed: true,
       });
       actionMessage = `Объявление «${manualOrderName(orderToRemove)}» удалено.`;
-      if (editingOrder?.id === orderToRemove.id) editingOrder = null;
+      const removedId = orderToRemove.id;
+      if (account) account = { ...account, orders: account.orders.filter(order => order.id !== removedId) };
+      selectedIds = new Set([...selectedIds].filter(id => id !== removedId));
+      if (editingOrder?.id === removedId) editingOrder = null;
       closeEditor();
       await reloadAccount();
     } catch (error) {
@@ -746,7 +807,7 @@
 
 <section class="sales-workspace" aria-labelledby="sales-heading">
   <header class="sales-header">
-    <div><h2 id="sales-heading">{view === "history" ? "История сделок" : "Мои объявления"}</h2><p>{view === "history" ? "Обмены из игры и ваши торговые партнёры." : "Цена, спрос и быстрые действия — в каждой строке."}</p></div>
+    <div><h2 id="sales-heading" class:sr-only={view === "orders"}>{view === "history" ? "История сделок" : "Мои объявления"}</h2><p>{view === "history" ? "Обмены из игры и ваши торговые партнёры." : "Выберите объявление, чтобы сравнить цены и изменить его."}</p></div>
     {#if account?.connected}<div class="sales-header__actions"><button class="secondary account-button" aria-expanded={accountPanelOpen} onclick={() => accountPanelOpen = !accountPanelOpen}><span class="connection-dot"></span><span translate="no">{account.profile?.ingameName ?? "Warframe Market"}</span></button>{#if view === "orders" && rows.length}<button onclick={orderType === "buy" ? onBrowseMarket : onOpenInventory}>{orderType === "buy" ? "Создать заявку на покупку" : "Выставить предмет"}</button>{/if}</div>{/if}
   </header>
   {#if errorMessage}<div class="inline-error" role="alert"><span>{errorMessage}</span>{#if !applying}<button class="secondary" onclick={() => loadAll()} disabled={loading}>Повторить загрузку</button>{/if}</div>{/if}
@@ -764,35 +825,61 @@
   {:else}
     {#if !account.profile?.verification}<p class="data-note">Аккаунт не подтверждён. После подтверждения на Warframe Market обновите список.</p>{/if}
     {#if pendingEvents.length}<div class="pending-notice"><span>Не учтено продаж из игры: <strong>{pendingEvents.length}</strong></span><button class="text-button" onclick={onHistory}>Проверить сделки →</button></div>{/if}
+      <header class="orders-heading"><div class="order-type" role="group" aria-label="Тип объявлений"><button aria-pressed={orderType === "sell"} disabled={applying || editorDirty || reviewOpen} onclick={() => switchType("sell")}>Продажа <b>{account.orders.filter(o => o.type === "sell").length}</b></button><button aria-pressed={orderType === "buy"} disabled={applying || editorDirty || reviewOpen} onclick={() => switchType("buy")}>Покупка <b>{account.orders.filter(o => o.type === "buy").length}</b></button></div><h3 class="sr-only" id="orders-heading">{orderType === "sell" ? "Объявления на продажу" : "Заявки на покупку"}</h3><div class="sales-header__actions"><span class="updated">{lastUpdated ? "Обновлено " + new Date(lastUpdated).toLocaleTimeString("ru-RU", {hour:"2-digit",minute:"2-digit"}) : "Загрузка…"}</span><button class="text-button" disabled={loading || applying || refreshingLive || editorDirty} onclick={() => loadAll()}>{loading ? "Обновляем…" : "Обновить список"}</button>{#if refreshingLive}<button class="secondary" onclick={() => stopLiveRefresh = true}>Остановить проверку</button>{:else}<button class="secondary" disabled={!rows.length || loading || applying} onclick={refreshCurrentPrices}>{selectedOrders.length ? "Проверить выбранные · " + selectedOrders.length : "Проверить цены"}</button>{/if}</div></header>
+    {#if actionMessage}<p class="status-line action-line" role="status">{actionMessage}</p>{/if}
+    <div class="orders-layout" class:detail-open={detailOpen} class:without-detail={!editingOrder}>
     <section class="orders-panel" aria-labelledby="orders-heading">
-      <header class="orders-heading"><div class="order-type" role="group" aria-label="Тип объявлений"><button aria-pressed={orderType === "sell"} onclick={() => switchType("sell")}>Продажа <b>{account.orders.filter(o => o.type === "sell").length}</b></button><button aria-pressed={orderType === "buy"} onclick={() => switchType("buy")}>Покупка <b>{account.orders.filter(o => o.type === "buy").length}</b></button></div><h3 class="sr-only" id="orders-heading">{orderType === "sell" ? "Объявления на продажу" : "Заявки на покупку"}</h3><div class="sales-header__actions"><span class="updated">{lastUpdated ? "Обновлено " + new Date(lastUpdated).toLocaleTimeString("ru-RU", {hour:"2-digit",minute:"2-digit"}) : "Загрузка…"}</span><button class="text-button" disabled={loading || applying || refreshingLive} onclick={() => loadAll()}>{loading ? "Обновляем…" : "Обновить список"}</button>{#if refreshingLive}<button class="secondary" onclick={() => stopLiveRefresh = true}>Остановить проверку</button>{:else}<button class="secondary" disabled={!rows.length || loading || applying} onclick={refreshCurrentPrices}>{selectedOrders.length ? "Проверить выбранные · " + selectedOrders.length : "Проверить цены"}</button>{/if}</div></header>
-      <div class="orders-toolbar"><label class="order-search"><span class="sr-only">Поиск объявления</span><input type="search" bind:value={orderQuery} maxlength="80" autocomplete="off" spellcheck="false" placeholder="Найти среди объявлений · русское или английское название" /></label><label class="status-filter"><span class="sr-only">Показать объявления</span><select bind:value={orderFilter}><option value="all">Все объявления · {rows.length}</option><option value="attention">Требуют внимания · {rows.filter(row => row.needsAction).length}</option><option value="hidden">Скрытые · {rows.filter(row => !row.order.visible).length}</option></select></label><details class="all-actions"><summary>Действия со всеми</summary><div><button class="text-button" disabled={!summary.visible || applying || !account.profile?.verification} onclick={() => confirmVisibility(false,"all")}>Скрыть все · {summary.visible}</button><button class="text-button" disabled={summary.visible === summary.total || applying || !account.profile?.verification} onclick={() => confirmVisibility(true,"all")}>Показать все · {summary.total - summary.visible}</button></div></details></div>
-      {#if selectedOrders.length}<div class="batch-bar"><div><strong>Выбрано: {selectedOrders.length}</strong><button class="text-button" disabled={applying} onclick={() => selectedIds = new Set()}>Снять выбор</button></div><div class="sales-header__actions"><button class="secondary" disabled={applying || !selectedOrders.some(r => r.order.visible)} onclick={() => confirmVisibility(false)}>Скрыть выбранные</button><button class="secondary" disabled={applying || !selectedOrders.some(r => !r.order.visible)} onclick={() => confirmVisibility(true)}>Показать выбранные</button>{#if selectedRows.length}<button disabled={applying || refreshingLive} onclick={openBatch}>Проверить изменения · {selectedRows.length}</button>{/if}</div></div>{/if}
-      {#if liveProgress}<p class="status-line" role="status">{liveProgress}</p>{/if}{#if actionMessage}<p class="status-line action-line" role="status">{actionMessage}</p>{/if}{#if analyticsError}<p class="status-line" role="status">{analyticsError}</p>{/if}
+      <div class="orders-toolbar" aria-label="Поиск и отбор объявлений">
+        <label class="order-search"><span>Поиск предмета</span><input type="search" bind:value={orderQuery} maxlength="80" autocomplete="off" spellcheck="false" placeholder="Например, Поток Прайм" /></label>
+        <label><span>Отбор объявлений</span><select bind:value={orderFilter}><option value="all">Все объявления</option><option value="attention">Требуют внимания · {rows.filter(row => row.needsAction).length}</option><option value="hidden">Скрытые · {rows.filter(row => !row.order.visible).length}</option></select></label>
+        <label><span>Порядок в списке</span><select bind:value={orderSort}><option value="priority">Сначала требуют внимания</option><option value="name">По названию: А → Я</option><option value="expensive">Сначала дороже</option><option value="cheap">Сначала дешевле</option><option value="quantity">Больше копий в объявлении</option><option value="volume">Больше сделок за день</option></select></label>
+      </div>
+      <div class="filter-summary"><span>Найдено <strong>{visibleRows.length}</strong> из {rows.length} объявлений</span><div>{#if orderQuery || orderFilter !== "all" || orderSort !== "priority"}<button class="text-button" onclick={() => {orderQuery="";orderFilter="all";orderSort="priority";}}>Сбросить всё</button>{/if}<details class="all-actions"><summary>Действия со всеми</summary><div><button class="text-button" disabled={!summary.visible || applying || editorDirty || !account.profile?.verification} onclick={() => confirmVisibility(false,"all")}>Скрыть все · {summary.visible}</button><button class="text-button" disabled={summary.visible === summary.total || applying || editorDirty || !account.profile?.verification} onclick={() => confirmVisibility(true,"all")}>Показать все · {summary.total - summary.visible}</button></div></details></div></div>
+      {#if selectedOrders.length}<div class="batch-bar"><div><strong>Выбрано: {selectedOrders.length}</strong><button class="text-button" disabled={applying} onclick={() => selectedIds = new Set()}>Снять выбор</button></div><div class="sales-header__actions"><button class="secondary" disabled={applying || editorDirty || !selectedOrders.some(r => r.order.visible)} onclick={() => confirmVisibility(false)}>Скрыть выбранные</button><button class="secondary" disabled={applying || editorDirty || !selectedOrders.some(r => !r.order.visible)} onclick={() => confirmVisibility(true)}>Показать выбранные</button>{#if selectedRows.length}<button disabled={applying || editorDirty || refreshingLive} onclick={openBatch}>Проверить изменения · {selectedRows.length}</button>{/if}</div></div>{/if}
+      {#if liveProgress}<p class="status-line" role="status">{liveProgress}</p>{/if}{#if analyticsError}<p class="status-line" role="status">{analyticsError}</p>{/if}
       {#if visibleRows.length}
-        <MarketOrderTable rows={visibleRows} {selectedIds} {analytics} {analyticsLoading} {analyticsError} inventoryKnown={!!inventory} busy={applying || reviewOpen || !!editingOrder} verified={!!account.profile?.verification} onToggle={toggleSelected} onSelectPage={selectPage} onVisibility={toggleVisibility} onEdit={beginManualEdit} onMarket={openMarket} onReloadAnalytics={() => void loadAnalytics()}/>
+        <MarketOrderTable rows={visibleRows} {selectedIds} activeId={editingOrder?.id ?? null} inventoryKnown={!!inventory} busy={applying || reviewOpen} verified={!!account.profile?.verification} onToggle={toggleSelected} onSelectPage={selectPage} onActivate={beginManualEdit}/>
       {:else if rows.length}<div class="sales-empty"><h3>Подходящих объявлений нет</h3><p>Измените название или отбор.</p><button class="secondary" onclick={() => {orderQuery="";orderFilter="all";}}>Показать все объявления</button></div>
       {:else}<div class="sales-empty"><h3>{orderType === "sell" ? "Нет объявлений на продажу" : "Нет заявок на покупку"}</h3><p>{orderType === "sell" ? "Выберите предмет из инвентаря, чтобы выставить его на Warframe Market." : "Найдите предмет на рынке и разместите заявку с нужной ценой."}</p><button class="secondary" onclick={orderType === "sell" ? onOpenInventory : onBrowseMarket}>{orderType === "sell" ? "Выставить предмет" : "Найти предмет"}</button></div>{/if}
     </section>
-    <div class="workspace-footnote"><span>Список обновляется раз в минуту. Глаз — показ объявления; название или график — подробная статистика.</span><details><summary>Как читать статистику</summary><p>Графики показывают последние 7 завершённых дней UTC. Процент сравнивает их с предыдущей неделей. «Объём / день» — средний объём закрытых сделок Warframe Market, не все обмены в игре. Пропуски данных остаются пропусками. Ориентир цены — за штуку; цена партии подписана отдельно.</p></details></div>
+    {#if editingOrder}
+      <aside id="order-detail" class="order-detail" tabindex="-1" aria-labelledby="order-detail-heading">
+        <button class="secondary detail-back" onclick={backToOrders}>← К списку объявлений</button>
+        <header class="detail-item">{#if editingRow?.item?.imageUrl}<img src={editingRow.item.imageUrl} alt=""/>{/if}<div><h3 id="order-detail-heading">{manualOrderName(editingOrder)}</h3>{#if orderEnglishName(editingRow?.item ?? undefined)}<p lang="en" translate="no">{orderEnglishName(editingRow?.item ?? undefined)}</p>{/if}{#if editingRow?.key && variantLabel(editingRow.key) !== "базовый вариант"}<p>{variantLabel(editingRow.key)}</p>{/if}</div></header>
+        <div class="detail-status"><span class:visible={editingOrder.visible}>{editingOrder.visible ? "На рынке" : "Скрыто"}</span><span>{editingOrder.quantity} шт. · {money(editingOrder.platinum)}{(editingOrder.perTrade ?? 1) > 1 ? " за " + editingOrder.perTrade + " шт." : " за штуку"}</span></div>
+        {#if !editingRow}<p class="data-note" role="status">Объявления больше нет в текущем списке. Сбросьте изменения, чтобы выбрать другое.</p>
+        {:else}
+          {#if !visibleRows.some(row => row.order.id === editingOrder?.id)}<p class="data-note">Открытое объявление не входит в текущий отбор. Ваши правки сохранены в форме.</p>{/if}
+          <div class="detail-estimate"><div><span>Оценка продажи за штуку</span><strong>{money(editingRow.recommendation?.listPrice ?? null)}</strong></div>{#if editingOrder.type === "sell"}<div><span>Доступно к продаже</span><strong class:danger={editingRow.health === "inventory_mismatch"}>{inventory ? (editingRow.inventory?.sellableQuantity ?? 0) + " шт." : "Неизвестно"}</strong></div>{/if}</div>
+          {#if editingRow.health === "inventory_mismatch"}<p class="stock-note">{editingRow.suggestedQuantity === 0 ? "Свободных копий нет. Скройте или удалите объявление." : "В объявлении больше копий, чем доступно в инвентаре."}</p>{/if}
+          {#key editingOrder.id}<MarketOrderPrices row={editingRow} profile={account?.profile ?? null} onQuote={acceptQuote}/>{/key}
+        {/if}
+        {#if editError}<p class="inline-error" role="alert">{editError}</p>{/if}
+        <form class="order-editor" onsubmit={reviewManualEdit}>
+      <fieldset disabled={applying || !account?.profile?.verification}><div class="order-editor__fields"><label>Цена, платина{#if (editPerTrade ?? editingOrder.perTrade ?? 1) > 1}<small>за {editPerTrade ?? editingOrder.perTrade} шт.</small>{/if}<input type="number" inputmode="numeric" bind:value={editPlatinum} min="1" max="900000" step="1" required /></label><label>Количество, шт.<input type="number" inputmode="numeric" bind:value={editQuantity} min="1" max="9999" step="1" required /></label>{#if editOriginalPerTrade !== null}<label>В одной сделке, шт.<input type="number" inputmode="numeric" bind:value={editPerTrade} min="1" max="6" step="1" required /></label>{/if}</div>
+      {#if editingRow && rowChange(editingRow) && !rowChange(editingRow)?.delete}<button class="text-button use-suggestion" type="button" onclick={() => { if (editingRow.suggestedPrice !== null) editPlatinum = editingRow.suggestedPrice; if (editingRow.suggestedQuantity !== null) editQuantity = editingRow.suggestedQuantity; }}>Подставить предложенные цену и количество</button>{/if}
+      <label class="compact-check"><input type="checkbox" bind:checked={editVisible} /> {editingOrder.type === "sell" ? "Показывать покупателям" : "Показывать продавцам"}</label>
+      {#if editorDirty}<details class="edit-preview"><summary>Что изменится при сохранении</summary><dl><div><dt>Цена{(editPerTrade ?? editingOrder.perTrade ?? 1) > 1 ? " за партию" : " за штуку"}</dt><dd>{money(editingOrder.platinum)} → {money(editPlatinum ?? null)}</dd></div><div><dt>Количество</dt><dd>{editingOrder.quantity} → {editQuantity ?? "—"} шт.</dd></div>{#if editOriginalPerTrade !== null}<div><dt>В одной сделке</dt><dd>{editOriginalPerTrade} → {editPerTrade} шт.</dd></div>{/if}<div><dt>Показ на рынке</dt><dd>{editVisible ? "Включён" : "Выключен"}</dd></div></dl></details>{/if}
+
+      </fieldset><div class="confirm-actions editor-actions"><button type="submit" disabled={applying || !editorDirty || !editingRow || !account?.profile?.verification}>{applying ? "Сохраняем…" : "Сохранить изменения"}</button>{#if editorDirty}<button class="text-button" type="button" disabled={applying} onclick={resetEditor}>Сбросить изменения</button>{/if}</div>
+    </form>
+        {#if editingRow}
+          <details class="order-history"><summary>История цены и спроса</summary><div class="history-content">{#key editingOrder.id}<MarketOrderInsight row={editingRow} summary={analytics.get(editingRow.key ? marketAnalyticsKey(editingRow.key) : "") ?? null} loading={analyticsLoading} unavailable={analyticsError} showClose={false} showOffers={false} onRetry={() => void loadAnalytics()} onClose={() => {}}/>{/key}</div></details>
+          <div class="detail-links"><button class="text-button" disabled={!editingRow.item} onclick={() => editingRow && openMarket(editingRow)}>Открыть на Warframe Market ↗</button><button class="text-button danger" disabled={applying || !account?.profile?.verification} onclick={confirmRemove}>Удалить объявление</button></div>
+        {/if}
+      </aside>
+    {/if}
+    </div>
+    <div class="workspace-footnote"><span>Список обновляется раз в минуту. Выберите предмет для изменения объявления; отметьте флажками несколько для массовых действий.</span><details><summary>Как читать статистику</summary><p>Графики показывают последние 7 завершённых дней UTC. Процент сравнивает их с предыдущей неделей. «Объём / день» — средний объём закрытых сделок Warframe Market, не все обмены в игре. Пропуски данных остаются пропусками. Ориентир цены — за штуку; цена партии подписана отдельно.</p></details></div>
   {/if}
 </section>
 
-<dialog class="sales-dialog" bind:this={orderDialog} oncancel={event => { if (applying) event.preventDefault(); }} onclose={() => { editingOrder = null; orderToRemove = null; editError = ""; }} aria-labelledby="order-editor-heading">
-  {#if editingOrder}{@const editingRow = rows.find(row => row.order.id === editingOrder?.id)}
-    <header class="dialog-heading"><div><p class="eyebrow">Warframe Market</p><h2 id="order-editor-heading">{orderToRemove ? "Снять объявление с продажи?" : "Изменить объявление"}</h2></div><button class="secondary" disabled={applying} onclick={closeEditor}>Закрыть</button></header>
-    <div class="dialog-item">{#if editingRow?.item?.imageUrl}<img src={editingRow.item.imageUrl} alt="" />{/if}<div><strong>{manualOrderName(editingOrder)}</strong>{#if orderEnglishName(editingRow?.item ?? undefined)}<span translate="no">{orderEnglishName(editingRow?.item ?? undefined)}</span>{/if}<small>{editingRow?.key ? variantLabel(editingRow.key) : ""}</small></div></div>
-    {#if editError || errorMessage}<p class="inline-error" role="alert">{editError || errorMessage}</p>{/if}
-    {#if orderToRemove}<p class="dialog-description">Объявление исчезнет с Warframe Market. Чтобы вернуть его, потребуется новая публикация.</p><div class="confirm-actions"><button class="danger-primary" disabled={applying} onclick={removeManualOrder}>{applying ? "Удаляем…" : "Удалить объявление"}</button><button class="secondary" disabled={applying} onclick={() => orderToRemove = null}>Вернуться к редактированию</button></div>
-    {:else}<form class="order-editor" onsubmit={reviewManualEdit}>
-      <dl class="edit-context"><div><dt>Ориентир рынка</dt><dd>{editingRow ? money(orderMarketPrice(editingRow)) : "Нет оценки"}</dd></div>{#if editingOrder.type === "sell"}<div><dt>Доступно для продажи</dt><dd>{inventory ? (editingRow?.inventory?.sellableQuantity ?? 0) + " шт." : "Остаток неизвестен"}</dd></div>{/if}</dl>
-      <div class="order-editor__fields"><label>Цена, платина{#if (editPerTrade ?? 1) > 1}<small>за {editPerTrade} шт.</small>{/if}<input type="number" inputmode="numeric" bind:value={editPlatinum} min="1" max="900000" step="1" required /></label><label>Количество, шт.<input type="number" inputmode="numeric" bind:value={editQuantity} min="1" max="9999" step="1" required /></label>{#if editOriginalPerTrade !== null}<label>В одной сделке, шт.<input type="number" inputmode="numeric" bind:value={editPerTrade} min="1" max="6" step="1" required /></label>{/if}</div>
-      {#if editingRow && rowChange(editingRow) && !rowChange(editingRow)?.delete}<button class="text-button use-suggestion" type="button" onclick={() => { if (editingRow.suggestedPrice !== null) editPlatinum = editingRow.suggestedPrice; if (editingRow.suggestedQuantity !== null) editQuantity = editingRow.suggestedQuantity; }}>Подставить предложенные цену и количество</button>{/if}
-      <label class="compact-check"><input type="checkbox" bind:checked={editVisible} /> Показывать на Warframe Market</label>
-      <section class="edit-preview" aria-label="Изменения объявления"><strong>Будет сохранено</strong><dl><div><dt>Цена{(editPerTrade ?? 1) > 1 ? " за партию" : " за штуку"}</dt><dd>{money(editingOrder.platinum)} → {money(editPlatinum ?? null)}</dd></div><div><dt>Количество</dt><dd>{editingOrder.quantity} → {editQuantity ?? "—"} шт.</dd></div>{#if editOriginalPerTrade !== null}<div><dt>В одной сделке</dt><dd>{editOriginalPerTrade} → {editPerTrade} шт.</dd></div>{/if}<div><dt>Показ на рынке</dt><dd>{editVisible ? "Включён" : "Выключен"}</dd></div></dl></section>
-      <div class="confirm-actions"><button type="submit" disabled={applying || (editPlatinum === editingOrder.platinum && editQuantity === editingOrder.quantity && editVisible === editingOrder.visible && editPerTrade === editOriginalPerTrade)}>{applying ? "Сохраняем…" : "Сохранить изменения"}</button><button class="text-button danger" type="button" disabled={applying} onclick={() => orderToRemove = editingOrder}>Удалить объявление</button></div>
-    </form>{/if}
-  {/if}
+<dialog class="sales-dialog" bind:this={orderDialog} oncancel={event => { if (applying) event.preventDefault(); }} onclose={() => orderToRemove = null} aria-labelledby="order-remove-heading">
+  <h2 id="order-remove-heading">Удалить объявление?</h2>{#if orderToRemove}<p class="dialog-description"><strong>{manualOrderName(orderToRemove)}</strong></p>{/if}<p class="dialog-description">Объявление исчезнет с Warframe Market. Чтобы вернуть его, потребуется новая публикация.</p>
+  {#if errorMessage}<p class="inline-error" role="alert">{errorMessage}</p>{/if}<div class="confirm-actions"><button class="danger-primary" disabled={applying} onclick={removeManualOrder}>{applying ? "Удаляем…" : "Удалить объявление"}</button><button class="secondary" disabled={applying} onclick={closeEditor}>Отмена</button></div>
+</dialog>
+<dialog class="sales-dialog" bind:this={discardDialog} onclose={() => pendingSelection = null} aria-labelledby="discard-heading">
+  <h2 id="discard-heading">Перейти без сохранения?</h2><p class="dialog-description">В открытом объявлении есть несохранённые изменения.</p><div class="confirm-actions"><button onclick={() => discardDialog.close()}>Продолжить редактирование</button><button class="secondary" onclick={discardAndSelect}>Не сохранять и перейти</button></div>
 </dialog>
 <dialog class="sales-dialog" bind:this={batchDialog} onclose={() => reviewOpen = false} oncancel={event => { if (applying) event.preventDefault(); }} aria-labelledby="batch-heading">
   <header class="dialog-heading"><div><p class="eyebrow">Проверка перед отправкой</p><h2 id="batch-heading">Изменить объявления · {reviewed.length}</h2></div><button class="secondary" disabled={applying} onclick={closeBatchReview}>Закрыть</button></header><p class="dialog-description">На Warframe Market будут отправлены только показанные ниже изменения.</p>
@@ -829,9 +916,14 @@
   input::placeholder { color:var(--text-subtle); font-weight:400; } input[type=checkbox] { accent-color:var(--accent); width:1rem; height:1rem; flex:none; }
   .security-details { font-size:.75rem; color:var(--text-muted); } .security-details summary { cursor:pointer; } .security-details p { margin-top:.5rem; }
   .orders-panel { min-width:0; border:1px solid var(--border); border-radius:.6rem; background:var(--surface-1); box-shadow:var(--shadow-sm); }
-  .orders-heading { padding:.6rem .8rem; flex-wrap:wrap; border-bottom:1px solid var(--border); } .updated { font-size:.75rem; color:var(--text-muted); }
+  .orders-heading { padding:.5rem 0 .85rem; flex-wrap:wrap; border-bottom:1px solid var(--border); margin-bottom:.5rem; } .updated { font-size:.75rem; color:var(--text-muted); }
   .order-type { display:flex; gap:.3rem; } .order-type button { padding:.4rem .7rem; border:1px solid transparent; background:transparent; color:var(--text-muted); box-shadow:none; } .order-type button[aria-pressed=true] { border-color:var(--border-strong); background:var(--accent-soft); color:var(--text); } .order-type b { margin-left:.4rem; font-weight:500; }
-  .orders-toolbar { padding:.6rem .8rem; } .order-search { flex:1; min-width:12rem; } .status-filter { width:13rem; }
+  .orders-toolbar { display:grid; grid-template-columns:minmax(0,1.5fr) minmax(0,1fr) minmax(0,1fr); gap:.75rem; padding:1rem; align-items:end; }
+  .orders-toolbar label { display:grid; gap:.4rem; min-width:0; color:var(--text-muted); font-size:.75rem; font-weight:500; }
+  .orders-toolbar input,.orders-toolbar select { min-height:2.65rem; border-radius:.5rem; }
+  .filter-summary,.filter-summary > div { display:flex; align-items:center; justify-content:space-between; gap:.75rem; flex-wrap:wrap; }
+  .filter-summary { padding:0 1rem .65rem; color:var(--text-muted); font-size:.75rem; border-bottom:1px solid var(--border); }
+  .filter-summary strong { color:var(--text); } .filter-summary button { font-size:.75rem; }
   .all-actions { position:relative; font-size:.75rem; } .all-actions summary { padding:.5rem; white-space:nowrap; cursor:pointer; }
   .all-actions > div { position:absolute; z-index:5; right:0; top:100%; width:13rem; padding:.4rem; background:var(--surface-1); border:1px solid var(--border); box-shadow:var(--shadow-md); border-radius:.4rem; } .all-actions button { display:block; width:100%; text-align:left; }
   .batch-bar { border-block:1px solid var(--border); padding:.45rem .8rem; background:var(--accent-soft); flex-wrap:wrap; } .batch-bar > div { display:flex; align-items:center; gap:.6rem; } .batch-bar strong { font-size:.8125rem; }
@@ -841,21 +933,38 @@
   .sales-dialog { width:min(36rem,calc(100vw - 2rem)); max-height:calc(100dvh - 2rem); padding:1.5rem; border:1px solid var(--border); border-radius:1rem; background:var(--surface-1); color:var(--text); box-shadow:var(--shadow-md); overscroll-behavior:contain; }
   .sales-dialog::backdrop { background:rgb(0 0 0 / .45); } .sales-dialog h2 { font-size:1.35rem; line-height:1.3; }
   .dialog-heading { align-items:start; margin-bottom:1rem; } .dialog-heading button { flex:none; } .dialog-heading .eyebrow { margin-bottom:.35rem; }
-  .dialog-item { display:flex; align-items:center; gap:.8rem; padding:1rem 0; border-block:1px solid var(--border); }
-  .dialog-item img { width:3rem; height:3.5rem; object-fit:contain; } .dialog-item strong { display:block; font-size:1rem; line-height:1.4; }
-  .dialog-item span,.dialog-item small { display:block; font-size:.75rem; margin-top:.3rem; color:var(--text-muted); }
-  .order-editor { display:grid; gap:1rem; padding-top:1rem; } .edit-context { display:grid; grid-template-columns:1fr 1fr; gap:.8rem; }
-  .edit-context dt { color:var(--text-muted); font-size:.75rem; margin-bottom:.3rem; }.edit-context dd { font-size:.9375rem; font-weight:600; }
+
+
+
+  .order-editor { display:grid; gap:1rem; padding-top:1rem; }
+
   .order-editor__fields { display:grid; grid-template-columns:1fr 1fr; gap:1rem; align-items:end; } .order-editor__fields label small { font-size:.75rem; font-weight:400; }
   .compact-check { display:flex; align-items:center; gap:.5rem; font-size:.875rem; }
   .use-suggestion { justify-self:start; padding:0; min-height:1.7rem; border:0; color:var(--accent); text-align:left; }
-  .edit-preview { background:var(--surface-2); border-radius:.65rem; padding:1rem; border:1px solid var(--border); } .edit-preview > strong { font-size:.8125rem; }
+  .edit-preview { color:var(--text-muted); font-size:.75rem; } .edit-preview summary { cursor:pointer; }
   .edit-preview dl div,.reviewed-list dl div { display:flex; gap:1rem; justify-content:space-between; font-size:.8125rem; margin-top:.5rem; }
   .edit-preview dt,.reviewed-list dt { color:var(--text-muted); } .edit-preview dd,.reviewed-list dd { text-align:right; }
   .confirm-actions { margin-top:1rem; } .order-editor .confirm-actions { margin-top:0; } .dialog-description { margin:1rem 0; } .sales-dialog .inline-error { margin:1rem 0; }
   .danger { color:var(--danger); } .reviewed-list article { border-bottom:1px solid var(--border); padding:1rem 0; } .reviewed-list article > strong { font-size:.875rem; } .reviewed-list p { font-size:.8125rem; margin-top:.4rem; }
   .visibility-items { padding-left:1.2rem; font-size:.875rem; line-height:1.8; }
 
-  @media(max-width:1100px) { .orders-toolbar { flex-wrap:wrap; } .order-search { flex-basis:100%; } .status-filter { flex:1; } .welcome { grid-template-columns:1fr; gap:1rem; } }
+  .orders-layout { display:grid; grid-template-columns:minmax(0,1fr) 23.5rem; align-items:start; gap:1.15rem; min-width:0; }
+  .orders-layout.without-detail { grid-template-columns:minmax(0,1fr); }
+  .order-detail { container:order-list / inline-size; position:sticky; top:1rem; max-height:calc(100dvh - 2rem); overflow-y:auto; min-width:0; padding:1.1rem; border:1px solid var(--border); border-radius:.8rem; background:var(--surface-1); box-shadow:var(--shadow-sm); scrollbar-gutter:stable; }
+  .detail-back { display:none; }
+  .detail-item { display:flex; align-items:center; gap:.85rem; } .detail-item img { width:3.5rem; height:3.7rem; object-fit:contain; flex:none; background:var(--surface-2); border-radius:.6rem; }
+  .detail-item h3 { font-size:1.05rem; line-height:1.4; overflow-wrap:anywhere; } .detail-item p { font-size:.75rem; margin-top:.2rem; overflow-wrap:anywhere; }
+  .detail-status { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:.5rem; padding:.85rem 0; margin-bottom:.85rem; border-bottom:1px solid var(--border); font-size:.75rem; color:var(--text-muted); } .detail-status .visible { color:var(--success); }
+  .detail-estimate { display:flex; align-items:center; justify-content:space-between; gap:.75rem; margin-bottom:1rem; } .detail-estimate span { font-size:.75rem; color:var(--text-muted); } .detail-estimate strong { display:block; font-size:1.1rem; margin-top:.25rem; } .detail-estimate > div:first-child strong { font-size:1.6rem; } .detail-estimate > div:last-child:not(:first-child) { text-align:right; }
+  .stock-note { margin-bottom:.85rem; color:var(--danger); font-size:.75rem; }
+  .order-editor { border-top:1px solid var(--border); margin-top:1rem; } .order-editor fieldset { display:grid; gap:.85rem; padding:0; border:0; margin:0; min-width:0; }
+  .order-editor__fields { gap:.65rem; } .order-editor__fields label { font-size:.75rem; font-weight:500; } .order-editor__fields input { min-height:2.55rem; border-radius:.5rem; font-size:.9375rem; }
+  .order-editor__fields > label:nth-child(3) { grid-column:1 / -1; } .compact-check { font-size:.8125rem; } .use-suggestion { font-size:.75rem; line-height:1.5; }
+  .editor-actions { display:grid; grid-template-columns:minmax(0,1fr); gap:.3rem; } .editor-actions > button { width:100%; } .order-detail .inline-error,.order-detail .data-note { margin-top:.75rem; font-size:.75rem; }
+  .order-history { margin-top:1rem; padding-top:.85rem; border-top:1px solid var(--border); font-size:.8125rem; } .order-history > summary { cursor:pointer; color:var(--text-muted); } .history-content { margin-top:.85rem; }
+  .detail-links { display:grid; justify-items:start; gap:.2rem; margin-top:.65rem; } .detail-links button { font-size:.75rem; padding:.3rem 0; text-align:left; }
+  @media(max-width:1350px) { .orders-layout { grid-template-columns:minmax(0,1fr) 21.5rem; gap:1rem; } .orders-toolbar { grid-template-columns:1fr 1fr; } .order-search { grid-column:1/-1; } }
+  @media(max-width:1100px) { .welcome { grid-template-columns:1fr; gap:1rem; } .orders-layout { grid-template-columns:minmax(0,1fr); } .order-detail { display:none; position:static; max-height:none; overflow:visible; } .detail-open .order-detail { display:block; } .detail-open .orders-panel { display:none; } .detail-back { display:block; margin-bottom:1rem; } }
+
   @media(max-width:750px) { .sales-header,.workspace-footnote { flex-wrap:wrap; } .sales-header p { max-width:25rem; } .sales-header__actions { flex-wrap:wrap; } }
 </style>

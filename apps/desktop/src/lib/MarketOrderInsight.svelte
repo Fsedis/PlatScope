@@ -10,6 +10,8 @@
   import { summarizeMarketPeriod, marketChangeLabel } from "./marketPeriod";
   export let row: TradeShiftRow;
   export let onClose: () => void;
+  export let showClose = true;
+  export let showOffers = true;
   export let loading = false;
   export let onRetry: () => void;
   export let unavailable = "";
@@ -60,7 +62,7 @@
   <div class="insight-toolbar">
     <div class="range-control" role="group" aria-label="Период статистики">{#each [7,30,90] as days}<button aria-pressed={range === days} onclick={() => changeRange(days as 7 | 30 | 90)}>{days} дней</button>{/each}</div>
     <span class="period-dates">{shortDate(points[0]?.sourceDate)} — {shortDate(points.at(-1)?.sourceDate)}</span>
-    <button class="collapse" onclick={onClose}>Свернуть <span aria-hidden="true">×</span></button>
+    {#if showClose}<button class="collapse" onclick={onClose}>Свернуть <span aria-hidden="true">×</span></button>{/if}
   </div>
   {#if historyLoading || (range === 7 && loading)}<div class="history-state" role="status">Загружаем историю за {range} дней…</div>
   {:else if historyError || (range === 7 && unavailable)}<div class="history-state" role="alert"><span>{historyError || unavailable}</span>{#if summary?.supported !== false}<button class="secondary" onclick={() => range === 7 ? onRetry() : changeRange(range)}>Повторить загрузку</button>{/if}</div>
@@ -95,13 +97,13 @@
       <p>Источник — закрытые сделки Warframe Market, не все обмены в игре. Цена — медиана дневных цен за выбранный период. Объём — исходный показатель торгов WFM; среднее за день доступно только при полной истории. Сравнение недель использует две полные недели. «—» означает отсутствие данных. Учитываются ранг и вариант предмета.</p>
       <div class="data-scroll"><table><thead><tr><th>Дата</th><th>Цена, пл./шт.</th><th>Объём за день</th></tr></thead><tbody>{#each points as point}<tr><td>{shortDate(point.sourceDate)}</td><td>{number(point.closedMedian)}</td><td>{number(point.closedVolume)}</td></tr>{/each}</tbody></table></div>
     </details>
-    <details class="offers" ontoggle={(event) => { if (event.currentTarget.open && !live && !liveLoading) void checkOffers(); }}><summary>Предложения игроков в игре</summary>
+    {#if showOffers}<details class="offers" ontoggle={(event) => { if (event.currentTarget.open && !live && !liveLoading) void checkOffers(); }}><summary>Предложения игроков в игре</summary>
       <div class="offers-content">
         <div class="offers-heading"><span>{liveLoading ? "Загружаем предложения…" : live ? (live.quoteState === "stale_cache" ? "Сохранённые предложения могли устареть" : "Проверено") + " · " + new Date(live.fetchedAt).toLocaleTimeString("ru-RU",{hour:"2-digit",minute:"2-digit"}) : "Текущие предложения Warframe Market"}</span><button class="secondary" disabled={liveLoading || !row.key} onclick={checkOffers}>Обновить предложения</button></div>
         {#if liveError}<p role="alert">{liveError}</p>{/if}
         {#if live}<MarketOffers {live} showHeading={false} itemNameEn={row.item?.displayNameEn ?? ""} itemKey={row.key}/>{/if}
       </div>
-    </details>
+    </details>{/if}
   </div>
 </section>
 

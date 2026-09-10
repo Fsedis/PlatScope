@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { validateListingNumbers, type AccountOrder, type AccountView } from "./account";
 import type { InventoryView } from "./inventory";
 import type { PriceRecommendation } from "./market";
-import { orderChange, orderMarketPrice, reviewedChanges, reviewedQuantitiesMatch, salesFilterRows } from "./marketSales";
+import { competingOffers, orderChange, orderMarketPrice, reviewedChanges, reviewedQuantitiesMatch, salesFilterRows, sortSalesRows } from "./marketSales";
+import type { LiveOrderView } from "./market";
 import { applyPriceCheckFailures, buildTradeShiftRows, recommendationIdentity, updateInput } from "./tradeShift";
 
 const key = {
@@ -54,6 +55,34 @@ function quotes(price = 10): Map<string, PriceRecommendation> {
 }
 
 describe("управление продажами и заявками на покупку", () => {
+  it("сравнивает объявления по цене одной копии, даже если цены указаны за разные партии", () => {
+    const source = account([
+      order("single", "sell", { platinum: 20, perTrade: 1 }),
+      order("lot", "sell", { platinum: 45, perTrade: 3 }),
+    ]);
+    const rows = buildTradeShiftRows(source, inventory(12), quotes());
+    expect(sortSalesRows(rows, "cheap").map(row => row.order.id)).toEqual(["lot", "single"]);
+    expect(sortSalesRows(rows, "expensive").map(row => row.order.id)).toEqual(["single", "lot"]);
+    expect(rows.map(row => row.order.id)).toEqual(["single", "lot"]);
+  });
+
+  it("показывает конкурентов в игре с нужной стороны и исключает собственные объявления", () => {
+    const profile = account([]).profile;
+    const offer = (name: string, price: number, overrides: Partial<LiveOrderView> = {}): LiveOrderView => ({
+      userIngameName: name, side: "sell", platinum: price, quantity: 12, perTrade: 1, userStatus: "in_game", ...overrides,
+    });
+    const offers = [
+      offer("tenno", 1), offer("Другой ник", 2, { userSlug: "TENNO" }),
+      offer("Отошёл", 3, { userStatus: "online" }),
+      offer("Партия", 30, { perTrade: 3 }), offer("Одна копия", 15),
+      offer("Покупатель А", 24, { side: "buy", perTrade: 3 }),
+      offer("Покупатель Б", 12, { side: "buy" }),
+    ];
+    expect(competingOffers(offers, "sell", profile).map(offer => offer.userIngameName)).toEqual(["Партия", "Одна копия"]);
+    expect(competingOffers(offers, "buy", profile).map(offer => offer.userIngameName)).toEqual(["Покупатель Б", "Покупатель А"]);
+    expect(competingOffers([], "sell", profile)).toEqual([]);
+  });
+
   it("показывает стороны отдельно и не исправляет покупку по правилу продажи", () => {
     const source = account([order("sell", "sell"), order("buy", "buy", { quantity: 900 })]);
     const sales = buildTradeShiftRows(source, inventory(12), quotes());
