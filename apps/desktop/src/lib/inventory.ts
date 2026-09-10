@@ -73,6 +73,8 @@ export interface InventoryViewItem {
   equippedPlacements: EquippedModPlacement[];
   sellableQuantity: number;
   resolution: InventoryResolution;
+  /** Передаваемые экземпляры для личных целей сборки. */
+  personalReservedQuantity?: number;
   vaultStatus: VaultStatus;
 }
 

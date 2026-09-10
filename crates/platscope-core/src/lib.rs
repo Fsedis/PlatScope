@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 
 mod account_market;
+mod personal_goals;
+pub use personal_goals::{PersonalGoalCompletion, PersonalGoalsService, PersonalGoalsView};
 
 mod mastery;
 pub use mastery::{MasteryService, MasteryView};
@@ -241,6 +243,8 @@ pub struct SetComponentInsight {
     pub owned_quantity: u32,
     /// Передаваемые детали до пользовательского резерва «Оставлять копий».
     pub tradeable_quantity: u32,
+    /// Остаток передаваемых деталей после личных целей, до общего минимума копий.
+    pub available_quantity: u32,
     pub sellable_quantity: u32,
     pub recommendation: Option<PriceRecommendation>,
 }
@@ -494,6 +498,9 @@ pub struct InventoryViewItem {
     pub equipped_quantity: u32,
     pub equipped_placements: Vec<EquippedModPlacementView>,
     pub sellable_quantity: u32,
+    /// Передаваемые копии, выделенные личным целям сборки.
+    #[serde(default)]
+    pub personal_reserved_quantity: u32,
     pub resolution: InventoryResolution,
     pub vault_status: VaultStatus,
 }
@@ -3988,6 +3995,18 @@ fn build_set_components(
                     .or_else(|| insight_image_url(&component.slug, inventory, catalog)),
                 owned_quantity: owned_quantity(inventory, &component.slug),
                 tradeable_quantity: set_component_quantity(inventory, &component.slug),
+                available_quantity: set_component_quantity(inventory, &component.slug)
+                    .saturating_sub(
+                        inventory
+                            .iter()
+                            .filter(|item| {
+                                item.key
+                                    .as_ref()
+                                    .is_some_and(|key| key.slug == component.slug)
+                            })
+                            .map(|item| item.personal_reserved_quantity)
+                            .sum::<u32>(),
+                    ),
                 sellable_quantity: sellable_quantity(inventory, &component.slug),
                 recommendation: price_slug(
                     database,
@@ -4302,6 +4321,9 @@ fn aggregate_inventory_items<'a>(
         total.sellable_quantity = total
             .sellable_quantity
             .saturating_add(item.sellable_quantity);
+        total.personal_reserved_quantity = total
+            .personal_reserved_quantity
+            .saturating_add(item.personal_reserved_quantity);
         total
             .equipped_placements
             .extend(item.equipped_placements.iter().cloned());
@@ -4743,6 +4765,7 @@ fn inventory_view_from_snapshot(
                 equipped_quantity: item.equipped_quantity,
                 equipped_placements,
                 sellable_quantity: item.sellable_quantity,
+                personal_reserved_quantity: 0,
                 resolution: item.resolution,
                 vault_status: VaultStatus::Unknown,
             }
@@ -4870,6 +4893,7 @@ fn enrich_inventory_view(
             .copied()
             .unwrap_or(VaultStatus::Unknown);
     }
+    personal_goals::apply_reservations(database, &mut view)?;
     Ok(view)
 }
 
@@ -6531,6 +6555,338 @@ mod tests {
         view.items[0].resolution = InventoryResolution::Resolved;
         view.items[0].owned_quantity = 0;
         assert!(inventory_variant_for_price(&view.items, &key).is_none());
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // Сквозной сценарий: БД, инвентарь, рекомендации и снятие целей.
+    fn personal_goals_persist_recalculate_and_release_without_losing_other_rules() {
+        let now = Utc::now();
+        let path = std::env::temp_dir().join(format!(
+            "platscope-goals-{}-{}.sqlite",
+            std::process::id(),
+            now.timestamp_nanos_opt().unwrap()
+        ));
+        let database = Mutex::new(Database::open(&path).unwrap());
+        let mut metadata = empty_game_metadata_fixture(now);
+        let part = PrimeSetComponentDefinition {
+            slug: "test_prime_blueprint".into(),
+            game_ref: "/test/part".into(),
+            required_quantity: 2,
+            ducats: Some(15),
+            image_url: None,
+        };
+        let set = PrimeSetDefinition {
+            set_slug: "test_prime_set".into(),
+            set_game_ref: "/test/set".into(),
+            display_name_en: "Test Prime Set".into(),
+            vault_status: VaultStatus::Unknown,
+            components: vec![part.clone()],
+        };
+        metadata.prime_sets = vec![
+            set.clone(),
+            PrimeSetDefinition {
+                set_slug: "other_prime_set".into(),
+                set_game_ref: "/other/set".into(),
+                ..set
+            },
+        ];
+        metadata.prime_parts = vec![PrimePartMetadata {
+            slug: part.slug.clone(),
+            game_ref: part.game_ref.clone(),
+            ducats: 15,
+            vault_status: VaultStatus::Unknown,
+        }];
+        metadata.metadata.set_count = 2;
+        metadata.metadata.prime_part_count = 1;
+        database
+            .lock()
+            .unwrap()
+            .promote_game_metadata(&metadata)
+            .unwrap();
+        let settings = AppSettings::default();
+        assert_eq!(
+            PersonalGoalsService::view(&database, &settings)
+                .unwrap()
+                .catalog
+                .len(),
+            2
+        );
+        PersonalGoalsService::set_goal(&database, "test_prime_set", true).unwrap();
+        PersonalGoalsService::set_goal(&database, "test_prime_set", true).unwrap();
+        assert!(PersonalGoalsService::set_goal(&database, "unknown", true).is_err());
+        let view = PersonalGoalsService::view(&database, &settings).unwrap();
+        assert!(!view.inventory_available);
+        assert_eq!(view.goals.len(), 1);
+        assert!(view.goals[0].completed_at.is_none());
+        assert!(!view.goals[0].completion_pending);
+        let mut snapshot = nightwave_inventory_fixture(now);
+        let item = &mut snapshot.items[0];
+        item.canonical_game_id.clone_from(&part.game_ref);
+        item.key =
+            Some(MarketVariantKey::new(&part.slug, Platform::Pc, None, None::<String>).unwrap());
+        item.tags = vec!["component".into()];
+        item.resolution = InventoryResolution::Resolved;
+        item.owned_quantity = 3;
+        item.tradeable_quantity = 3;
+        item.untradeable_quantity = 0;
+        database
+            .lock()
+            .unwrap()
+            .promote_inventory_snapshot(&snapshot)
+            .unwrap();
+        drop(database);
+        let database = Mutex::new(Database::open(&path).unwrap());
+        let view = PersonalGoalsService::view(&database, &settings).unwrap();
+        assert_eq!(view.goals[0].parts[0].allocated_quantity, 2);
+        let completed_at = view.goals[0]
+            .completed_at
+            .expect("полный комплект выполнен");
+        assert!(view.goals[0].completion_pending);
+        PersonalGoalsService::acknowledge_completions(
+            &database,
+            &[PersonalGoalCompletion {
+                set_slug: "test_prime_set".into(),
+                completed_at,
+            }],
+        )
+        .unwrap();
+        drop(database);
+        let database = Mutex::new(Database::open(&path).unwrap());
+        let restored = PersonalGoalsService::view(&database, &settings).unwrap();
+        assert_eq!(restored.goals[0].completed_at, Some(completed_at));
+        assert!(!restored.goals[0].completion_pending);
+        assert_eq!(
+            InventoryService::view(&database, &settings)
+                .unwrap()
+                .unwrap()
+                .items[0]
+                .sellable_quantity,
+            1
+        );
+        PersonalGoalsService::set_goal(&database, "other_prime_set", true).unwrap();
+        let view = PersonalGoalsService::view(&database, &settings).unwrap();
+        assert_eq!(view.goals[1].parts[0].allocated_quantity, 1);
+        assert!(view.goals[1].completed_at.is_none());
+        assert!(
+            InventoryService::import_read_only_scan_json(&database, "{invalid", &settings).is_err()
+        );
+        let after_error = PersonalGoalsService::view(&database, &settings).unwrap();
+        assert!(after_error.goals[1].completed_at.is_none());
+        assert_eq!(after_error.goals[1].parts[0].allocated_quantity, 1);
+        let insights = InsightsService::view(&database, &settings)
+            .unwrap()
+            .unwrap();
+        assert_eq!(insights.sets[0].components[0].tradeable_quantity, 3);
+        assert_eq!(insights.sets[0].components[0].available_quantity, 0);
+        assert_eq!(insights.sets[0].components[0].sellable_quantity, 0);
+        assert_eq!(insights.ducats[0].sellable_quantity, 0);
+        assert_eq!(
+            SellNowService::view(&database, &settings)
+                .unwrap()
+                .unwrap()
+                .rows[0]
+                .inventory
+                .sellable_quantity,
+            0
+        );
+        snapshot.items[0].owned_quantity = 4;
+        snapshot.items[0].tradeable_quantity = 4;
+        snapshot.metadata.checksum_sha256 = "goals-refreshed".into();
+        database
+            .lock()
+            .unwrap()
+            .promote_inventory_snapshot(&snapshot)
+            .unwrap();
+        assert_eq!(
+            PersonalGoalsService::view(&database, &settings)
+                .unwrap()
+                .goals[1]
+                .parts[0]
+                .allocated_quantity,
+            2
+        );
+        let completed = PersonalGoalsService::view(&database, &settings).unwrap();
+        assert_eq!(completed.goals[0].completed_at, Some(completed_at));
+        assert!(!completed.goals[0].completion_pending);
+        assert!(completed.goals[1].completed_at.is_some());
+        assert!(completed.goals[1].completion_pending);
+        // Расход деталей не отменяет выполнение и не создаёт новое уведомление.
+        snapshot.items[0].owned_quantity = 1;
+        snapshot.items[0].tradeable_quantity = 1;
+        snapshot.metadata.checksum_sha256 = "goals-spent".into();
+        database
+            .lock()
+            .unwrap()
+            .promote_inventory_snapshot(&snapshot)
+            .unwrap();
+        let spent = PersonalGoalsService::view(&database, &settings).unwrap();
+        assert_eq!(spent.goals[0].completed_at, Some(completed_at));
+        assert!(!spent.goals[0].completion_pending);
+        assert_eq!(spent.goals[0].parts[0].allocated_quantity, 1);
+        assert_eq!(spent.goals[1].parts[0].allocated_quantity, 0);
+        snapshot.items[0].owned_quantity = 4;
+        snapshot.items[0].tradeable_quantity = 4;
+        snapshot.metadata.checksum_sha256 = "goals-restocked".into();
+        database
+            .lock()
+            .unwrap()
+            .promote_inventory_snapshot(&snapshot)
+            .unwrap();
+        PersonalGoalsService::set_goal(&database, "test_prime_set", false).unwrap();
+        let inventory = InventoryService::view(&database, &settings)
+            .unwrap()
+            .unwrap();
+        assert_eq!(inventory.items[0].personal_reserved_quantity, 2);
+        assert_eq!(inventory.summary.sellable_quantity, 2);
+        // Повторное добавление к уже полному инвентарю создаёт новое выполнение.
+        PersonalGoalsService::set_goal(&database, "test_prime_set", true).unwrap();
+        let readded = PersonalGoalsService::view(&database, &settings).unwrap();
+        assert!(readded.goals[1].completion_pending);
+        assert_ne!(readded.goals[1].completed_at, Some(completed_at));
+        PersonalGoalsService::acknowledge_completions(
+            &database,
+            &[PersonalGoalCompletion {
+                set_slug: "test_prime_set".into(),
+                completed_at,
+            }],
+        )
+        .unwrap();
+        assert!(
+            PersonalGoalsService::view(&database, &settings)
+                .unwrap()
+                .goals[1]
+                .completion_pending
+        );
+        PersonalGoalsService::set_goal(&database, "test_prime_set", false).unwrap();
+        let mut settings = settings;
+        settings.keep_inventory_copies = 3;
+        assert_eq!(
+            InventoryService::view(&database, &settings)
+                .unwrap()
+                .unwrap()
+                .items[0]
+                .sellable_quantity,
+            1
+        );
+        // Утрата текущего рецепта не освобождает сохранённые детали.
+        database
+            .lock()
+            .unwrap()
+            .promote_game_metadata(&empty_game_metadata_fixture(now))
+            .unwrap();
+        assert_eq!(
+            PersonalGoalsService::view(&database, &settings)
+                .unwrap()
+                .goals
+                .len(),
+            1
+        );
+        assert_eq!(
+            InventoryService::view(&database, &settings)
+                .unwrap()
+                .unwrap()
+                .items[0]
+                .personal_reserved_quantity,
+            2
+        );
+        PersonalGoalsService::set_goal(&database, "other_prime_set", false).unwrap();
+        let inventory = InventoryService::view(&database, &settings)
+            .unwrap()
+            .unwrap();
+        assert_eq!(inventory.items[0].personal_reserved_quantity, 0);
+        assert_eq!(inventory.items[0].sellable_quantity, 1);
+        drop(database);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn personal_goal_images_prefer_wfcd_then_market_and_allow_missing_art() {
+        let now = Utc::now();
+        let (_, mut catalog) = nightwave_market_fixture(now);
+        let database = Mutex::new(Database::open_in_memory().unwrap());
+        let mut part_item = catalog.items[0].clone();
+        part_item.slug = "test_prime_part".into();
+        part_item.item_id = "part-id".into();
+        part_item.thumb_ru = Some("items/part.png".into());
+        catalog.items[0].slug = "test_prime_set".into();
+        catalog.items[0].thumb_ru = Some("items/set.png".into());
+        catalog.items.push(part_item);
+        catalog.metadata.item_count = 2;
+        let mut metadata = empty_game_metadata_fixture(now);
+        metadata.prime_sets = vec![PrimeSetDefinition {
+            set_slug: "test_prime_set".into(),
+            set_game_ref: "/test/set".into(),
+            display_name_en: "Test Prime Set".into(),
+            vault_status: VaultStatus::Unknown,
+            components: vec![PrimeSetComponentDefinition {
+                slug: "test_prime_part".into(),
+                game_ref: "/test/part".into(),
+                required_quantity: 1,
+                ducats: Some(15),
+                image_url: Some("https://cdn.warframestat.us/img/blueprint.png".into()),
+            }],
+        }];
+        metadata.mastery_items = vec![platscope_domain::MasteryItemDefinition {
+            game_ref: "/test/set".into(),
+            display_name_en: "Test Prime".into(),
+            display_name_ru: None,
+            category: "Warframes".into(),
+            image_url: Some("https://cdn.warframestat.us/img/AshPrime.png".into()),
+            max_rank: Some(30),
+        }];
+        metadata.metadata.set_count = 1;
+        database.lock().unwrap().promote_catalog(&catalog).unwrap();
+        database
+            .lock()
+            .unwrap()
+            .promote_game_metadata(&metadata)
+            .unwrap();
+        PersonalGoalsService::set_goal(&database, "test_prime_set", true).unwrap();
+        let settings = AppSettings::default();
+        let primary = PersonalGoalsService::view(&database, &settings).unwrap();
+        assert_eq!(
+            primary.catalog[0].image_url.as_deref(),
+            Some("https://cdn.warframestat.us/img/AshPrime.png")
+        );
+        assert_eq!(primary.goals[0].set.image_url, primary.catalog[0].image_url);
+        assert_eq!(
+            primary.goals[0].parts[0].image_url.as_deref(),
+            Some("https://cdn.warframestat.us/img/blueprint.png")
+        );
+        PersonalGoalsService::set_goal(&database, "test_prime_set", false).unwrap();
+        metadata.mastery_items.clear();
+        metadata.prime_sets[0].components[0].image_url = None;
+        database
+            .lock()
+            .unwrap()
+            .promote_game_metadata(&metadata)
+            .unwrap();
+        PersonalGoalsService::set_goal(&database, "test_prime_set", true).unwrap();
+        let fallback = PersonalGoalsService::view(&database, &settings).unwrap();
+        assert!(
+            fallback.goals[0]
+                .set
+                .image_url
+                .as_ref()
+                .unwrap()
+                .ends_with("/items/set.png")
+        );
+        assert!(
+            fallback.goals[0].parts[0]
+                .image_url
+                .as_ref()
+                .unwrap()
+                .ends_with("/items/part.png")
+        );
+        catalog
+            .items
+            .iter_mut()
+            .for_each(|item| item.thumb_ru = None);
+        database.lock().unwrap().promote_catalog(&catalog).unwrap();
+        let missing = PersonalGoalsService::view(&database, &settings).unwrap();
+        assert!(missing.goals[0].set.image_url.is_none());
+        assert!(missing.goals[0].parts[0].image_url.is_none());
+        assert!(missing.goals[0].completed_at.is_none());
     }
 
     #[test]

@@ -5,6 +5,7 @@
 
   import AppSidebar, { type AppScreen } from "./lib/AppSidebar.svelte";
   import AppUpdatePanel from "./lib/AppUpdatePanel.svelte";
+  import PersonalGoalNotifications from "./lib/PersonalGoalNotifications.svelte";
   import BountyHunterScreen from "./lib/BountyHunterScreen.svelte";
   import WorldActivityScreen from "./lib/WorldActivityScreen.svelte";
   import { startWorldActivityAlerts, worldPreferences } from "./lib/worldActivityStore";
@@ -534,6 +535,7 @@
   </header>
 
   <AppUpdatePanel mode="banner" />
+  <PersonalGoalNotifications />
 
   <div class="screen-body">
 

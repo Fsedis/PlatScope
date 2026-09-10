@@ -34,6 +34,8 @@
   } from "./market";
   import ResourceConverter from "./ResourceConverter.svelte";
   import OpportunityPlanner from "./OpportunityPlanner.svelte";
+  import PersonalGoals from "./PersonalGoals.svelte";
+  import { personalGoalListedParts } from "./personalGoals";
   import RelicBrowser from "./RelicBrowser.svelte";
   import MasteryBadge from "./MasteryBadge.svelte";
   import {
@@ -413,6 +415,7 @@
   let errorMessage = "";
   let activeMode: InsightsViewMode = loadInsightsViewPreferences().mode;
   let plannerSetSlug = "";
+  let planMode: "personal" | "trade" = "personal";
   let plannerRelicSlug = "";
   let setQuery = "";
   let showAllSetRows = false;
@@ -699,7 +702,12 @@
     </div>
   </div>
 
-  {#if activeMode === "sell_sets" || activeMode === "complete_sets"}
+  {#if activeMode === "overview"}
+    <div class="sub-navigation" role="group" aria-label="Цель плана">
+      <button type="button" aria-pressed={planMode === "personal"} onclick={() => planMode = "personal"}>Собрать для себя</button>
+      <button type="button" aria-pressed={planMode === "trade"} onclick={() => planMode = "trade"}>Заработать платину</button>
+    </div>
+  {:else if activeMode === "sell_sets" || activeMode === "complete_sets"}
     <div class="sub-navigation" role="group" aria-label="Состояние сетов">
       <button type="button" aria-pressed={activeMode === "sell_sets"} onclick={() => selectMode("sell_sets")}>{c.readyMode} · {readyOpportunityCount}</button>
       <button type="button" aria-pressed={activeMode === "complete_sets"} onclick={() => selectMode("complete_sets")}>{c.buyMode} · {buyOpportunityCount}</button>
@@ -715,7 +723,12 @@
     <ResourceConverter {onOpenSettings} />
   </div>
 
-  {#if activeMode !== "resources"}
+  {#if activeMode === "overview" && planMode === "personal"}
+    <PersonalGoals {onOpenSettings} {onOpenMarketSales} listedParts={personalGoalListedParts(accountView)} onChanged={() => { void loadInsights(); }}
+      onOpenRelic={(slug) => { selectMode("relics"); plannerRelicSlug = slug; }} />
+  {/if}
+
+  {#if activeMode !== "resources" && (activeMode !== "overview" || planMode === "trade")}
     <div class="data-status" role="status" aria-live="polite">
       {#if loading}{c.reading}{:else if view}{c.ready(view.metadata.fetchedAt.slice(0, 10))}{/if}
     </div>
@@ -793,7 +806,7 @@
         {/if}
       </section>
     {:else if activeMode === "relics"}
-      <RelicBrowser {view} sets={marketSets} locale={$locale} initialRelicSlug={plannerRelicSlug} onPlanSet={(slug) => { selectMode("overview"); plannerSetSlug = slug; }} />
+      <RelicBrowser {view} sets={marketSets} locale={$locale} initialRelicSlug={plannerRelicSlug} onPlanSet={(slug) => { selectMode("overview"); planMode = "trade"; plannerSetSlug = slug; }} />
     {:else}
       {#if activeMode === "complete_sets" || activeMode === "sell_sets"}
         <section class="mode-heading" aria-labelledby="set-mode-title">

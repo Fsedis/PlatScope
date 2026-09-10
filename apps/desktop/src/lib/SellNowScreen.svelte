@@ -268,7 +268,8 @@
     try {
       const result = await invoke<SellNowView | null>("sell_now");
       if (destroyed || request !== viewRequest) return;
-      if (pendingListingAction && !orderBusy && (result?.inventoryMetadata.checksumSha256 !== view?.inventoryMetadata.checksumSha256 || result?.keepCopies !== view?.keepCopies)) {
+      if (pendingListingAction && !orderBusy && (result?.inventoryMetadata.checksumSha256 !== view?.inventoryMetadata.checksumSha256 || result?.keepCopies !== view?.keepCopies
+        || result?.rows.find(row => sellNowRowIdentity(row) === selectedIdentity)?.inventory.sellableQuantity !== selectedRow?.inventory.sellableQuantity)) {
         pendingListingAction = null;
         orderFormError = u.selectionReset;
       }
@@ -729,6 +730,7 @@
                   {#if selectedRow.inventory.unknownQuantity}<div><dt>{u.unknown}</dt><dd>{selectedRow.inventory.unknownQuantity}</dd></div>{/if}
                   {#if selectedRow.inventory.equippedQuantity}<div><dt>{u.equipped}</dt><dd>{selectedRow.inventory.equippedQuantity}</dd></div>{/if}
                   <div><dt>{u.saved}</dt><dd>{view.keepCopies}</dd></div>
+                  {#if selectedRow.inventory.personalReservedQuantity}<div><dt>{t("Для личных сборок", "For personal goals")}</dt><dd>{selectedRow.inventory.personalReservedQuantity}</dd></div>{/if}
                 </dl><p>{u.reserveHint}</p>
               </details>
             </section>

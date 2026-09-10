@@ -24,10 +24,10 @@ use platscope_core::{
     HistoryBootstrapOutcome, HistoryService, InsightsService, InsightsView, InventoryService,
     InventoryView, LivePricingResult, LivePricingService, LiveSellNowResult, LoggingGuard,
     MarketBrowserService, MarketDataService, MarketHistoryView, MarketRefreshOutcome,
-    MarketSearchResult, MarketSearchRow, MasteryService, MasteryView, PriceRecommendation,
-    PricingService, ResourceConverterService, ResourceConverterView, SETTINGS_KEY, SellNowService,
-    SellNowView, SetComponentInsight, UpdateListingInput, WorldActivityService, WorldActivityView,
-    enrich_account_view, init_logging,
+    MarketSearchResult, MarketSearchRow, MasteryService, MasteryView, PersonalGoalsService,
+    PersonalGoalsView, PriceRecommendation, PricingService, ResourceConverterService,
+    ResourceConverterView, SETTINGS_KEY, SellNowService, SellNowView, SetComponentInsight,
+    UpdateListingInput, WorldActivityService, WorldActivityView, enrich_account_view, init_logging,
 };
 use platscope_domain::{
     GameMetadataSnapshot, InventoryResolution, MarketItemKind, MarketVariantKey, PriceConfidence,
@@ -520,6 +520,45 @@ fn load_inventory(state: State<'_, AppState>) -> Result<Option<InventoryView>, S
         .unwrap_or_default();
     InventoryService::view(&state.database, &settings)
         .map(|view| view.map(localize_inventory_images))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command(async)]
+#[allow(clippy::needless_pass_by_value)] // Tauri command extractor owns State.
+fn personal_goals(state: State<'_, AppState>) -> Result<PersonalGoalsView, String> {
+    let settings = state
+        .database
+        .lock()
+        .map_err(|_| "database state is unavailable".to_owned())?
+        .get_setting::<AppSettings>(SETTINGS_KEY)
+        .map_err(|error| error.to_string())?
+        .unwrap_or_default();
+    PersonalGoalsService::view(&state.database, &settings)
+        .map(localize_personal_goal_images)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command(async)]
+#[allow(clippy::needless_pass_by_value)]
+fn acknowledge_personal_goal_completions(
+    completions: Vec<platscope_core::PersonalGoalCompletion>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    PersonalGoalsService::acknowledge_completions(&state.database, &completions)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command(async)]
+#[allow(clippy::needless_pass_by_value)]
+fn set_personal_goal(
+    set_slug: String,
+    enabled: bool,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    PersonalGoalsService::set_goal(&state.database, &set_slug, enabled)
+        .map_err(|error| error.to_string())?;
+    app.emit("inventory-updated", ())
         .map_err(|error| error.to_string())
 }
 
@@ -2739,6 +2778,19 @@ fn localize_inventory_images(mut view: InventoryView) -> InventoryView {
     view
 }
 
+fn localize_personal_goal_images(mut view: PersonalGoalsView) -> PersonalGoalsView {
+    for choice in &mut view.catalog {
+        localize_component_image_url(&mut choice.image_url);
+    }
+    for goal in &mut view.goals {
+        localize_component_image_url(&mut goal.set.image_url);
+        for part in &mut goal.parts {
+            localize_component_image_url(&mut part.image_url);
+        }
+    }
+    view
+}
+
 fn localize_world_activity_images(mut view: WorldActivityView) -> WorldActivityView {
     for offer in view
         .baro_offers
@@ -4010,6 +4062,9 @@ pub fn run() {
             load_inventory,
             load_mastery,
             set_inventory_keep_copies,
+            personal_goals,
+            set_personal_goal,
+            acknowledge_personal_goal_completions,
             sell_now,
             sell_now_live,
             load_settings,
@@ -4069,6 +4124,7 @@ mod tests {
                 equipped_quantity: 0,
                 equipped_placements: Vec::new(),
                 sellable_quantity,
+                personal_reserved_quantity: 0,
                 resolution: InventoryResolution::Resolved,
                 vault_status: VaultStatus::Unknown,
             }],
@@ -4139,6 +4195,7 @@ mod tests {
             equipped_quantity: 0,
             equipped_placements: Vec::new(),
             sellable_quantity: quantity,
+            personal_reserved_quantity: 0,
             resolution: InventoryResolution::Resolved,
             vault_status: VaultStatus::Unknown,
         })
@@ -4452,6 +4509,28 @@ mod tests {
             0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A
         ]));
         assert!(!valid_component_png(b"not a png"));
+    }
+
+    #[test]
+    fn personal_goal_art_uses_the_existing_local_image_cache() {
+        let choice = serde_json::json!({"setSlug":"ash_prime_set", "displayName":"Эш Прайм", "displayNameEn":"Ash Prime",
+            "imageUrl":"https://cdn.warframestat.us/img/AshPrime.png"});
+        let mut goal = choice.clone();
+        goal["completedAt"] = serde_json::Value::Null;
+        goal["completionPending"] = false.into();
+        goal["parts"] = serde_json::json!([{ "slug":"ash_prime_blueprint", "displayName":"Чертёж", "displayNameEn":"Blueprint",
+            "imageUrl":"https://cdn.warframestat.us/img/blueprint.png", "requiredQuantity":1, "allocatedQuantity":0 }]);
+        let view: PersonalGoalsView = serde_json::from_value(serde_json::json!({
+            "inventoryAvailable":false, "metadataAvailable":true, "observedAt":null, "catalog":[choice], "goals":[goal], "relics":[],
+        })).unwrap();
+        let view = localize_personal_goal_images(view);
+        let local = component_image_protocol_url("https://cdn.warframestat.us/img/AshPrime.png");
+        assert_eq!(view.catalog[0].image_url, local);
+        assert_eq!(view.goals[0].set.image_url, local);
+        assert_eq!(
+            view.goals[0].parts[0].image_url,
+            component_image_protocol_url("https://cdn.warframestat.us/img/blueprint.png")
+        );
     }
 
     #[test]

@@ -303,6 +303,16 @@ describe("insights presentation", () => {
     expect(row.components[0].sellableQuantity).toBe(1);
   });
 
+  it("сохраняет личный резерв при наложении ордеров и исключает его из плана дохода", () => {
+    const row = setRow("Personal", 0);
+    row.components.forEach(part => { part.tradeableQuantity=3;part.ownedQuantity=3;part.availableQuantity=2;part.sellableQuantity=2; });
+    const reserved = reservePublishedSetListings(row, [{itemId:row.itemId ?? null,type:"sell",quantity:1,visible:false,rank:null,charges:null,subtype:null,amberStars:null,cyanStars:null}]);
+    expect(reserved.components[0].availableQuantity).toBe(1);
+    expect(reserved.components[0].sellableQuantity).toBe(1);
+    row.components.forEach(part => {part.availableQuantity=0;part.sellableQuantity=0;});
+    expect(setOpportunity(reservePublishedSetListings(row,[]))).toMatchObject({completeSets:3,availableCompleteSets:0,sellableCompleteSets:0,profitableToComplete:false});
+  });
+
   it("does not calculate profit or relic income from stale prices", () => {
     const row = setRow("Stale Completion", 1);
     row.setRecommendation!.freshness = "stale";

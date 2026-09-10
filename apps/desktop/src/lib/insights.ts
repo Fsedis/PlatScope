@@ -58,7 +58,7 @@ export interface SetComponentInsight {
   ownedQuantity: number;
   /** Передаваемые детали до пользовательского резерва. */
   tradeableQuantity: number;
-  /** Остаток после ордеров, но до резерва «Оставлять копий». */
+  /** Остаток после личных целей и ордеров, до резерва «Оставлять копий». */
   availableQuantity?: number;
   sellableQuantity: number;
   recommendation: PriceRecommendation | null;
@@ -783,7 +783,7 @@ export function reservePublishedSetListings(
     const reservedForSets = reservedSetComponents.get(component.definition.slug) ?? 0;
     return {
       ...component,
-      availableQuantity: Math.max(0, stockQuantity(component.tradeableQuantity) - directlyReserved - reservedForSets),
+      availableQuantity: Math.max(0, componentAvailableQuantity(component) - directlyReserved - reservedForSets),
       sellableQuantity: Math.max(
         0,
         component.sellableQuantity - directlyReserved - reservedForSets,

@@ -2,6 +2,7 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { makeMasteryMock } from "./masteryMock";
 import { makeWorldActivityMock } from "./worldActivityMock";
 import { makeOpportunityPlanMock } from "./opportunityPlanMock";
+import { makePersonalGoalsMock, reserveMockGoals, type MockSavedGoal } from "./personalGoalsMock";
 
 import type {
   AccountOrder,
@@ -406,6 +407,30 @@ export async function installMarketBrowserMock(): Promise<void> {
     }
   }
   mockIPC((command, args) => {
+    const savedGoals = (): MockSavedGoal[] => {
+      try { const value: unknown = JSON.parse(localStorage.getItem("platscope.mock.personal-goals") ?? "[]"); return Array.isArray(value) ? value.flatMap(entry => typeof entry === "string" ? [{setSlug:entry,completedAt:null,completionPending:false}] : entry && typeof entry.setSlug === "string" ? [entry as MockSavedGoal] : []) : []; } catch { return []; }
+    };
+    const saveGoals = (goals: MockSavedGoal[]) => localStorage.setItem("platscope.mock.personal-goals",JSON.stringify(goals.map(({setSlug,completedAt,completionPending}) => ({setSlug,completedAt,completionPending}))));
+    if (command === "personal_goals") {
+      if (mockOptions.get("mockGoals") === "error") throw new Error("test goals unavailable");
+      if (mockOptions.get("mockGoals") === "loading") return new Promise(() => undefined);
+      const view = makePersonalGoalsMock(makeOpportunityPlanMock(makeInsightsView(),"default"), savedGoals(),mockOptions.get("mockGoals"));
+      saveGoals(view.goals);
+      return view;
+    }
+    if (command === "acknowledge_personal_goal_completions") {
+      const {completions} = args as {completions:{setSlug:string;completedAt:string}[]};
+      saveGoals(savedGoals().map(goal => completions.some(completion => completion.setSlug === goal.setSlug && completion.completedAt === goal.completedAt) ? {...goal,completionPending:false} : goal));
+      return null;
+    }
+    if (command === "set_personal_goal") {
+      if (mockOptions.get("mockGoals") === "save-error") throw new Error("test goal save unavailable");
+      const {setSlug,enabled} = args as {setSlug:string;enabled:boolean};
+      const goals = savedGoals();
+      if (enabled && !goals.some(goal => goal.setSlug === setSlug)) goals.push({setSlug,completedAt:null,completionPending:false});
+      saveGoals(enabled ? goals : goals.filter(goal => goal.setSlug !== setSlug));
+      return null;
+    }
     if (command === "plugin:event|listen") return nextEventListener++;
     if (command === "plugin:event|unlisten") return null;
     if (command === "load_settings") return appSettings;
@@ -913,6 +938,7 @@ export async function installMarketBrowserMock(): Promise<void> {
     }
     if (command === "insights") {
       const view = makeInsightsView();
+      if (mockOptions.has("mockGoals")) return reserveMockGoals(makeOpportunityPlanMock(view,"default"),savedGoals().map(goal => goal.setSlug));
       if (mockOptions.get("mockPlan") === "error") throw new Error("test insights unavailable");
       if (mockOptions.get("mockPlan") === "loading") return new Promise(() => undefined);
       if (mockOptions.has("mockPlan")) return makeOpportunityPlanMock(view,mockOptions.get("mockPlan")!);
