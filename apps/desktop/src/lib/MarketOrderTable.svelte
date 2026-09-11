@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { inventoryListingQuantity } from "./inventory";
   import { orderEnglishName } from "./account";
   import { orderAdvice } from "./marketSales";
   import { variantLabel } from "./market";
@@ -49,7 +50,7 @@
           </th>
           <td class="numeric"><strong>{number(row.order.platinum)} пл.</strong>{#if (row.order.perTrade ?? 1) > 1}<small>за {row.order.perTrade} шт.</small>{/if}</td>
           <td class="numeric"><strong title={row.recommendation ? `Оценка от ${row.recommendation.sourceDate}` : "Проверьте текущие цены"}>{row.recommendation?.listPrice == null ? "—" : number(row.recommendation.listPrice) + " пл."}</strong>{#if row.needsAction}<small class="advice" title={orderAdvice(row)}>{row.health === "overpriced" ? "Выше рынка" : row.health === "underpriced" ? "Ниже рынка" : row.health === "inventory_mismatch" ? "Проверьте остаток" : row.priceCheckFailed ? "Ошибка проверки" : "Нет оценки"}</small>{/if}</td>
-          <td class="numeric quantity"><strong>{row.order.quantity}</strong>{#if row.order.type === "sell"}<small class:danger={row.health === "inventory_mismatch"}>Доступно: {inventoryKnown ? row.inventory?.sellableQuantity ?? 0 : "?"}</small>{/if}</td>
+          <td class="numeric quantity"><strong>{row.order.quantity}</strong>{#if row.order.type === "sell"}<small class:danger={row.health === "inventory_mismatch"}>Доступно: {inventoryKnown ? inventoryListingQuantity(row.inventory) : "?"}</small>{/if}</td>
         </tr>
       {/each}
     </tbody>

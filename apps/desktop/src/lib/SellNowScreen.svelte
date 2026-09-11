@@ -14,6 +14,7 @@
   import { localeCode, useLocale, type AppSettings } from "./i18n";
   import MasteryScreen from "./MasteryScreen.svelte";
   import InventoryAutoRefresh from "./InventoryAutoRefresh.svelte";
+  import KeepCopiesControl from "./KeepCopiesControl.svelte";
   import { inventoryScanErrorMessage } from "./inventoryRefresh";
   let refreshingInBackground = false;
   import { masteryStore } from "./mastery";
@@ -29,11 +30,14 @@
   } from "./account";
   import {
     INVENTORY_CATEGORIES,
+    inventoryListingQuantity,
+    listingReserveWarning,
     inventoryCategory,
     inventorySourceLabel,
     resolutionLabel,
     type InventoryCategoryFilter,
   } from "./inventory";
+  import { inventoryForNewListing } from "./tradeShift";
 
   import {
     formatPlatinum,
@@ -64,7 +68,7 @@
   export let initialQuery = "";
   export let onInventoryChange: (() => void) | undefined = undefined;
   export let onOpenMarketSales: () => void;
-  type PendingListingAction = { kind: "create"; input: CreateListingInput; itemName: string };
+  type PendingListingAction = { kind: "create"; input: CreateListingInput; itemName: string; reserveWarning: string | null };
 
   const locale = useLocale();
   const categoryCopy = {
@@ -127,8 +131,8 @@
   $: categoryLabels = categoryCopy[$locale];
 
   const labels = {
-    ru: { all: "Все предметы", total: "Позиций в инвентаре", value: "Оценка доступных копий", search: "Название на русском или английском", free: "Есть свободные копии", price: "Оценка / шт.", check: "Проверить цену", checked: "Проверено", count: "Количество", available: "Для продажи", protected: "Почему доступно не всё?", reserve: "Резерв и защита копий", reserveHint: "Резерв действует для каждого варианта предмета. Надетые и непередаваемые копии уже входят в него и не вычитаются повторно.", breakdown: "Состав количества", owned: "Всего есть", tradeable: "Можно передавать", untradeable: "Нельзя передавать", unknown: "Обмен не подтверждён", equipped: "Надето", saved: "Оставлять себе", insufficient: "Нет данных о надетых модах. Обновите инвентарь, чтобы не продать используемую копию.", details: "Цена и спрос подробнее", back: "← К списку предметов", page: "Страницы инвентаря", previous: "Назад", next: "Дальше", filterCount: "Найдено", partial: "Не все доступные позиции имеют цену; сумма оценочная.", empty: "В этом снимке пока нет предметов", emptyHint: "Повторите обновление после входа в Warframe.", selectionReset: "Инвентарь изменился. Проверьте количество и подтвердите ордер заново.", show: "Показывать", reset: "Сбросить фильтры" },
-    en: { all: "All items", total: "Inventory entries", value: "Estimated sellable value", search: "Russian or English item name", free: "Has unequipped copies", price: "Estimate / item", check: "Check price", checked: "Checked", count: "Quantity", available: "For sale", protected: "Why are some copies unavailable?", reserve: "Keep copies and protection", reserveHint: "The reserve applies to each exact variant. Equipped and untradeable copies count toward it, rather than being deducted twice.", breakdown: "Quantity details", owned: "Owned", tradeable: "Tradeable", untradeable: "Untradeable", unknown: "Tradeability unconfirmed", equipped: "Equipped", saved: "Keep copies", insufficient: "Equipped mod data is missing. Refresh inventory to protect copies in use.", details: "Price and demand details", back: "← Back to items", page: "Inventory pages", previous: "Previous", next: "Next", filterCount: "Found", partial: "Some sellable entries have no price; this is an estimate.", empty: "This snapshot has no items yet", emptyHint: "Refresh after logging into Warframe.", selectionReset: "Inventory changed. Check the quantity and confirm the order again.", show: "Show", reset: "Reset filters" },
+    ru: { all: "Все предметы", total: "Позиций в инвентаре", value: "Оценка доступных копий", search: "Название на русском или английском", free: "Есть свободные копии", price: "Оценка / шт.", check: "Проверить цену", checked: "Проверено", count: "Количество", available: "Для продажи", protected: "Почему доступно не всё?", reserve: "Резерв и защита копий", reserveHint: "Резерв задаёт рекомендуемый запас для каждого варианта. При выставлении этих копий появится предупреждение — вы сможете продолжить. Надетые и непередаваемые копии защищены отдельно.", breakdown: "Состав количества", owned: "Всего есть", tradeable: "Можно передавать", untradeable: "Нельзя передавать", unknown: "Обмен не подтверждён", equipped: "Надето", saved: "Оставлять себе", insufficient: "Нет данных о надетых модах. Обновите инвентарь, чтобы не продать используемую копию.", details: "Цена и спрос подробнее", back: "← К списку предметов", page: "Страницы инвентаря", previous: "Назад", next: "Дальше", filterCount: "Найдено", partial: "Не все доступные позиции имеют цену; сумма оценочная.", empty: "В этом снимке пока нет предметов", emptyHint: "Повторите обновление после входа в Warframe.", selectionReset: "Инвентарь изменился. Проверьте количество и подтвердите ордер заново.", show: "Показывать", reset: "Сбросить фильтры" },
+    en: { all: "All items", total: "Inventory entries", value: "Estimated sellable value", search: "Russian or English item name", free: "Has unequipped copies", price: "Estimate / item", check: "Check price", checked: "Checked", count: "Quantity", available: "For sale", protected: "Why are some copies unavailable?", reserve: "Keep copies and protection", reserveHint: "The reserve is your preferred stock for each variant. Listing these copies shows a warning and lets you continue. Equipped and untradeable copies remain protected.", breakdown: "Quantity details", owned: "Owned", tradeable: "Tradeable", untradeable: "Untradeable", unknown: "Tradeability unconfirmed", equipped: "Equipped", saved: "Keep copies", insufficient: "Equipped mod data is missing. Refresh inventory to protect copies in use.", details: "Price and demand details", back: "← Back to items", page: "Inventory pages", previous: "Previous", next: "Next", filterCount: "Found", partial: "Some sellable entries have no price; this is an estimate.", empty: "This snapshot has no items yet", emptyHint: "Refresh after logging into Warframe.", selectionReset: "Inventory changed. Check the quantity and confirm the order again.", show: "Show", reset: "Reset filters" },
   } as const;
   $: u = labels[$locale];
 
@@ -154,7 +158,6 @@
   let scanning = false;
   let itemMode: "inventory" | "mastery" = initialQuery ? "inventory" : cachedItemMode;
   function selectItemMode(mode: "inventory" | "mastery") { itemMode = mode; cachedItemMode = mode; }
-  let reserveUpdating = false;
   let errorMessage = "";
   let selectedIdentity = "";
   let checkedPrices = new Map(cachedChecks);
@@ -172,7 +175,6 @@
   let page = 1;
   let listScroll: HTMLDivElement | undefined;
   let detailOpen = false;
-  let reserveMenu: HTMLDetailsElement;
   $: t = $locale === "ru" ? (ru: string, _en: string) => ru : (_ru: string, en: string) => en;
   $: filterOptions = [
     { value: "all", label: t("Без ограничений", "No restrictions"), hint: "" },
@@ -224,6 +226,9 @@
   $: currentOrder = selectedRow
     ? matchingSellOrder(selectedRow.inventory, accountView)
     : null;
+  $: listingInventory = selectedRow && accountView && view
+    ? inventoryForNewListing(selectedRow.inventory, view.rows.map(row => row.inventory), accountView)
+    : selectedRow?.inventory ?? null;
   $: listingDraftSource = selectedRow
     ? `${sellNowRowIdentity(selectedRow)}:${currentOrder?.id ?? "new"}`
     : "";
@@ -303,24 +308,6 @@
     }
   }
 
-  async function updateReserve(event: Event): Promise<void> {
-    const control = event.currentTarget as HTMLSelectElement;
-    const previous = view?.keepCopies ?? 1;
-    const keepCopies = Number(control.value);
-    reserveUpdating = true;
-    errorMessage = "";
-    try {
-      await invoke("set_inventory_keep_copies", { keepCopies });
-      await loadSellNow();
-      onInventoryChange?.();
-    } catch {
-      errorMessage = c.reserveError;
-    } finally {
-      reserveUpdating = false;
-      control.value = String(view?.keepCopies ?? previous);
-    }
-  }
-
   async function loadAccountOrders(): Promise<void> {
     const request = ++accountRequest;
     accountLoading = true;
@@ -366,7 +353,7 @@
       orderQuantity,
       perTrade,
       $locale,
-      selectedRow.inventory.sellableQuantity,
+      inventoryListingQuantity(listingInventory),
     ) ?? "";
     if (orderFormError) return;
     const trigger = event.submitter as HTMLElement | null;
@@ -386,6 +373,7 @@
         kind: "create",
         input,
         itemName: selectedRow.inventory.displayName,
+        reserveWarning: listingReserveWarning(listingInventory, orderQuantity, $locale),
       },
       trigger,
     );
@@ -461,15 +449,6 @@
     query = ""; category = DEFAULT_SELL_NOW_VIEW.category; preset = DEFAULT_SELL_NOW_VIEW.preset;
     sortKey = DEFAULT_SELL_NOW_VIEW.sortKey; sortDirection = DEFAULT_SELL_NOW_VIEW.sortDirection;
     page = 1; detailOpen = false;
-  }
-
-  function dismissPopovers(event: MouseEvent | KeyboardEvent): void {
-    for (const menu of [reserveMenu]) {
-      if (!menu?.open) continue;
-      if (event instanceof KeyboardEvent) {
-        if (event.key === "Escape") { menu.open = false; menu.querySelector("summary")?.focus(); }
-      } else if (event.target instanceof Node && !menu.contains(event.target)) menu.open = false;
-    }
   }
 
   function meaningfulVariant(row: SellNowRow): string {
@@ -578,7 +557,6 @@
   });
 </script>
 
-<svelte:window onclick={dismissPopovers} onkeydown={dismissPopovers} />
 
 <div class="inventory-topbar">
   <div class="item-mode-switch" role="group" aria-label={t("Мои предметы", "My items")}>
@@ -591,16 +569,8 @@
         {t("Обновлено", "Updated")} {new Date(view.inventoryMetadata.observedAt).toLocaleString(localeCode($locale), {day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}
       </time>
       <InventoryAutoRefresh compact onBusy={(busy) => refreshingInBackground = busy} />
-      <details class="inventory-settings" bind:this={reserveMenu}>
-        <summary>{t("Оставлять себе:", "Keep:")} {view.keepCopies}</summary>
-        <div class="reserve-popover">
-          <label for="keep-copies">{c.reserve}</label>
-          <select id="keep-copies" value={String(view.keepCopies)} disabled={reserveUpdating || scanning || refreshingInBackground} onchange={updateReserve}>
-            <option value="0">0</option><option value="1">1</option><option value="2">2</option>
-          </select>
-          <p>{u.reserveHint}</p>
-        </div>
-      </details>
+      <KeepCopiesControl value={view.keepCopies} disabled={scanning || refreshingInBackground}
+        onSaved={async () => { await loadSellNow(); onInventoryChange?.(); }} />
       <button class="secondary refresh-inventory" type="button" onclick={scanWarframe} disabled={loading || scanning || refreshingInBackground} title={c.scanInventory}>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M6 7a7 7 0 0 1 12-1l2 3M4 15l2 3a7 7 0 0 0 12-1" /></svg>
         {scanning || refreshingInBackground ? c.scanningInventory : t("Обновить", "Refresh")}
@@ -767,7 +737,7 @@
               {#if currentOrder && !accountLoading && !accountError}
                 <p>{c.currentOrder(String(currentOrder.platinum), currentOrder.quantity, visibilityLabel(currentOrder.visible, $locale), currentOrder.perTrade)}</p>
                 <button type="button" onclick={onOpenMarketSales}>{c.manageOrder}</button>
-              {:else if selectedRow.inventory.sellableQuantity <= 0}
+              {:else if inventoryListingQuantity(listingInventory) <= 0}
                 <p class="no-sale">{t("Нет доступных копий для продажи.", "No copies available for sale.")}</p>
               {:else if accountLoading}<p>{c.loadingOrders}</p>
               {:else if accountError}
@@ -781,6 +751,7 @@
                 <section class="wfm-order-confirmation" aria-labelledby="wfm-order-confirmation-heading">
                   <h3 id="wfm-order-confirmation-heading" bind:this={listingConfirmationHeading} tabindex="-1">{pendingListingAction.input.visible ? t("Опубликовать ордер?", "Publish this order?") : t("Создать скрытый ордер?", "Create a hidden order?")}</h3>
                   <p>{c.confirmCreate(pendingListingAction.itemName, pendingListingAction.input.platinum, pendingListingAction.input.quantity, pendingListingAction.input.perTrade)}</p>
+                  {#if pendingListingAction.reserveWarning}<p class="reserve-warning" role="alert">{pendingListingAction.reserveWarning}</p>{/if}
                   <p class="confirmation-visibility">{pendingListingAction.input.visible ? t("Будет виден покупателям.", "Visible to buyers.") : t("Сохранится скрытым от покупателей.", "Hidden from buyers.")}</p>
                   {#if listingConfirmationError}<p class="inline-error" role="alert">{listingConfirmationError}</p>{/if}
                   <div class="wfm-order-actions"><button type="button" onclick={executeListingAction} disabled={orderBusy}>{orderBusy ? t("Создаём ордер…", "Creating order…") : pendingListingAction.input.visible ? t("Подтвердить публикацию", "Confirm publishing") : t("Подтвердить создание", "Confirm creation")}</button><button type="button" class="secondary" onclick={closeListingConfirmation} disabled={orderBusy}>{t("Назад к цене", "Edit price")}</button></div>
@@ -789,7 +760,7 @@
                 <form class="wfm-order-form" onsubmit={prepareListingAction}>
                   <div class="wfm-order-fields">
                     <div class="filter-field"><label for="sell-order-price">{t("Цена за штуку, платина", "Price per item, platinum")}</label><input id="sell-order-price" type="number" inputmode="numeric" bind:value={orderPrice} oninput={() => orderPriceEdited = true} min="1" max="900000" step="1" required aria-describedby={orderFormError ? "sell-order-error" : undefined} aria-invalid={orderFormError ? "true" : undefined} /></div>
-                    <div class="filter-field"><label for="sell-order-quantity">{t("Количество", "Quantity")}</label><input id="sell-order-quantity" type="number" inputmode="numeric" bind:value={orderQuantity} min="1" max={selectedRow.inventory.sellableQuantity} step="1" required aria-describedby={orderFormError ? "sell-order-error" : undefined} aria-invalid={orderFormError ? "true" : undefined} /></div>
+                    <div class="filter-field"><label for="sell-order-quantity">{t("Количество", "Quantity")}</label><input id="sell-order-quantity" type="number" inputmode="numeric" bind:value={orderQuantity} min="1" max={Math.min(9999, inventoryListingQuantity(listingInventory))} step="1" required aria-describedby={orderFormError ? "sell-order-error" : undefined} aria-invalid={orderFormError ? "true" : undefined} /></div>
                     {#if selectedRow.inventory.bulkTradable}<div class="filter-field bulk-trade-field"><label for="sell-order-per-trade">{c.orderPerTrade}</label><input id="sell-order-per-trade" type="number" inputmode="numeric" bind:value={orderPerTrade} min="1" max="6" step="1" required aria-describedby={orderFormError ? "sell-order-error" : undefined} aria-invalid={orderFormError ? "true" : undefined} /></div>{/if}
                   </div>
                   <label class="wfm-order-visible"><input type="checkbox" bind:checked={orderVisible} />{t("Показывать покупателям", "Visible to buyers")}</label>
@@ -807,6 +778,7 @@
 {/if}
 
 <style>
+  .reserve-warning { padding:.75rem; border:1px solid var(--warning, #956422); border-radius:.5rem; background:var(--surface-2); color:var(--text); }
   .inventory-topbar { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:.75rem; margin:0 0 1.15rem; border-bottom:1px solid var(--border); padding:0 0 .75rem; }
   .item-mode-switch { display:flex; gap:.25rem; align-items:center; }
   .item-mode-switch button { border:0; background:transparent; color:var(--text-muted); border-radius:.45rem; padding:.55rem .9rem; box-shadow:none; }
@@ -815,15 +787,6 @@
   .inventory-sync time { color:var(--text-muted); font-size:.73rem; }
   .refresh-inventory { display:flex; gap:.4rem; align-items:center; justify-content:center; white-space:nowrap; }
   svg { width:1rem; height:1rem; fill:none; stroke:currentColor; stroke-width:1.65; stroke-linecap:round; stroke-linejoin:round; flex-shrink:0; }
-  .inventory-settings { position:relative; }
-  .inventory-settings summary { cursor:pointer; list-style:none; border-radius:.45rem; }
-  .inventory-settings summary::after { content:"⌄"; padding-left:.45rem; }
-  .inventory-settings summary { color:var(--text-muted); padding:.5rem .3rem; }
-  .inventory-settings summary:hover { color:var(--text); }
-  .reserve-popover { position:absolute; right:0; top:calc(100% + .45rem); z-index:6; width:20rem; max-width:calc(100vw - 2rem); border:1px solid var(--border); border-radius:.7rem; background:var(--surface-1); padding:1rem; box-shadow:0 .65rem 2rem #44271420; }
-  .reserve-popover label { display:block; font-weight:650; margin-bottom:.4rem; }
-  .reserve-popover select { width:100%; padding:.45rem; border:1px solid var(--border); border-radius:.4rem; font:inherit; }
-  .reserve-popover p { color:var(--text-muted); line-height:1.55; margin:.65rem 0 0; }
   .sell-now-layout { display:grid; grid-template-columns:minmax(0,1fr) 23.5rem; gap:1.1rem; align-items:start; }
   .sell-results,.sell-detail { background:var(--surface-1); border:1px solid var(--border); border-radius:.85rem; box-shadow:0 2px 6px #3b25170a; }
   .sell-results { overflow:visible; min-width:0; }

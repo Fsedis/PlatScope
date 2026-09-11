@@ -484,7 +484,7 @@
   }
 
   function availableSetQuantity(row: SetInsightRow): number {
-    return setOpportunity(row).sellableCompleteSets;
+    return setOpportunity(row).availableCompleteSets;
   }
 
   async function loadInsights(): Promise<void> {
@@ -984,6 +984,7 @@
                   </form>
                 {:else}
                   <p>{c.confirmSummary(row.displayName, listingQuantity, listingPrice ?? 0)}</p>
+                  {#if listingQuantity > opportunity.sellableCompleteSets}<p class="inline-warning" role="alert">{$locale === "ru" ? `Для этого объявления понадобятся детали, которые вы хотели оставить себе. Сохраняя запас, можно выставить ${opportunity.sellableCompleteSets} комплектов. Если всё продастся, запас станет меньше значения «Оставлять копий». Вы можете продолжить.` : `This order uses parts you wanted to keep. You can list ${opportunity.sellableCompleteSets} sets without using the reserve. If everything sells, your stock will fall below “Keep copies”. You can still continue.`}</p>{/if}
                   <label class="order-visible"><input bind:checked={listingConfirmed} type="checkbox" /><span>{c.confirmCheck}</span></label>
                   <div class="order-actions"><button type="button" disabled={listingBusy || !listingConfirmed} onclick={createSetListing}>{listingBusy ? c.creatingOrder : c.createOrder}</button><button type="button" class="secondary" disabled={listingBusy} onclick={closeListing}>{c.cancel}</button></div>
                 {/if}

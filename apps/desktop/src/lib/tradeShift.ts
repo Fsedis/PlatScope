@@ -5,7 +5,7 @@ import type {
   AccountView,
   UpdateListingInput,
 } from "./account";
-import type { InventoryView, InventoryViewItem } from "./inventory";
+import { inventoryListingQuantity, type InventoryView, type InventoryViewItem } from "./inventory";
 import type {
   MarketItemKind,
   MarketVariantKey,
@@ -428,13 +428,13 @@ function sameInventoryVariant(
 }
 
 function aggregateInventoryVariant(
-  inventory: InventoryView | null,
+  inventory: Pick<InventoryView, "items"> | null,
   order: AccountOrder,
   itemId: string | null,
 ): InventoryViewItem | null {
   if (!inventory) return null;
   const matches = inventory.items.filter((candidate) =>
-    sameInventoryVariant(candidate, order, itemId)
+    candidate.resolution === "resolved" && sameInventoryVariant(candidate, order, itemId)
   );
   if (matches.length === 0) return null;
   return matches.slice(1).reduce<InventoryViewItem>((total, item) => ({
@@ -447,12 +447,24 @@ function aggregateInventoryVariant(
     equippedQuantity: total.equippedQuantity + item.equippedQuantity,
     equippedPlacements: [...total.equippedPlacements, ...item.equippedPlacements],
     sellableQuantity: total.sellableQuantity + item.sellableQuantity,
-  }), { ...matches[0], equippedPlacements: [...matches[0].equippedPlacements] });
+    listingQuantity: inventoryListingQuantity(total) + inventoryListingQuantity(item),
+  }), { ...matches[0], listingQuantity: inventoryListingQuantity(matches[0]), equippedPlacements: [...matches[0].equippedPlacements] });
+}
+
+export function inventoryForNewListing(item: InventoryViewItem, items: InventoryViewItem[], account: AccountView): InventoryViewItem | null {
+  if (!item.key) return null;
+  const order: AccountOrder = {
+    ...item.key, id: "", itemId: item.itemId, type: "sell", platinum: 1,
+    quantity: 1, perTrade: null, visible: true, createdAt: "", updatedAt: "",
+  };
+  return availableInventoryForOrder(account, { items }, order,
+    item.itemId ? account.orderItems?.[item.itemId] ?? { slug: item.key.slug, displayName: item.displayName, displayNameEn: item.displayName, imageUrl: null, itemKind: "standard" } : undefined,
+    item.key);
 }
 
 function availableInventoryForOrder(
   account: AccountView,
-  inventory: InventoryView | null,
+  inventory: Pick<InventoryView, "items"> | null,
   order: AccountOrder,
   item: AccountOrderItem | undefined,
   key: MarketVariantKey | null,
@@ -476,6 +488,7 @@ function availableInventoryForOrder(
     : 0;
   return {
     ...aggregated,
+    listingQuantity: Math.max(0, inventoryListingQuantity(aggregated) - directReservations - setReservations),
     sellableQuantity: Math.max(
       0,
       aggregated.sellableQuantity - directReservations - setReservations,
@@ -485,7 +498,7 @@ function availableInventoryForOrder(
 
 function aggregateSetInventory(
   account: AccountView,
-  inventory: InventoryView,
+  inventory: Pick<InventoryView, "items">,
   order: AccountOrder,
   item: AccountOrderItem,
   key: MarketVariantKey | null,
@@ -501,6 +514,7 @@ function aggregateSetInventory(
         (total, candidate) => total + candidate.sellableQuantity,
         0,
       );
+      const listable = componentItems.reduce((total, candidate) => total + inventoryListingQuantity(candidate), 0);
       const directReservations = account.orders
         .filter((candidate) =>
           candidate.id !== order.id
@@ -512,13 +526,13 @@ function aggregateSetInventory(
         )
         .reduce((total, candidate) => total + candidate.quantity, 0);
       const reservedBySets = setReservations.get(component.slug) ?? 0;
-      return Math.floor(
-        Math.max(0, available - directReservations - reservedBySets)
-          / component.requiredQuantity,
-      );
+      return {
+        listing: Math.floor(Math.max(0, listable - directReservations - reservedBySets) / component.requiredQuantity),
+        sellable: Math.floor(Math.max(0, available - directReservations - reservedBySets) / component.requiredQuantity),
+      };
     }) ?? [];
   const sellableQuantity = availableSets.length > 0
-    ? Math.min(...availableSets)
+    ? Math.min(...availableSets.map(value => value.sellable))
     : 0;
   return {
     canonicalGameId: `set:${item.slug}`,
@@ -538,6 +552,7 @@ function aggregateSetInventory(
     equippedQuantity: 0,
     equippedPlacements: [],
     sellableQuantity,
+    listingQuantity: availableSets.length > 0 ? Math.min(...availableSets.map(value => value.listing)) : 0,
     resolution: "resolved",
     vaultStatus: "unknown",
   };
@@ -593,12 +608,12 @@ function evaluateOrder(
   const listPrice = recommendation?.listPrice === null || recommendation?.listPrice === undefined
     ? null
     : recommendation.listPrice * lotSize;
-  if (inventoryAvailable && (!inventory || order.quantity > inventory.sellableQuantity)) {
+  if (inventoryAvailable && (!inventory || order.quantity > inventoryListingQuantity(inventory))) {
     return {
       health: "inventory_mismatch",
       suggestedPrice: roundedPrice(listPrice),
       suggestedQuantity: inventory
-        ? executableQuantity(inventory.sellableQuantity, order.perTrade)
+        ? executableQuantity(inventoryListingQuantity(inventory), order.perTrade)
         : 0,
       needsAction: true,
     };

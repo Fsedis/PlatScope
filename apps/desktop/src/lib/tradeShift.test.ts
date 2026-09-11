@@ -137,7 +137,7 @@ describe("торговая смена", () => {
 
   it("сбой цены не скрывает лишнее количество в ордере", () => {
     const quote = recommendation();
-    const rows = buildTradeShiftRows(account, inventory, new Map([[recommendationIdentity(quote.key), quote]]));
+    const rows = buildTradeShiftRows(account, { ...inventory, items: [{ ...inventory.items[0], ownedQuantity: 2, tradeableQuantity: 2 }] }, new Map([[recommendationIdentity(quote.key), quote]]));
     const failed = applyPriceCheckFailures(rows, new Set([recommendationIdentity(quote.key)]));
     expect(failed[0]).toMatchObject({
       health: "inventory_mismatch", suggestedQuantity: 2, suggestedPrice: null,
@@ -157,7 +157,7 @@ describe("торговая смена", () => {
 
   it("ставит расхождение количества выше проверки цены", () => {
     const quote = recommendation();
-    const rows = buildTradeShiftRows(account, inventory, new Map([[recommendationIdentity(quote.key), quote]]), new Date("2026-08-29T12:00:00Z"));
+    const rows = buildTradeShiftRows(account, { ...inventory, items: [{ ...inventory.items[0], ownedQuantity: 2, tradeableQuantity: 2 }] }, new Map([[recommendationIdentity(quote.key), quote]]), new Date("2026-08-29T12:00:00Z"));
     expect(rows[0].health).toBe("inventory_mismatch");
     expect(rows[0].suggestedQuantity).toBe(2);
   });
@@ -260,6 +260,7 @@ describe("торговая смена", () => {
       items: [{
         ...inventory.items[0],
         canonicalGameId: "part-a",
+        ownedQuantity: 1, tradeableQuantity: 1,
         itemId: "part-a-id",
         key: { ...inventory.items[0].key!, slug: "part_a" },
         sellableQuantity: 1,

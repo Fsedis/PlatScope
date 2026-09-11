@@ -919,6 +919,28 @@ impl SellListingIntent {
     }
 }
 
+// Общий резерв копий подтверждается предупреждением в интерфейсе.
+// Ограничения обмена, надетые копии и личные цели остаются обязательными.
+fn inventory_listing_quantity(item: &platscope_core::InventoryViewItem) -> u32 {
+    if item.resolution != InventoryResolution::Resolved {
+        return 0;
+    }
+    item.owned_quantity
+        .saturating_sub(
+            item.untradeable_quantity
+                .saturating_add(item.unknown_quantity)
+                .saturating_add(item.equipped_quantity),
+        )
+        .min(
+            item.tradeable_quantity
+                .saturating_sub(item.equipped_quantity),
+        )
+        .min(
+            item.tradeable_quantity
+                .saturating_sub(item.personal_reserved_quantity),
+        )
+}
+
 fn validate_sell_listing_inventory(
     intent: &SellListingIntent,
     inventory: &InventoryView,
@@ -951,11 +973,11 @@ fn validate_sell_listing_inventory(
                     .is_some_and(|key| intent.matches_inventory_key(item.item_id.as_deref(), key))
         })
         .fold(0_u32, |total, item| {
-            total.saturating_add(item.sellable_quantity)
+            total.saturating_add(inventory_listing_quantity(item))
         });
     if available == 0 {
         return Err(
-            "Этот точный вариант сейчас нельзя продать: проверьте ранг, заряды и резерв копий."
+            "Этот точный вариант сейчас нельзя продать: проверьте наличие, возможность обмена и личные цели."
                 .into(),
         );
     }
@@ -1014,7 +1036,7 @@ fn validate_prime_set_listing(
                 })
                 .collect::<Vec<_>>();
             let available = component_items.iter().fold(0_u32, |total, item| {
-                total.saturating_add(item.sellable_quantity)
+                total.saturating_add(inventory_listing_quantity(item))
             });
             let reserved = existing_orders
                 .iter()
@@ -1054,7 +1076,7 @@ fn validate_prime_set_listing(
         .unwrap_or(0);
     if intent.quantity > available_sets {
         return Err(format!(
-            "Для продажи доступно полных комплектов: {available_sets}. Проверьте резерв копий и активные ордера на детали."
+            "Для продажи доступно полных комплектов: {available_sets}. Проверьте наличие деталей, личные цели и активные ордера."
         ));
     }
     Ok(())
@@ -4236,6 +4258,83 @@ mod tests {
     }
 
     #[test]
+    fn listing_validation_allows_keep_copies_but_protects_actual_stock() {
+        let mut inventory = listing_inventory(0);
+        inventory.keep_copies = 10;
+        assert!(
+            validate_sell_listing_inventory(
+                &listing_intent(4, 1),
+                &inventory,
+                &[],
+                None,
+                None,
+                &HashMap::new()
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_sell_listing_inventory(
+                &listing_intent(5, 1),
+                &inventory,
+                &[],
+                None,
+                None,
+                &HashMap::new()
+            )
+            .is_err()
+        );
+        // Изменяемый ордер не резервирует копии сам у себя.
+        assert!(
+            validate_sell_listing_inventory(
+                &listing_intent(4, 1),
+                &inventory,
+                &[existing_sell_order(3)],
+                Some("existing"),
+                None,
+                &HashMap::new()
+            )
+            .is_ok()
+        );
+        inventory.items[0].equipped_quantity = 1;
+        assert_eq!(inventory_listing_quantity(&inventory.items[0]), 3);
+        inventory.items[0].personal_reserved_quantity = 2;
+        assert_eq!(inventory_listing_quantity(&inventory.items[0]), 2);
+        inventory.items[0].resolution = InventoryResolution::AmbiguousItem;
+        assert_eq!(inventory_listing_quantity(&inventory.items[0]), 0);
+    }
+
+    #[test]
+    fn set_listing_validation_allows_parts_from_keep_copies() {
+        let (mut inventory, intent, definition) = set_listing_fixture();
+        for item in &mut inventory.items {
+            item.sellable_quantity = 0;
+        }
+        assert!(
+            validate_sell_listing_inventory(
+                &intent,
+                &inventory,
+                &[],
+                None,
+                Some(&definition),
+                &HashMap::new()
+            )
+            .is_ok()
+        );
+        inventory.items[0].personal_reserved_quantity = 1;
+        assert!(
+            validate_sell_listing_inventory(
+                &intent,
+                &inventory,
+                &[],
+                None,
+                Some(&definition),
+                &HashMap::new()
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn listing_validation_reserves_existing_orders_and_checks_lot_size() {
         let inventory = listing_inventory(3);
         assert!(
@@ -4251,7 +4350,7 @@ mod tests {
         );
         assert!(
             validate_sell_listing_inventory(
-                &listing_intent(2, 1),
+                &listing_intent(3, 1),
                 &inventory,
                 &[existing_sell_order(2)],
                 None,

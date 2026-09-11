@@ -1,5 +1,6 @@
 <script lang="ts">
   import MarketOrderTable from "./MarketOrderTable.svelte";
+  import KeepCopiesControl from "./KeepCopiesControl.svelte";
   import MarketOrderPrices from "./MarketOrderPrices.svelte";
   import MarketOrderInsight from "./MarketOrderInsight.svelte";
   import MarketTradeHistory from "./MarketTradeHistory.svelte";
@@ -21,7 +22,7 @@
     type AccountView,
     type CreateListingInput,
   } from "./account";
-  import type { InventoryView } from "./inventory";
+  import { inventoryListingQuantity, listingReserveWarning, type InventoryView } from "./inventory";
   import { type LivePricingResult, type PriceRecommendation } from "./market";
   import {
     applyPriceCheckFailures,
@@ -51,6 +52,7 @@
 
   let account: AccountView | null = null;
   let inventory: InventoryView | null = null;
+  let reserveUpdating = false;
   let events: TradeEvent[] = [];
   let tradeSales: TradeSalesSummary = { saleCount: 0, platinumReceived: 0 };
   let recommendations = new Map<string, PriceRecommendation | null>();
@@ -93,6 +95,8 @@
   let refreshPromise: Promise<void> | null = null;
   let orderDialog: HTMLDialogElement;
   let discardDialog: HTMLDialogElement;
+  let reserveDialog: HTMLDialogElement;
+  let reserveWarning = "";
   let pendingSelection: TradeShiftRow | null = null;
   let detailOpen = false;
   let orderSort: SalesSort = "priority";
@@ -486,9 +490,13 @@
       editQuantity,
       editOriginalPerTrade === null ? null : editPerTrade,
       "ru",
-      editingOrder?.type === "sell" && editVisible && inventory ? rows.find((row) => row.order.id === editingOrder?.id)?.inventory?.sellableQuantity ?? 0 : null,
+      editingOrder?.type === "sell" && editVisible && inventory ? inventoryListingQuantity(editingRow?.inventory) : null,
     ) ?? "";
-    if (!editError) void applyManualEdit();
+    if (editError) return;
+    reserveWarning = editingOrder?.type === "sell" && (editQuantity !== editingOrder.quantity || (editVisible && !editingOrder.visible))
+      ? listingReserveWarning(editingRow?.inventory, editQuantity) ?? "" : "";
+    if (reserveWarning) reserveDialog.showModal();
+    else void applyManualEdit();
   }
 
   async function applyManualEdit(): Promise<void> {
@@ -515,6 +523,7 @@
       editOriginalPerTrade = editableOrderPerTrade(editingRow?.item, editingRow?.inventory, updated.perTrade);
       editPerTrade = editOriginalPerTrade;
       editError = "";
+      reserveDialog.close();
     } catch (error) {
       editError = changeError(error).replace("Закройте окно и проверьте новые данные перед сохранением.", "Сбросьте изменения, проверьте новые данные и повторите сохранение.");
       if (String(error).includes("Объявления изменились") || String(error).includes("Объявление уже изменилось")) await reloadAccount();
@@ -825,7 +834,7 @@
   {:else}
     {#if !account.profile?.verification}<p class="data-note">Аккаунт не подтверждён. После подтверждения на Warframe Market обновите список.</p>{/if}
     {#if pendingEvents.length}<div class="pending-notice"><span>Не учтено продаж из игры: <strong>{pendingEvents.length}</strong></span><button class="text-button" onclick={onHistory}>Проверить сделки →</button></div>{/if}
-      <header class="orders-heading"><div class="order-type" role="group" aria-label="Тип объявлений"><button aria-pressed={orderType === "sell"} disabled={applying || editorDirty || reviewOpen} onclick={() => switchType("sell")}>Продажа <b>{account.orders.filter(o => o.type === "sell").length}</b></button><button aria-pressed={orderType === "buy"} disabled={applying || editorDirty || reviewOpen} onclick={() => switchType("buy")}>Покупка <b>{account.orders.filter(o => o.type === "buy").length}</b></button></div><h3 class="sr-only" id="orders-heading">{orderType === "sell" ? "Объявления на продажу" : "Заявки на покупку"}</h3><div class="sales-header__actions"><span class="updated">{lastUpdated ? "Обновлено " + new Date(lastUpdated).toLocaleTimeString("ru-RU", {hour:"2-digit",minute:"2-digit"}) : "Загрузка…"}</span><button class="text-button" disabled={loading || applying || refreshingLive || editorDirty} onclick={() => loadAll()}>{loading ? "Обновляем…" : "Обновить список"}</button>{#if refreshingLive}<button class="secondary" onclick={() => stopLiveRefresh = true}>Остановить проверку</button>{:else}<button class="secondary" disabled={!rows.length || loading || applying} onclick={refreshCurrentPrices}>{selectedOrders.length ? "Проверить выбранные · " + selectedOrders.length : "Проверить цены"}</button>{/if}</div></header>
+      <header class="orders-heading"><div class="order-type" role="group" aria-label="Тип объявлений"><button aria-pressed={orderType === "sell"} disabled={applying || editorDirty || reviewOpen} onclick={() => switchType("sell")}>Продажа <b>{account.orders.filter(o => o.type === "sell").length}</b></button><button aria-pressed={orderType === "buy"} disabled={applying || editorDirty || reviewOpen} onclick={() => switchType("buy")}>Покупка <b>{account.orders.filter(o => o.type === "buy").length}</b></button></div><h3 class="sr-only" id="orders-heading">{orderType === "sell" ? "Объявления на продажу" : "Заявки на покупку"}</h3><div class="sales-header__actions">{#if orderType === "sell" && inventory}<KeepCopiesControl value={inventory.keepCopies} bind:updating={reserveUpdating} disabled={loading || applying || reviewOpen} onSaved={updated => { ++dataRevision; inventory = updated; }} />{/if}<span class="updated">{lastUpdated ? "Обновлено " + new Date(lastUpdated).toLocaleTimeString("ru-RU", {hour:"2-digit",minute:"2-digit"}) : "Загрузка…"}</span><button class="text-button" disabled={loading || applying || refreshingLive || editorDirty} onclick={() => loadAll()}>{loading ? "Обновляем…" : "Обновить список"}</button>{#if refreshingLive}<button class="secondary" onclick={() => stopLiveRefresh = true}>Остановить проверку</button>{:else}<button class="secondary" disabled={!rows.length || loading || applying} onclick={refreshCurrentPrices}>{selectedOrders.length ? "Проверить выбранные · " + selectedOrders.length : "Проверить цены"}</button>{/if}</div></header>
     {#if actionMessage}<p class="status-line action-line" role="status">{actionMessage}</p>{/if}
     <div class="orders-layout" class:detail-open={detailOpen} class:without-detail={!editingOrder}>
     <section class="orders-panel" aria-labelledby="orders-heading">
@@ -850,7 +859,7 @@
         {#if !editingRow}<p class="data-note" role="status">Объявления больше нет в текущем списке. Сбросьте изменения, чтобы выбрать другое.</p>
         {:else}
           {#if !visibleRows.some(row => row.order.id === editingOrder?.id)}<p class="data-note">Открытое объявление не входит в текущий отбор. Ваши правки сохранены в форме.</p>{/if}
-          <div class="detail-estimate"><div><span>Оценка продажи за штуку</span><strong>{money(editingRow.recommendation?.listPrice ?? null)}</strong></div>{#if editingOrder.type === "sell"}<div><span>Доступно к продаже</span><strong class:danger={editingRow.health === "inventory_mismatch"}>{inventory ? (editingRow.inventory?.sellableQuantity ?? 0) + " шт." : "Неизвестно"}</strong></div>{/if}</div>
+          <div class="detail-estimate"><div><span>Оценка продажи за штуку</span><strong>{money(editingRow.recommendation?.listPrice ?? null)}</strong></div>{#if editingOrder.type === "sell"}<div><span>Доступно к продаже</span><strong class:danger={editingRow.health === "inventory_mismatch"}>{inventory ? inventoryListingQuantity(editingRow.inventory) + " шт." : "Неизвестно"}</strong></div>{/if}</div>
           {#if editingRow.health === "inventory_mismatch"}<p class="stock-note">{editingRow.suggestedQuantity === 0 ? "Свободных копий нет. Скройте или удалите объявление." : "В объявлении больше копий, чем доступно в инвентаре."}</p>{/if}
           {#key editingOrder.id}<MarketOrderPrices row={editingRow} profile={account?.profile ?? null} onQuote={acceptQuote}/>{/key}
         {/if}
@@ -861,7 +870,7 @@
       <label class="compact-check"><input type="checkbox" bind:checked={editVisible} /> {editingOrder.type === "sell" ? "Показывать покупателям" : "Показывать продавцам"}</label>
       {#if editorDirty}<details class="edit-preview"><summary>Что изменится при сохранении</summary><dl><div><dt>Цена{(editPerTrade ?? editingOrder.perTrade ?? 1) > 1 ? " за партию" : " за штуку"}</dt><dd>{money(editingOrder.platinum)} → {money(editPlatinum ?? null)}</dd></div><div><dt>Количество</dt><dd>{editingOrder.quantity} → {editQuantity ?? "—"} шт.</dd></div>{#if editOriginalPerTrade !== null}<div><dt>В одной сделке</dt><dd>{editOriginalPerTrade} → {editPerTrade} шт.</dd></div>{/if}<div><dt>Показ на рынке</dt><dd>{editVisible ? "Включён" : "Выключен"}</dd></div></dl></details>{/if}
 
-      </fieldset><div class="confirm-actions editor-actions"><button type="submit" disabled={applying || !editorDirty || !editingRow || !account?.profile?.verification}>{applying ? "Сохраняем…" : "Сохранить изменения"}</button>{#if editorDirty}<button class="text-button" type="button" disabled={applying} onclick={resetEditor}>Сбросить изменения</button>{/if}</div>
+      </fieldset><div class="confirm-actions editor-actions"><button type="submit" disabled={applying || reserveUpdating || !editorDirty || !editingRow || !account?.profile?.verification}>{applying ? "Сохраняем…" : "Сохранить изменения"}</button>{#if editorDirty}<button class="text-button" type="button" disabled={applying} onclick={resetEditor}>Сбросить изменения</button>{/if}</div>
     </form>
         {#if editingRow}
           <details class="order-history"><summary>История цены и спроса</summary><div class="history-content">{#key editingOrder.id}<MarketOrderInsight row={editingRow} summary={analytics.get(editingRow.key ? marketAnalyticsKey(editingRow.key) : "") ?? null} loading={analyticsLoading} unavailable={analyticsError} showClose={false} showOffers={false} onRetry={() => void loadAnalytics()} onClose={() => {}}/>{/key}</div></details>
@@ -878,6 +887,12 @@
   <h2 id="order-remove-heading">Удалить объявление?</h2>{#if orderToRemove}<p class="dialog-description"><strong>{manualOrderName(orderToRemove)}</strong></p>{/if}<p class="dialog-description">Объявление исчезнет с Warframe Market. Чтобы вернуть его, потребуется новая публикация.</p>
   {#if errorMessage}<p class="inline-error" role="alert">{errorMessage}</p>{/if}<div class="confirm-actions"><button class="danger-primary" disabled={applying} onclick={removeManualOrder}>{applying ? "Удаляем…" : "Удалить объявление"}</button><button class="secondary" disabled={applying} onclick={closeEditor}>Отмена</button></div>
 </dialog>
+<dialog class="sales-dialog" bind:this={reserveDialog} oncancel={event => { if (applying) event.preventDefault(); }} aria-labelledby="reserve-heading">
+  <h2 id="reserve-heading">Использовать оставленные себе копии?</h2>
+  <p class="dialog-description">{reserveWarning}</p>
+  {#if editError}<p class="inline-error" role="alert">{editError}</p>{/if}
+  <div class="confirm-actions"><button disabled={applying} onclick={applyManualEdit}>{applying ? "Сохраняем…" : "Всё равно сохранить"}</button><button class="secondary" disabled={applying} onclick={() => reserveDialog.close()}>Вернуться к количеству</button></div>
+</dialog>
 <dialog class="sales-dialog" bind:this={discardDialog} onclose={() => pendingSelection = null} aria-labelledby="discard-heading">
   <h2 id="discard-heading">Перейти без сохранения?</h2><p class="dialog-description">В открытом объявлении есть несохранённые изменения.</p><div class="confirm-actions"><button onclick={() => discardDialog.close()}>Продолжить редактирование</button><button class="secondary" onclick={discardAndSelect}>Не сохранять и перейти</button></div>
 </dialog>
@@ -888,7 +903,7 @@
   {#if applyProgress}<p class="status-line" role="status">{applyProgress}</p>{/if}<div class="confirm-actions"><button disabled={applying || !reviewed.length} onclick={applySelectedChanges}>{applying ? "Отправляем…" : "Применить изменения"}</button><button class="secondary" disabled={applying} onclick={closeBatchReview}>Отмена</button></div>
 </dialog>
 <dialog class="sales-dialog" bind:this={visibilityDialog} onclose={() => visibilityIntent = null} oncancel={event => { if (applying) event.preventDefault(); }} aria-labelledby="visibility-heading">
-  <h2 id="visibility-heading">{visibilityIntent ? "Показать" : "Скрыть"} объявления · {visibilityTargets.length}</h2><p class="dialog-description">{visibilityIntent ? "Выбранные объявления станут видны на Warframe Market." : "Эти объявления перестанут отображаться на рынке. Цены и количество сохранятся."}</p><ul class="visibility-items">{#each visibilityTargets as order}<li>{manualOrderName(order)}</li>{/each}</ul>
+  <h2 id="visibility-heading">{visibilityIntent ? "Показать" : "Скрыть"} объявления · {visibilityTargets.length}</h2><p class="dialog-description">{visibilityIntent ? "Выбранные объявления станут видны на Warframe Market." : "Эти объявления перестанут отображаться на рынке. Цены и количество сохранятся."}</p><ul class="visibility-items">{#each visibilityTargets as order}<li>{manualOrderName(order)}{#if visibilityIntent && order.type === "sell"}{@const warning = listingReserveWarning(rows.find(row => row.order.id === order.id)?.inventory, order.quantity)}{#if warning}<p class="stock-note">{warning}</p>{/if}{/if}</li>{/each}</ul>
   {#if errorMessage}<p class="inline-error" role="alert">{errorMessage}</p>{/if}{#if applyProgress}<p role="status">{applyProgress}</p>{/if}<div class="confirm-actions"><button disabled={applying} onclick={applyVisibility}>{applying ? "Отправляем…" : visibilityIntent ? "Показать объявления" : "Скрыть объявления"}</button><button class="secondary" disabled={applying} onclick={() => visibilityDialog.close()}>Отмена</button></div>
 </dialog>
 <dialog class="sales-dialog" bind:this={undoDialog} onclose={() => tradeToUndo = null} oncancel={event => { if (applying) event.preventDefault(); }} aria-labelledby="trade-undo-heading">

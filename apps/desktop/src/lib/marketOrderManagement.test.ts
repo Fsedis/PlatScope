@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { validateListingNumbers, type AccountOrder, type AccountView } from "./account";
-import type { InventoryView } from "./inventory";
+import { inventoryListingQuantity, listingReserveWarning, type InventoryView } from "./inventory";
 import type { PriceRecommendation } from "./market";
 import { competingOffers, orderChange, orderMarketPrice, reviewedChanges, reviewedQuantitiesMatch, salesFilterRows, sortSalesRows } from "./marketSales";
 import type { LiveOrderView } from "./market";
@@ -55,6 +55,40 @@ function quotes(price = 10): Map<string, PriceRecommendation> {
 }
 
 describe("управление продажами и заявками на покупку", () => {
+  it("разрешает выставить последнюю копию после предупреждения вместо запрета", () => {
+    const stock = inventory(1);
+    stock.keepCopies = 1;
+    stock.items[0].sellableQuantity = 0;
+    const row = buildTradeShiftRows(account([order("sale", "sell", { quantity: 1, perTrade: null })]), stock, quotes())[0];
+    expect(inventoryListingQuantity(row.inventory)).toBe(1);
+    expect(validateListingNumbers(10, 1, null, "ru", inventoryListingQuantity(row.inventory))).toBeNull();
+    expect(listingReserveWarning(row.inventory, 1)).toContain("Оставлять копий");
+    expect(row.health).not.toBe("inventory_mismatch");
+    expect(row.suggestedQuantity).toBeNull();
+  });
+
+  it("учитывает другие объявления в пределе и предупреждает только при использовании резерва", () => {
+    const stock = inventory(5);
+    stock.keepCopies = 2;
+    stock.items[0].sellableQuantity = 3;
+    const row = buildTradeShiftRows(account([
+      order("edited", "sell", { quantity: 1, perTrade: null }),
+      order("other", "sell", { quantity: 2, perTrade: null }),
+    ]), stock, quotes()).find(row => row.order.id === "edited")!;
+    expect(inventoryListingQuantity(row.inventory)).toBe(3);
+    expect(listingReserveWarning(row.inventory, 1)).toBeNull();
+    expect(listingReserveWarning(row.inventory, 3)).toContain("вы выбрали 3");
+    expect(validateListingNumbers(10, 4, null, "ru", inventoryListingQuantity(row.inventory))).not.toBeNull();
+  });
+
+  it("не снимает защиту надетых копий, личных целей и неопределённых вариантов", () => {
+    const item = inventory(6).items[0];
+    Object.assign(item, { tradeableQuantity: 4, untradeableQuantity: 1, unknownQuantity: 1, equippedQuantity: 1, personalReservedQuantity: 2 });
+    expect(inventoryListingQuantity(item)).toBe(2);
+    expect(inventoryListingQuantity({ ...item, resolution: "ambiguous_item" })).toBe(0);
+    expect(listingReserveWarning(inventory(4).items[0], 4)).toBeNull();
+  });
+
   it("сравнивает объявления по цене одной копии, даже если цены указаны за разные партии", () => {
     const source = account([
       order("single", "sell", { platinum: 20, perTrade: 1 }),

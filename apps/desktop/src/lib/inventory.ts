@@ -73,6 +73,8 @@ export interface InventoryViewItem {
   equippedPlacements: EquippedModPlacement[];
   sellableQuantity: number;
   resolution: InventoryResolution;
+  /** Предел для ордера без общего резерва, с учётом других объявлений. */
+  listingQuantity?: number;
   /** Передаваемые экземпляры для личных целей сборки. */
   personalReservedQuantity?: number;
   vaultStatus: VaultStatus;
@@ -84,6 +86,28 @@ export interface InventoryView {
   modUsageScanned: boolean;
   summary: InventorySummary;
   items: InventoryViewItem[];
+}
+
+/** Общий резерв — рекомендация; защита непередаваемых копий и личных целей остаётся. */
+export function inventoryListingQuantity(item: InventoryViewItem | null | undefined): number {
+  if (!item || item.resolution !== "resolved") return 0;
+  if (item.listingQuantity !== undefined) return item.listingQuantity;
+  return Math.max(0, Math.min(
+    item.ownedQuantity - item.untradeableQuantity - item.unknownQuantity - item.equippedQuantity,
+    item.tradeableQuantity - item.equippedQuantity,
+    item.tradeableQuantity - (item.personalReservedQuantity ?? 0),
+  ));
+}
+
+export function listingReserveWarning(
+  item: InventoryViewItem | null | undefined,
+  quantity: number,
+  locale: UiLocale = "ru",
+): string | null {
+  if (!item || quantity <= item.sellableQuantity || quantity > inventoryListingQuantity(item)) return null;
+  return locale === "en"
+    ? `This order uses copies you wanted to keep. You can list ${item.sellableQuantity} without using that reserve; you selected ${quantity}. If everything sells, fewer copies will remain than your “Keep copies” setting. You can still continue.`
+    : `Объявление затронет копии, которые вы хотели оставить себе. Сохраняя запас, можно выставить ${item.sellableQuantity} шт., вы выбрали ${quantity}. Если всё продастся, останется меньше копий, чем указано в «Оставлять копий». Вы можете продолжить.`;
 }
 
 export const INVENTORY_CATEGORIES = [
