@@ -4126,6 +4126,8 @@ pub fn run() {
             foundation_status,
             mission_research::mission_research_status,
             mission_research::mission_research_scene,
+            mission_research::mission_research_update,
+            mission_research::mission_research_pose,
             mission_research::mission_research_archives,
             mission_research::mission_research_scan_live,
             mission_research::mission_research_analyze_archive,

@@ -409,7 +409,7 @@ fn run(
             last_report = Instant::now();
         }
     }
-    let mut scene=Scene{format:1,source:source.into(),started_at,captured_at:stamp(),complete,profile:"warframe-2026-09-12-validated".into(),objects:Vec::new(),meshes:Vec::new(),players:Vec::new(),zones:Vec::new(),zones_fresh:false,warnings:vec!["Снимок не атомарен: объекты прочитаны в разные моменты времени.".into(),"Геометрия исследовательская: принадлежность текущему региону и переходы между частями не гарантированы.".into(),"По координатам нельзя установить, доступен ли предмет и был ли он подобран.".into()],stats:SceneStats{scanned_bytes:scanned,..Default::default()},identities:Vec::new(),process:None,discovery_profile:Some(profile.clone()),discovery_ranges:Vec::new(),discovery_cursor:0};
+    let mut scene=Scene{format:1,source:source.into(),started_at,captured_at:stamp(),complete,profile:"warframe-2026-09-12-validated".into(),objects:Vec::new(),meshes:Default::default(),camera_heading:None,players:Vec::new(),zones:Vec::new(),zones_fresh:false,warnings:vec!["Снимок не атомарен: объекты прочитаны в разные моменты времени.".into(),"Геометрия исследовательская: принадлежность текущему региону и переходы между частями не гарантированы.".into(),"По координатам нельзя установить, доступен ли предмет и был ли он подобран.".into()],stats:SceneStats{scanned_bytes:scanned,..Default::default()},identities:Vec::new(),process:None,discovery_profile:Some(profile.clone()),discovery_ranges:Vec::new(),discovery_cursor:0};
     if failed_chunks > 0 {
         scene.complete = false;
         scene.warnings.push(format!(
@@ -440,7 +440,7 @@ fn run(
                     {
                         scene.stats.vertex_count += mesh.vertices.len() as u64;
                         scene.stats.face_count += mesh.faces.len() as u64;
-                        scene.meshes.push(mesh)
+                        std::sync::Arc::make_mut(&mut scene.meshes).push(mesh)
                     }
                     _ => mesh_rejected += 1,
                 }
@@ -528,6 +528,80 @@ pub fn analyze_live(
     scene.process = Some((pid, created));
     Ok(scene)
 }
+/// Компактная привязка: без геометрии, пулов, списка объектов и глобального поиска.
+#[derive(Clone)]
+pub struct LocalPoseReader {
+    pid: u32,
+    created: String,
+    base: u64,
+    player: u64,
+    identity: Identity,
+}
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalPose {
+    pub avatar_key: String,
+    pub position: Option<[f32; 3]>,
+    pub camera_heading: Option<f32>,
+}
+impl LocalPoseReader {
+    pub fn from_scene(scene: &Scene) -> Option<Self> {
+        if scene.source != "live" {
+            return None;
+        }
+        let mut locals = scene.players.iter().filter(|p| p.local);
+        let local = locals.next()?;
+        if locals.next().is_some() {
+            return None;
+        }
+        let avatar = u64::from_str_radix(local.avatar_key.trim_start_matches("0x"), 16).ok()?;
+        let player = u64::from_str_radix(local.key.trim_start_matches("0x"), 16).ok()?;
+        let identity = scene
+            .identities
+            .iter()
+            .find(|i| i.address == avatar && i.moving)?
+            .clone();
+        let (pid, created) = scene.process.as_ref()?;
+        Some(Self {
+            pid: *pid,
+            created: created.clone(),
+            base: scene.discovery_profile.as_ref()?.base,
+            player,
+            identity,
+        })
+    }
+    fn sample(&self, m: &mut dyn Memory) -> Result<LocalPose> {
+        let avatar = self.identity.address;
+        super::context::local_map(m, self.player, avatar, self.base)?;
+        let Some((_, position)) = observe(m, &self.identity)? else {
+            return Err("Объект персонажа изменился".into());
+        };
+        let camera_heading = super::context::camera_heading(m, self.player, avatar, self.base).ok();
+        super::context::local_map(m, self.player, avatar, self.base)?;
+        Ok(LocalPose {
+            avatar_key: format!("0x{avatar:x}"),
+            position,
+            camera_heading,
+        })
+    }
+    pub fn read(&self) -> Result<LocalPose> {
+        let process = crate::binary_snapshot::Process::open(self.pid).map_err(|e| e.to_string())?;
+        if process.created != self.created {
+            return Err("Процесс игры изменился".into());
+        }
+        let mut m = LiveMemory {
+            process,
+            ranges: Vec::new(),
+            modules: Vec::new(),
+        };
+        let pose = self.sample(&mut m)?;
+        if !m.process.alive() {
+            return Err("Игра завершилась".into());
+        }
+        Ok(pose)
+    }
+}
+
 pub fn refresh_live(pid: u32, scene: &Scene, cancel: &AtomicBool) -> Result<Scene> {
     if scene.source != "live" {
         return Err("Обновление доступно только для живой сцены".into());
@@ -764,6 +838,50 @@ mod tests {
         });
         (m, scene)
     }
+    #[test]
+    fn fast_pose_reads_only_local_links_and_rejects_replaced_avatar() {
+        let (mut m, scene) = fixture();
+        m.bytes.resize(0x3000000, 0);
+        for (object, meta) in [
+            (0x3000, 0x29c9600),
+            (0x6000, 0x28cc310),
+            (0x8000, 0x29e7ea0),
+        ] {
+            put_q(&mut m, object + 8, meta as u64);
+            put_q(&mut m, object + 16, (object + 0x800) as u64);
+            put_q(&mut m, object + 0x800, object as u64);
+            put_q(&mut m, meta, 0x203fc60);
+        }
+        for (at, value) in [
+            (0x620, 0x3800),
+            (0x3118, 0x800),
+            (0x3030, 0x6800),
+            (0x10098, 0x8800),
+            (0x80e0, 0x800),
+        ] {
+            put_q(&mut m, at, value);
+        }
+        for i in 0..4 {
+            put_f(&mut m, 0x60a0 + i * 20, 1.0);
+        }
+        let reader = LocalPoseReader {
+            pid: 1,
+            created: String::new(),
+            base: 0,
+            player: 0x3000,
+            identity: scene.identities[0].clone(),
+        };
+        let pose = reader.sample(&mut m).unwrap();
+        assert_eq!(pose.position, Some([1., 2., 3.]));
+        assert_eq!(pose.camera_heading, Some(0.));
+        // В памяти нет массивов зон или геометрии — адресного чтения достаточно.
+        put_f(&mut m, 0x170, 7.);
+        put_f(&mut m, 0x1d0, 7.);
+        assert_eq!(reader.sample(&mut m).unwrap().position, Some([7., 2., 3.]));
+        put_q(&mut m, 0x108, 0x21);
+        assert!(reader.sample(&mut m).is_err());
+    }
+
     #[test]
     fn npc_and_hostage_are_not_player_avatars() {
         assert_eq!(character_kind("npc", Some("CorpusCrewman"), None), "npc");

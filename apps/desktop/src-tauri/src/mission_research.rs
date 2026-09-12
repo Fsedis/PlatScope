@@ -37,6 +37,9 @@ pub(crate) struct Status {
 struct Inner {
     status: Status,
     scene: Option<Scene>,
+    scene_epoch: u64,
+    local_pose_reader: Option<spatial::LocalPoseReader>,
+    previous_objects: Option<(u64, Vec<spatial::SceneObject>)>,
     generation: u64,
     live_pid: Option<u32>,
     desired_live: bool,
@@ -110,6 +113,10 @@ impl Service {
                         match result {
                             Ok(scene) => {
                                 inner.status.scanned_bytes = scene.stats.scanned_bytes;
+                                inner.scene_epoch += 1;
+                                inner.previous_objects = None;
+                                inner.local_pose_reader =
+                                    spatial::LocalPoseReader::from_scene(&scene);
                                 inner.scene = Some(scene);
                                 inner.live_pid = pid;
                                 inner.status.revision += 1;
@@ -156,6 +163,9 @@ impl Service {
                 .is_some_and(|scene| scene.source == "live")
             {
                 inner.scene = None;
+                inner.local_pose_reader = None;
+                inner.scene_epoch += 1;
+                inner.previous_objects = None;
                 inner.status.revision += 1;
             }
             inner.status.phase = "Миссия сменилась. Запустите карту для новой миссии.".into();
@@ -222,6 +232,10 @@ impl Service {
                         match result {
                             Ok(scene) => {
                                 if inner.status.revision == revision {
+                                    inner.previous_objects =
+                                        inner.scene.as_ref().map(|s| (revision, s.objects.clone()));
+                                    inner.local_pose_reader =
+                                        spatial::LocalPoseReader::from_scene(&scene);
                                     inner.scene = Some(scene);
                                     inner.status.revision += 1;
                                 }
@@ -340,6 +354,118 @@ pub(crate) fn mission_research_status(state: State<'_, AppState>) -> Result<Stat
 #[tauri::command]
 pub(crate) fn mission_research_scene(state: State<'_, AppState>) -> Result<Option<Scene>, String> {
     localized_scene(&state)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SceneUpdate {
+    revision: u64,
+    epoch: u64,
+    reset_objects: bool,
+    geometry_included: bool,
+    removed: Vec<String>,
+    scene: Option<Scene>,
+}
+
+fn scene_update(
+    inner: &Inner,
+    after_revision: Option<u64>,
+    geometry_epoch: Option<u64>,
+) -> SceneUpdate {
+    let geometry_included = geometry_epoch != Some(inner.scene_epoch);
+    let previous = inner
+        .previous_objects
+        .as_ref()
+        .filter(|(revision, _)| Some(*revision) == after_revision && !geometry_included);
+    let mut scene = inner.scene.clone();
+    let mut removed = Vec::new();
+    if let Some(scene) = &mut scene {
+        if !geometry_included {
+            scene.meshes = Default::default();
+        }
+        if let Some((_, objects)) = previous {
+            let before: std::collections::HashMap<_, _> =
+                objects.iter().map(|o| (o.key.as_str(), o)).collect();
+            let now: std::collections::HashSet<_> =
+                scene.objects.iter().map(|o| o.key.as_str()).collect();
+            removed = objects
+                .iter()
+                .filter(|o| !now.contains(o.key.as_str()))
+                .map(|o| o.key.clone())
+                .collect();
+            scene
+                .objects
+                .retain(|o| before.get(o.key.as_str()).is_none_or(|old| *old != o));
+        }
+    }
+    SceneUpdate {
+        revision: inner.status.revision,
+        epoch: inner.scene_epoch,
+        reset_objects: previous.is_none(),
+        geometry_included,
+        removed,
+        scene,
+    }
+}
+
+#[tauri::command]
+pub(crate) fn mission_research_update(
+    state: State<'_, AppState>,
+    after_revision: Option<u64>,
+    geometry_epoch: Option<u64>,
+) -> Result<SceneUpdate, String> {
+    let mut update = {
+        let service = state.mission_research.lock().map_err(|e| e.to_string())?;
+        let inner = service.inner.lock().map_err(|e| e.to_string())?;
+        scene_update(&inner, after_revision, geometry_epoch)
+    };
+    if let Some(scene) = &mut update.scene {
+        localize_scene(scene, &crate::game_names::get(&state));
+    }
+    Ok(update)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PoseUpdate {
+    epoch: u64,
+    pose: Option<spatial::LocalPose>,
+}
+
+#[tauri::command]
+pub(crate) async fn mission_research_pose(
+    state: State<'_, AppState>,
+    epoch: u64,
+) -> Result<PoseUpdate, String> {
+    let shared = state
+        .mission_research
+        .lock()
+        .map_err(|e| e.to_string())?
+        .inner
+        .clone();
+    let sample = {
+        let inner = shared.lock().map_err(|e| e.to_string())?;
+        if inner.scene_epoch != epoch || !inner.status.tracking {
+            return Ok(PoseUpdate { epoch, pose: None });
+        }
+        inner
+            .local_pose_reader
+            .clone()
+            .map(|reader| (reader, inner.generation))
+    };
+    let Some((reader, generation)) = sample else {
+        return Ok(PoseUpdate { epoch, pose: None });
+    };
+    let pose = tauri::async_runtime::spawn_blocking(move || reader.read().ok())
+        .await
+        .map_err(|e| e.to_string())?;
+    let inner = shared.lock().map_err(|e| e.to_string())?;
+    let valid =
+        inner.scene_epoch == epoch && inner.generation == generation && inner.status.tracking;
+    Ok(PoseUpdate {
+        epoch,
+        pose: if valid { pose } else { None },
+    })
 }
 
 fn localized_scene(state: &AppState) -> Result<Option<Scene>, String> {
@@ -547,6 +673,52 @@ mod tests {
     }
 
     #[test]
+    fn scene_delta_preserves_geometry_and_recovers_missed_revision() {
+        let before = sample_scene("live");
+        let mut scene = before.clone();
+        let mut added = scene.objects[0].clone();
+        added.key = "added".into();
+        scene.objects[0].position[0] += 1.0;
+        scene.objects.push(added);
+        let mut removed = before.objects[0].clone();
+        removed.key = "removed".into();
+        let mut baseline = before.objects.clone();
+        baseline.push(removed);
+        let mut inner = Inner {
+            scene: Some(scene),
+            scene_epoch: 3,
+            previous_objects: Some((7, baseline)),
+            ..Inner::default()
+        };
+        inner.status.revision = 8;
+        let delta = scene_update(&inner, Some(7), Some(3));
+        assert!(!delta.reset_objects && !delta.geometry_included);
+        assert_eq!(delta.removed, ["removed"]);
+        assert_eq!(delta.scene.unwrap().objects.len(), 2);
+        assert!(
+            scene_update(&inner, Some(7), Some(3))
+                .scene
+                .unwrap()
+                .meshes
+                .is_empty()
+        );
+        let recovered = scene_update(&inner, Some(6), Some(3));
+        assert!(recovered.reset_objects && !recovered.geometry_included);
+        assert_eq!(recovered.scene.unwrap().objects.len(), 2);
+        let initial = scene_update(&inner, None, None);
+        assert!(initial.reset_objects && initial.geometry_included);
+        assert!(Arc::ptr_eq(&initial.scene.unwrap().meshes, &before.meshes));
+        inner.previous_objects = Some((8, inner.scene.as_ref().unwrap().objects.clone()));
+        assert!(
+            scene_update(&inner, Some(8), Some(3))
+                .scene
+                .unwrap()
+                .objects
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn scene_localization_preserves_coordinates_and_identity() {
         let mut scene = sample_scene("live");
         scene.objects[0].item_path = Some("/Lotus/StoreItems/Test".into());
@@ -577,7 +749,7 @@ mod tests {
     #[test]
     fn obj_rejects_invalid_geometry_before_export_creates_a_directory() {
         let mut scene = sample_scene("archive");
-        scene.meshes[0].faces[0][2] = 99;
+        Arc::make_mut(&mut scene.meshes)[0].faces[0][2] = 99;
         assert!(obj(&scene).is_err());
         let directory = std::env::temp_dir().join(format!(
             "platscope-invalid-obj-{}",
@@ -586,10 +758,10 @@ mod tests {
         assert!(!directory.exists());
         assert!(export(&directory, "obj", &scene).is_err());
         assert!(!directory.exists());
-        scene.meshes[0].faces[0] = vec![0, 1];
+        Arc::make_mut(&mut scene.meshes)[0].faces[0] = vec![0, 1];
         assert!(obj(&scene).is_err());
-        scene.meshes[0].faces[0] = vec![0, 1, 2];
-        scene.meshes[0].vertices[0][0] = f32::NAN;
+        Arc::make_mut(&mut scene.meshes)[0].faces[0] = vec![0, 1, 2];
+        Arc::make_mut(&mut scene.meshes)[0].vertices[0][0] = f32::NAN;
         assert!(obj(&scene).is_err());
     }
 

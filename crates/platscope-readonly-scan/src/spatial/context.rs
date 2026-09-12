@@ -53,7 +53,7 @@ pub(super) fn owner(m: &mut dyn Memory, avatar: u64, base: u64) -> Result<u64> {
     }
     Ok(player)
 }
-fn local_map(m: &mut dyn Memory, player: u64, avatar: u64, base: u64) -> Result<u64> {
+pub(super) fn local_map(m: &mut dyn Memory, player: u64, avatar: u64, base: u64) -> Result<u64> {
     let camera = linked(m, player, 0x30)?;
     has_type(m, camera, base, 0x28cc310)?;
     let map = linked(m, player, 0xd098)?;
@@ -175,6 +175,10 @@ pub(super) fn update(
         }
     }
     scene.players = players;
+    scene.camera_heading = None;
+    if let [(player, avatar, _)] = maps.as_slice() {
+        scene.camera_heading = camera_heading(m, *player, *avatar, base).ok();
+    }
     scene.zones_fresh = false;
     if let [(player, avatar, map)] = maps.as_slice()
         && let Ok(zones) = read_zones(m, *map, base)
@@ -184,6 +188,26 @@ pub(super) fn update(
         scene.zones_fresh = true;
     }
     Ok(())
+}
+
+pub(super) fn camera_heading(
+    m: &mut dyn Memory,
+    player: u64,
+    avatar: u64,
+    base: u64,
+) -> Result<f32> {
+    let camera = linked(m, player, 0x30)?;
+    has_type(m, camera, base, 0x28cc310)?;
+    let matrix = super::geometry::matrix(m, camera)?;
+    let [x, _, z, _] = matrix[2];
+    // Почти вертикальный взгляд не даёт устойчивого горизонтального направления.
+    if x * x + z * z < 0.01
+        || linked(m, player, 0x30)? != camera
+        || owner(m, avatar, base)? != player
+    {
+        return Err("Направление камеры временно не подтверждено".into());
+    }
+    Ok(x.atan2(z))
 }
 
 #[cfg(test)]
@@ -276,6 +300,37 @@ mod tests {
         let scene = serde_json::from_value(serde_json::json!({"format":1,"source":"live","startedAt":"test","capturedAt":"test","complete":true,"profile":"test","objects":[{"key":"0x1000","kind":"avatar","label":"Персонаж","nameEn":"Avatar","itemPath":null,"position":[1,2,3],"typeNames":[],"availability":"unknown","details":[]}],"meshes":[],"warnings":[],"stats":{"scannedBytes":0,"objectCount":1,"meshCount":0,"vertexCount":0,"faceCount":0}})).unwrap();
         (m, scene)
     }
+    #[test]
+    fn camera_heading_requires_valid_matrix_and_local_owner() {
+        let (mut m, _) = fixture();
+        let matrix = [
+            0.0f32, 0., -1., 0., 0., 1., 0., 0., 1., 0., 0., 0., 5., 6., 7., 1.,
+        ];
+        let bytes: Vec<u8> = matrix.iter().flat_map(|v| v.to_le_bytes()).collect();
+        m.put(0x8000 + 0xa0, &bytes);
+        assert!(
+            (camera_heading(&mut m, 0x3000, 0x1000, BASE).unwrap() - std::f32::consts::FRAC_PI_2)
+                .abs()
+                < 0.001
+        );
+        m.q(0x3000 + 0x118, 0);
+        assert!(camera_heading(&mut m, 0x3000, 0x1000, BASE).is_err());
+        m.link(0x3000, 0x118, 0x1000);
+        m.put(0x8000 + 0xc0, &f32::NAN.to_le_bytes());
+        assert!(camera_heading(&mut m, 0x3000, 0x1000, BASE).is_err());
+        let vertical = [
+            1.0f32, 0., 0., 0., 0., 0., -1., 0., 0., 1., 0., 0., 5., 6., 7., 1.,
+        ];
+        m.put(
+            0x8000 + 0xa0,
+            &vertical
+                .iter()
+                .flat_map(|v| v.to_le_bytes())
+                .collect::<Vec<_>>(),
+        );
+        assert!(camera_heading(&mut m, 0x3000, 0x1000, BASE).is_err());
+    }
+
     #[test]
     fn validates_local_player_and_both_bounded_zone_arrays() {
         let (mut m, mut scene) = fixture();

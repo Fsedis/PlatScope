@@ -15,7 +15,7 @@ export interface MissionZone { key: string; min: Position3; max: Position3 }
 export interface MissionScene {
   format: 1; source: "archive" | "live"; startedAt: string; capturedAt: string; complete: boolean; profile: string;
   objects: MissionObject[]; meshes: MissionMesh[]; warnings: string[];
-  players?: MissionPlayer[]; zones?: MissionZone[]; zonesFresh?: boolean;
+  cameraHeading?: number | null; players?: MissionPlayer[]; zones?: MissionZone[]; zonesFresh?: boolean;
   stats: { scannedBytes: number; objectCount: number; meshCount: number; vertexCount: number; faceCount: number };
 }
 export interface MissionResearchStatus { busy: boolean; cancelling: boolean; phase: string; error: string | null; revision: number; gameRunning: boolean; tracking: boolean; scannedBytes: number }
@@ -48,7 +48,7 @@ export function sceneBounds(scene: Pick<MissionScene, "objects" | "meshes" | "zo
   if (maxX - minX < 1) { minX -= .5; maxX += .5; } if (maxZ - minZ < 1) { minZ -= .5; maxZ += .5; }
   return { minX, maxX, minZ, maxZ, minY, maxY };
 }
-export interface MapCamera { x: number; z: number; zoom: number }
+export interface MapCamera { x: number; z: number; zoom: number; angle?: number }
 export function followTargetSignature(object: MissionObject): string { return JSON.stringify([object.kind, object.itemPath, object.typeNames]); }
 export function followFrame(key: string, signature: string, tracking: boolean, objects: MissionObject[], camera: MapCamera): { key: string; camera: MapCamera; height: number | null; reason: "stopped" | "missing" | null } {
   if (!key) return { key: "", camera, height: null, reason: null };
@@ -63,12 +63,31 @@ export function mapScale(bounds: MapBounds, width: number, height: number, zoom 
   const fit = Math.min(Math.max(1, width - 40) / Math.max(1, bounds.maxX - bounds.minX), Math.max(1, height - 40) / Math.max(1, bounds.maxZ - bounds.minZ));
   return Math.max(.000001, fit * Math.max(.2, Math.min(32, zoom)));
 }
-export function worldToCanvas(p: Position3, camera: MapCamera, scale: number, width: number, height: number): [number, number] { return [width / 2 + (p[0] - camera.x) * scale, height / 2 - (p[2] - camera.z) * scale]; }
-export function canvasToWorld(x: number, y: number, camera: MapCamera, scale: number, width: number, height: number): [number, number] { return [camera.x + (x - width / 2) / scale, camera.z - (y - height / 2) / scale]; }
+export function worldToCanvas(p: Position3, camera: MapCamera, scale: number, width: number, height: number): [number, number] {
+  const c = Math.cos(camera.angle ?? 0), s = Math.sin(camera.angle ?? 0), dx = p[0] - camera.x, dz = p[2] - camera.z;
+  return [width / 2 + (c * dx - s * dz) * scale, height / 2 - (s * dx + c * dz) * scale];
+}
+export function canvasToWorld(x: number, y: number, camera: MapCamera, scale: number, width: number, height: number): [number, number] {
+  const c = Math.cos(camera.angle ?? 0), s = Math.sin(camera.angle ?? 0), right = (x - width / 2) / scale, forward = (height / 2 - y) / scale;
+  return [camera.x + c * right + s * forward, camera.z - s * right + c * forward];
+}
+export function panCamera(camera: MapCamera, dx: number, dy: number, scale: number): MapCamera {
+  const [x, z] = canvasToWorld(-dx, -dy, camera, scale, 0, 0);
+  return { ...camera, x, z };
+}
 export function zoomAt(camera: MapCamera, bounds: MapBounds, width: number, height: number, x: number, y: number, factor: number): MapCamera {
-  const [wx, wz] = canvasToWorld(x, y, camera, mapScale(bounds, width, height, camera.zoom), width, height);
-  const zoom = Math.max(.2, Math.min(32, camera.zoom * factor)); const scale = mapScale(bounds, width, height, zoom);
-  return { x: wx - (x - width / 2) / scale, z: wz + (y - height / 2) / scale, zoom };
+  const before = canvasToWorld(x, y, camera, mapScale(bounds, width, height, camera.zoom), width, height);
+  const next = { ...camera, zoom: Math.max(.2, Math.min(32, camera.zoom * factor)) };
+  const after = canvasToWorld(x, y, next, mapScale(bounds, width, height, next.zoom), width, height);
+  return { ...next, x: next.x + before[0] - after[0], z: next.z + before[1] - after[1] };
+}
+export function objectDistance(from: MissionObject | null, to: MissionObject): number | null {
+  return !from || from.positionFresh === false || to.positionFresh === false || !finitePosition(from.position) || !finitePosition(to.position) ? null : Math.hypot(...to.position.map((v, i) => v - from.position[i]));
+}
+export function distanceLabel(from: MissionObject | null, to: MissionObject): string {
+  const distance = objectDistance(from, to); if (distance === null || !from) return "Расстояние пока неизвестно";
+  const height = to.position[1] - from.position[1];
+  return `${Math.round(distance)} м по прямой · ${Math.abs(height) < 1 ? "на вашей высоте" : `${height > 0 ? "выше" : "ниже"} на ${Math.round(Math.abs(height))} м`}`;
 }
 export function scaledHeight(y: number, bounds: Pick<MapBounds, "minY" | "maxY">): number { return Math.max(0, Math.min(1, (y - bounds.minY) / Math.max(.001, bounds.maxY - bounds.minY))); }
 export function inHeightSlice(y: number, enabled: boolean, center: number, halfWidth: number): boolean { return Number.isFinite(y) && (!enabled || Math.abs(y - center) <= Math.max(0, halfWidth)); }

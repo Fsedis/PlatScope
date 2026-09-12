@@ -17,7 +17,7 @@ export function makeMissionScene(sequence = 1, source: "archive" | "live" = "arc
   for (let index=0;index<3;index++) objects.push({key:`preview-crate-${index}`,kind:"decoration",label:"Ящик Гринир",nameEn:"GrnLootCrateARareB.fbx",itemPath:null,variantKey:index===2?"type-v1:crate-b":"type-v1:crate-a",position:[20+index*15,0,30],typeNames:["Decoration *"],availability:"unknown",details:[{label:"Ресурс",value:index===0?"/Lotus/Objects/Grineer/Props/GrnLootCrateARareB.fbx":"GrnLootCrateARareB.fbx"},{label:"Материалы варианта",value:index===2?"Материал B":"Материал A"}]});
   const meshes = structuredClone(recordedMeshes);
   return { format: 1, source, startedAt: `2026-09-12T07:${sequence === 1 ? "10" : "14"}:00Z`, capturedAt: `2026-09-12T07:${sequence === 1 ? "10" : "14"}:30Z`, complete: true, profile: "Проверка интерфейса на данных Заримана", objects, meshes,
-    players:[{key:'preview-owner',avatarKey:'preview-avatar',operatorKey:'preview-operator',local:true}],
+    cameraHeading: 0, players:[{key:'preview-owner',avatarKey:'preview-avatar',operatorKey:'preview-operator',local:true}],
     zones:[{key:'preview-zone',min:[-145,-12,-80],max:[-100,4,-40]}],zonesFresh:true,
     warnings: ["Демонстрационные данные: настоящие координаты перьев и все извлечённые полигоны из записи. Дополнительные примеры объектов созданы для проверки интерфейса.", "Принадлежность всех частей активной миссии и доступность предметов не подтверждены."],
     stats: { scannedBytes: 7_000_000_000, objectCount: objects.length, meshCount: meshes.length, vertexCount: meshes.reduce((sum, m) => sum + m.vertices.length, 0), faceCount: meshes.reduce((sum, m) => sum + m.faces.length, 0) } };
@@ -26,16 +26,34 @@ export function makeMissionResearchMock(variant: string | null = null) {
   let scene: MissionScene | null = variant === "empty" || variant === "offline" || variant === "error" ? null : makeMissionScene(1, variant?.startsWith("tracking") ? "live" : "archive");
   if (scene && variant === "partial") { scene.complete = false; scene.warnings.unshift("Не все области памяти удалось прочитать."); }
   let status: MissionResearchStatus = { busy: false, cancelling: false, phase: "", error: variant === "error" ? "Не удалось открыть сохранённый блок. Проверьте целостность папки записи." : null, revision: scene ? 1 : 0, gameRunning: variant !== "offline", tracking: Boolean(variant?.startsWith("tracking")), scannedBytes: 0 };
+  let poseTicks = 0; let epoch = 1; let updateCalls = 0; let previous: { revision: number; objects: MissionObject[] } | null = null;
   let polls = 0; let liveTicks = 0; let nextSequence = 1; let nextSource: "archive" | "live" = "live";
   const archive: MissionArchive = { id: "preview-zariman", label: "Зариман · проверочная запись", createdAt: "2026-09-12T07:10:00Z", sizeBytes: 4_400_000_000, snapshots: [1, 2].map(sequence => ({ sequence, startedAt: `2026-09-12T07:${sequence === 1 ? "10" : "14"}:00Z`, endedAt: `2026-09-12T07:${sequence === 1 ? "10" : "14"}:30Z`, complete: true, bytes: 7_000_000_000, holes: 0 })) };
   return async (command: string, args: Record<string, unknown> = {}): Promise<unknown> => {
     if (command === "mission_research_archives") return variant === "empty" ? [] : structuredClone([archive]);
     if (command === "mission_research_scene") return structuredClone(scene);
+    if (command === "mission_research_pose") {
+      const avatar = scene?.objects.find(o => o.key === "preview-avatar"); poseTicks++;
+      return { epoch, pose: avatar && status.tracking && args.epoch === epoch ? { avatarKey: avatar.key, position: [avatar.position[0] + (poseTicks % 20) * .04, avatar.position[1], avatar.position[2]], cameraHeading: (poseTicks * .008) % (Math.PI * 2) } : null };
+    }
+    if (command === "mission_research_update") {
+      if (variant === "retry" && ++updateCalls === 1) throw "Проверочный временный сбой загрузки.";
+      const geometryIncluded = args.geometryEpoch !== epoch;
+      const baseline = !geometryIncluded && args.afterRevision === previous?.revision ? previous : null;
+      const result = scene ? structuredClone(scene) : null;
+      const removed = baseline?.objects.filter(old => !scene?.objects.some(o => o.key === old.key)).map(o => o.key) ?? [];
+      if (result) {
+        if (!geometryIncluded) result.meshes = [];
+        if (baseline) result.objects = result.objects.filter(o => JSON.stringify(o) !== JSON.stringify(baseline.objects.find(old => old.key === o.key)));
+      }
+      return { revision: status.revision, epoch, resetObjects: !baseline, geometryIncluded, removed, scene: result };
+    }
     if (command === "mission_research_status") {
-      if (status.busy && ++polls >= 3) { scene = makeMissionScene(nextSequence, nextSource); status = { ...status, busy: false, phase: "Чтение завершено", revision: status.revision + 1, scannedBytes: scene.stats.scannedBytes }; }
+      if (status.busy && ++polls >= 3) { scene = makeMissionScene(nextSequence, nextSource); epoch++; previous = null; status = { ...status, busy: false, phase: "Чтение завершено", revision: status.revision + 1, scannedBytes: scene.stats.scannedBytes }; }
       else if (status.busy) status.scannedBytes += 1_300_000_000;
       else if (status.tracking && scene) {
-        liveTicks++; scene.capturedAt = new Date(Date.parse(scene.capturedAt) + 1000).toISOString();
+        previous = { revision: status.revision, objects: structuredClone(scene.objects) };
+        liveTicks++; scene.cameraHeading = variant === "tracking-stale" && (liveTicks === 2 || liveTicks === 3) ? null : (liveTicks * .08) % (2 * Math.PI); scene.capturedAt = new Date(Date.parse(scene.capturedAt) + 1000).toISOString();
         const stale = variant === "tracking-stale" && (liveTicks === 2 || liveTicks === 3);
         scene.objects = scene.objects.map(o => o.kind === "avatar" ? stale ? { ...o, positionFresh: false } : { ...o, positionFresh: true, position: [o.position[0] + .8, o.position[1], o.position[2] + .3] } : o);
         if (liveTicks === 5) scene.objects = scene.objects.filter(o => o.key !== recordedFeathers[0].base);

@@ -1,10 +1,11 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
+  import { applySceneUpdate, type MissionSceneUpdate } from "./missionSceneUpdates";
   import MemoryRecording from "./MemoryRecording.svelte";
   import MissionFilterEditor from "./MissionFilterEditor.svelte";
   import { MISSION_FILTER_STORAGE, parseMissionFilters, serializeMissionFilters, objectRule, objectFilterEntry, indexMissionFilters, countMissionFilters, filterColor, objectIsVisible, type MissionFilterIndex, type CustomMissionFilter } from "./missionFilters";
-  import { MISSION_FILTERS, localAvatar, zoneInHeightSlice, objectMatchesSearch, objectFilter, objectKindLabel, finitePosition, sceneBounds, fitCamera, followFrame, followTargetSignature, mapScale, worldToCanvas, zoomAt, scaledHeight, inHeightSlice, faceInHeightSlice, compareScenes, missionTime, missionBytes,
+  import { MISSION_FILTERS, localAvatar, zoneInHeightSlice, objectMatchesSearch, objectFilter, objectKindLabel, finitePosition, sceneBounds, fitCamera, followFrame, followTargetSignature, mapScale, worldToCanvas, zoomAt, panCamera, objectDistance, distanceLabel, scaledHeight, inHeightSlice, faceInHeightSlice, compareScenes, missionTime, missionBytes,
     type MissionScene, type MissionObject, type MissionResearchStatus, type MissionArchive, type MissionFilter, type MapCamera, type MapBounds } from "./missionResearch";
 
   let source: "live" | "archive" = "live";
@@ -24,6 +25,17 @@
   let frameNextScene = true;
   let polling = false;
   let loadedRevision = -1;
+  let loadedEpoch = -1;
+  let retryAt = 0;
+  let retryAttempts = 0;
+  let sceneError = "";
+  let rotateWithView = false;
+  let posePolling = false;
+  let poseReceived = false;
+  let fastPose: { avatarKey: string; position: [number, number, number] | null; cameraHeading: number | null } | null = null;
+  let targetKey = "";
+  let cacheState = "all";
+  let sortByDistance = false;
   let generation = 0;
   let alive = true;
   let filters: Record<MissionFilter, boolean> = { feather: true, pickup: true, players: true, npc: false, other: false, goals: true, lootspots: false, caches: true };
@@ -55,36 +67,46 @@
   $: objects = scene?.objects.filter(o => finitePosition(o.position)) ?? [];
   $: customIndex = indexMissionFilters(customFilters);
   $: customCounts = countMissionFilters(objects, customIndex);
-  $: visibleObjects = objects.filter(o => objectIsVisible(o, filters, customIndex) && inHeightSlice(o.position[1], sliceEnabled, heightCenter, heightHalfWidth) && objectMatchesSearch(o, query)).sort((a, b) => (a.kind === "feather" ? 0 : 1) - (b.kind === "feather" ? 0 : 1) || a.label.localeCompare(b.label, "ru"));
-  $: myAvatar = scene ? localAvatar(scene) : null;
-  $: selected = objects.find(o => o.key === selectedKey) ?? null;
+  $: visibleObjects = objects.map(o => o.key === myAvatar?.key ? myAvatar : o).filter(o => objectIsVisible(o, filters, customIndex) && inHeightSlice(o.position[1], sliceEnabled, heightCenter, heightHalfWidth) && objectMatchesSearch(o, query) && (o.kind !== "cache" || cacheState === "all" || o.availability === cacheState)).sort((a, b) => (sortByDistance ? (objectDistance(myAvatar, a) ?? Infinity) - (objectDistance(myAvatar, b) ?? Infinity) : 0) || (a.kind === "feather" ? 0 : 1) - (b.kind === "feather" ? 0 : 1) || a.label.localeCompare(b.label, "ru"));
+  $: sceneAvatar = scene ? localAvatar(scene) : null;
+  $: myAvatar = poseReceived && status?.tracking ? (sceneAvatar && fastPose?.avatarKey === sceneAvatar.key && fastPose.position ? { ...sceneAvatar, position: fastPose.position, positionFresh: true } : null) : sceneAvatar;
+  $: viewHeading = poseReceived && status?.tracking ? fastPose?.cameraHeading : scene?.cameraHeading;
+  $: target = objects.find(o => o.key === targetKey) ?? null;
+  $: nearestCache = objects.filter(o => o.kind === "cache" && o.availability === "available" && objectDistance(myAvatar, o) !== null).sort((a, b) => objectDistance(myAvatar, a)! - objectDistance(myAvatar, b)!)[0] ?? null;
+  $: selected = selectedKey === myAvatar?.key ? myAvatar : objects.find(o => o.key === selectedKey) ?? null;
   $: pickedObjects = objects.filter(object => pickedKeys.includes(object.key));
   $: filterSelection = pickedKeys.length ? pickedObjects : selected ? [selected] : [];
   $: difference = scene && previousScene ? compareScenes(previousScene, scene) : null;
-  $: drawState = { scene, bounds, camera, objects: visibleObjects, selectedKey, pickedKeys, customIndex, showZones, sliceEnabled, heightCenter, heightHalfWidth, width: canvasWidth, height: canvasHeight };
+  $: drawState = { scene, liveAvatar: myAvatar, viewHeading, bounds, camera, objects: visibleObjects, selectedKey, targetKey, rotateWithView, pickedKeys, customIndex, showZones, sliceEnabled, heightCenter, heightHalfWidth, width: canvasWidth, height: canvasHeight };
   $: if (canvas) draw(canvas, drawState);
 
   async function receive(next: MissionResearchStatus, version: number) {
     if (!alive || version !== generation) return;
     status = next;
     if (!next.tracking && followKey) { followKey = ""; followingMe = false; followHint = ""; }
-    if (loadedRevision === next.revision) return;
+    if (loadedRevision >= next.revision || Date.now() < retryAt) return;
     try {
-      const nextScene = await invoke<MissionScene | null>("mission_research_scene");
-      if (!alive || version !== generation || status?.revision !== next.revision) return;
-      loadedRevision = next.revision;
+      const update = await invoke<MissionSceneUpdate>("mission_research_update", { afterRevision: loadedRevision < 0 ? null : loadedRevision, geometryEpoch: loadedEpoch < 0 ? null : loadedEpoch });
+      if (!alive || version !== generation || update.revision < loadedRevision) return;
+      let nextScene: MissionScene | null;
+      try { nextScene = applySceneUpdate(scene, loadedEpoch, update); }
+      catch (reason) { loadedEpoch = -1; throw reason; }
+      const sameEpoch = loadedEpoch === update.epoch;
+      loadedRevision = update.revision; loadedEpoch = update.epoch;
+      retryAt = 0; retryAttempts = 0; sceneError = "";
       if (nextScene) {
-        const continuingLive = scene?.source === "live" && nextScene.source === "live" && !frameNextScene;
+        const continuingLive = sameEpoch && scene?.source === "live" && nextScene.source === "live" && !frameNextScene;
         previousScene = scene?.source === "archive" && nextScene.source === "archive" && scene.capturedAt !== nextScene.capturedAt ? scene : nextScene.source === "live" ? null : previousScene;
         scene = nextScene;
         if (!continuingLive) {
-          selectedKey = ""; pickedKeys = []; followKey = ""; followingMe = false; followHint = ""; listLimit = 100; query = "";
+          poseReceived = false; fastPose = null; selectedKey = ""; targetKey = ""; pickedKeys = []; followKey = ""; followingMe = false; followHint = ""; listLimit = 100; query = "";
           const nextBounds = sceneBounds(nextScene); framingBounds = nextBounds; camera = fitCamera(nextBounds); heightCenter = (nextBounds.minY + nextBounds.maxY) / 2;
         } else if (!nextScene.objects.some(o => o.key === selectedKey)) selectedKey = "";
         frameNextScene = false;
+        if (rotateWithView && !poseReceived && Number.isFinite(nextScene.cameraHeading)) camera = { ...camera, angle: nextScene.cameraHeading! };
         if (followKey && followingMe && !localAvatar(nextScene)) {
           followHint = "Связь с вашим персонажем временно не подтверждена. Вид сохранён.";
-        } else if (followKey) {
+        } else if (followKey && !(followingMe && poseReceived)) {
           const mine = followingMe ? localAvatar(nextScene) : null;
           if (mine && mine.key !== followKey) { followKey = mine.key; followSignature = followTargetSignature(mine); }
           followHint = "";
@@ -99,9 +121,26 @@
           if (alive && version === generation) status = tracked;
         }
       } else {
-        scene = null; previousScene = null; selectedKey = ""; pickedKeys = []; followKey = ""; followingMe = false; followHint = ""; framingBounds = null; frameNextScene = true;
+        scene = null; previousScene = null; poseReceived = false; fastPose = null; selectedKey = ""; targetKey = ""; pickedKeys = []; followKey = ""; followingMe = false; followHint = ""; framingBounds = null; frameNextScene = true;
       }
-    } catch (reason) { if (alive && version === generation) { loadedRevision = next.revision; error = typeof reason === "string" ? reason : "Не удалось загрузить результат. Повторите загрузку."; } }
+    } catch (reason) { if (alive && version === generation) { retryAt = Date.now() + Math.min(8000, 1000 * 2 ** retryAttempts++); sceneError = `${typeof reason === "string" ? reason : reason instanceof Error ? reason.message : "Не удалось загрузить карту."} Повторим автоматически.${scene ? " Прежний вид сохранён." : ""}`; } }
+  }
+  async function refreshPose() {
+    if (posePolling || actionBusy || !status?.tracking || scene?.source !== "live" || loadedEpoch < 0 || document.hidden) return;
+    posePolling = true; const version = generation, epoch = loadedEpoch;
+    try {
+      const update = await invoke<{ epoch: number; pose: typeof fastPose }>("mission_research_pose", { epoch });
+      if (!alive || version !== generation || epoch !== loadedEpoch || update.epoch !== epoch || !status?.tracking) return;
+      fastPose = update.pose; poseReceived = true;
+      if (rotateWithView && Number.isFinite(update.pose?.cameraHeading)) camera = { ...camera, angle: update.pose!.cameraHeading! };
+      if (followingMe && followKey && update.pose?.position && update.pose.avatarKey === sceneAvatar?.key) {
+        camera = { ...camera, x: update.pose.position[0], z: update.pose.position[2] };
+        if (sliceEnabled) heightCenter = update.pose.position[1];
+        followHint = "";
+      } else if (followingMe && followKey) followHint = "Свежая позиция временно не подтверждена. Вид сохранён.";
+    } catch {
+      if (alive && version === generation && epoch === loadedEpoch) { fastPose = null; poseReceived = true; }
+    } finally { posePolling = false; }
   }
   async function refresh() {
     if (polling || actionBusy) return;
@@ -175,7 +214,20 @@
     if (groups.length) saveFilters(customFilters.map(f => groups.includes(f.id) ? { ...f, enabled: true } : f));
     if (status?.tracking) { startFollowing(myAvatar); followingMe = true; } else selectObject(myAvatar);
   }
-  function resetMap() { followKey = ""; followingMe = false; followHint = ""; if (scene) framingBounds = sceneBounds(scene); camera = fitCamera(framingBounds ?? bounds); }
+  function chooseTarget(object: MissionObject) {
+    targetKey = object.key; selectedKey = object.key;
+    filters[objectFilter(object.kind)] = true; query = "";
+    if (object.kind === "cache" && cacheState !== "all" && cacheState !== object.availability) cacheState = "all";
+    const groups = objectFilterEntry(object, customIndex)?.groups ?? [];
+    if (groups.length) saveFilters(customFilters.map(f => groups.includes(f.id) ? { ...f, enabled: true } : f));
+    if (!followingMe) selectObject(object);
+  }
+  function toggleHeading() {
+    rotateWithView = !rotateWithView;
+    if (rotateWithView) { focusMe(); if (Number.isFinite(viewHeading)) camera = { ...camera, angle: viewHeading! }; }
+    else camera = { ...camera, angle: 0 };
+  }
+  function resetMap() { rotateWithView = false; followKey = ""; followingMe = false; followHint = ""; if (scene) framingBounds = sceneBounds(scene); camera = fitCamera(framingBounds ?? bounds); }
   function zoom(factor: number) { camera = zoomAt(camera, bounds, canvasWidth, canvasHeight, canvasWidth / 2, canvasHeight / 2, factor); }
   function resizeCanvas(node: HTMLCanvasElement) {
     const update = () => { const rect = node.getBoundingClientRect(); canvasWidth = Math.max(1, rect.width); canvasHeight = Math.max(1, rect.height); };
@@ -189,7 +241,7 @@
   function pointerMove(event: PointerEvent) {
     if (!drag || drag.pointer !== event.pointerId) return;
     const dx = event.clientX - drag.x, dy = event.clientY - drag.y; if (Math.hypot(dx, dy) > 3) { drag.moved = true; followKey = ""; followingMe = false; followHint = ""; }
-    const scale = mapScale(bounds, canvasWidth, canvasHeight, drag.camera.zoom); camera = { ...drag.camera, x: drag.camera.x - dx / scale, z: drag.camera.z + dy / scale };
+    const scale = mapScale(bounds, canvasWidth, canvasHeight, drag.camera.zoom); camera = panCamera(drag.camera, dx, dy, scale);
   }
   function pointerUp(event: PointerEvent) {
     if (!drag || drag.pointer !== event.pointerId) return;
@@ -197,17 +249,22 @@
     if (!click || !canvas) return;
     const rect = canvas.getBoundingClientRect(), x = event.clientX - rect.left, y = event.clientY - rect.top; const scale = mapScale(bounds, canvasWidth, canvasHeight, camera.zoom);
     let nearest: MissionObject | null = null, distance = 14;
-    for (const object of visibleObjects) { const [px, py] = worldToCanvas(object.position, camera, scale, canvasWidth, canvasHeight); const d = Math.hypot(px - x, py - y); if (d < distance) { distance = d; nearest = object; } }
+    for (const raw of visibleObjects) { const object = raw.key === myAvatar?.key ? myAvatar : raw; const [px, py] = worldToCanvas(object.position, camera, scale, canvasWidth, canvasHeight); const d = Math.hypot(px - x, py - y); if (d < distance) { distance = d; nearest = object; } }
     if (nearest) { if (event.ctrlKey || event.metaKey) togglePicked(nearest.key); selectedKey = nearest.key; followKey = ""; followingMe = false; followHint = ""; }
   }
   function keyboard(event: KeyboardEvent) {
-    const scale = mapScale(bounds, canvasWidth, canvasHeight, camera.zoom), step = 60 / scale;
+    const scale = mapScale(bounds, canvasWidth, canvasHeight, camera.zoom);
     if (event.key === "+" || event.key === "=") zoom(1.4); else if (event.key === "-") zoom(1 / 1.4); else if (event.key === "Home") resetMap();
-    else if (event.key === "ArrowLeft") { camera = { ...camera, x: camera.x - step }; followKey = ""; followingMe = false; } else if (event.key === "ArrowRight") { camera = { ...camera, x: camera.x + step }; followKey = ""; followingMe = false; }
-    else if (event.key === "ArrowUp") { camera = { ...camera, z: camera.z + step }; followKey = ""; followingMe = false; } else if (event.key === "ArrowDown") { camera = { ...camera, z: camera.z - step }; followKey = ""; followingMe = false; } else return;
+    else if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) {
+      camera = panCamera(camera, event.key === "ArrowLeft" ? 60 : event.key === "ArrowRight" ? -60 : 0, event.key === "ArrowUp" ? 60 : event.key === "ArrowDown" ? -60 : 0, scale);
+      followKey = ""; followingMe = false;
+    } else return;
     event.preventDefault();
   }
-  interface DrawState { scene: MissionScene | null; bounds: MapBounds; camera: MapCamera; objects: MissionObject[]; selectedKey: string; pickedKeys: string[]; customIndex: MissionFilterIndex; showZones: boolean; sliceEnabled: boolean; heightCenter: number; heightHalfWidth: number; width: number; height: number }
+  interface DrawState { liveAvatar: MissionObject | null; viewHeading: number | null | undefined; scene: MissionScene | null; bounds: MapBounds; camera: MapCamera; objects: MissionObject[]; selectedKey: string; targetKey: string; rotateWithView: boolean; pickedKeys: string[]; customIndex: MissionFilterIndex; showZones: boolean; sliceEnabled: boolean; heightCenter: number; heightHalfWidth: number; width: number; height: number }
+  let background: HTMLCanvasElement | undefined;
+  let backgroundKey = "";
+  let backgroundMeshes: MissionScene["meshes"] | null = null;
   function draw(node: HTMLCanvasElement, state: DrawState) {
     const ctx = node.getContext("2d"); if (!ctx) return;
     const dpr = Math.min(window.devicePixelRatio || 1, 2), { width, height } = state;
@@ -215,37 +272,50 @@
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, width, height); ctx.fillStyle = "#111a23"; ctx.fillRect(0, 0, width, height);
     if (!state.scene) return;
     const scale = mapScale(state.bounds, width, height, state.camera.zoom);
-    if (state.showZones) for (const zone of state.scene.zones ?? []) {
-      if (!zoneInHeightSlice(zone, state.sliceEnabled, state.heightCenter, state.heightHalfWidth)) continue;
-      const [x, y] = worldToCanvas([zone.min[0], zone.min[1], zone.max[2]], state.camera, scale, width, height);
-      ctx.strokeStyle = state.scene.zonesFresh === false ? "#71818d66" : "#9fb7c780"; ctx.lineWidth = 1; ctx.setLineDash([5, 5]);
-      ctx.strokeRect(x, y, (zone.max[0] - zone.min[0]) * scale, (zone.max[2] - zone.min[2]) * scale); ctx.setLineDash([]);
+    const key = JSON.stringify([width, height, dpr, state.camera, state.bounds, state.showZones, state.sliceEnabled, state.heightCenter, state.heightHalfWidth, state.scene.zones, state.scene.zonesFresh]);
+    if (!background || backgroundKey !== key || backgroundMeshes !== state.scene.meshes) {
+      background ??= document.createElement("canvas"); background.width = node.width; background.height = node.height;
+      const bg = background.getContext("2d"); if (!bg) return;
+      bg.setTransform(dpr, 0, 0, dpr, 0, 0); bg.fillStyle = "#111a23"; bg.fillRect(0, 0, width, height);
+      if (state.showZones) for (const zone of state.scene.zones ?? []) {
+        if (!zoneInHeightSlice(zone, state.sliceEnabled, state.heightCenter, state.heightHalfWidth)) continue;
+        const corners = [[zone.min[0], zone.min[1], zone.min[2]], [zone.max[0], zone.min[1], zone.min[2]], [zone.max[0], zone.min[1], zone.max[2]], [zone.min[0], zone.min[1], zone.max[2]]] as [number, number, number][];
+        bg.beginPath(); corners.map(p => worldToCanvas(p, state.camera, scale, width, height)).forEach((p, i) => i ? bg.lineTo(...p) : bg.moveTo(...p)); bg.closePath();
+        bg.strokeStyle = state.scene.zonesFresh === false ? "#71818d66" : "#9fb7c780"; bg.lineWidth = 1; bg.setLineDash([5, 5]); bg.stroke(); bg.setLineDash([]);
+      }
+      for (const mesh of state.scene.meshes) for (const face of mesh.faces) {
+        if (!faceInHeightSlice(mesh.vertices, face, state.sliceEnabled, state.heightCenter, state.heightHalfWidth)) continue;
+        const points = face.map(i => worldToCanvas(mesh.vertices[i], state.camera, scale, width, height));
+        if (points.every(p => p[0] < 0) || points.every(p => p[0] > width) || points.every(p => p[1] < 0) || points.every(p => p[1] > height)) continue;
+        const meanY = face.reduce((sum, i) => sum + mesh.vertices[i][1], 0) / face.length; const light = 23 + scaledHeight(meanY, state.bounds) * 18;
+        bg.beginPath(); points.forEach((p, i) => i ? bg.lineTo(...p) : bg.moveTo(...p)); bg.closePath(); bg.fillStyle = `hsl(192 19% ${light}%)`; bg.fill(); bg.strokeStyle = "#55737966"; bg.lineWidth = .6; bg.stroke();
+      }
+      backgroundKey = key; backgroundMeshes = state.scene.meshes;
     }
-    const mine = localAvatar(state.scene);
-    for (const mesh of state.scene.meshes) for (const face of mesh.faces) {
-      if (!faceInHeightSlice(mesh.vertices, face, state.sliceEnabled, state.heightCenter, state.heightHalfWidth)) continue;
-      const points = face.map(i => worldToCanvas(mesh.vertices[i], state.camera, scale, width, height));
-      if (points.every(p => p[0] < 0) || points.every(p => p[0] > width) || points.every(p => p[1] < 0) || points.every(p => p[1] > height)) continue;
-      const meanY = face.reduce((sum, i) => sum + mesh.vertices[i][1], 0) / face.length; const light = 23 + scaledHeight(meanY, state.bounds) * 18;
-      ctx.beginPath(); points.forEach((p, i) => i ? ctx.lineTo(...p) : ctx.moveTo(...p)); ctx.closePath(); ctx.fillStyle = `hsl(192 19% ${light}%)`; ctx.fill(); ctx.strokeStyle = "#55737966"; ctx.lineWidth = .6; ctx.stroke();
-    }
-    for (const object of state.objects) {
+    ctx.drawImage(background, 0, 0, width, height);
+    const mine = state.liveAvatar;
+    for (const raw of state.objects) {
+      const object = raw.key === mine?.key ? mine : raw;
       const [x, y] = worldToCanvas(object.position, state.camera, scale, width, height); if (x < -15 || y < -15 || x > width + 15 || y > height + 15) continue;
-      const chosen = object.key === state.selectedKey || state.pickedKeys.includes(object.key); ctx.beginPath(); ctx.fillStyle = filterColor(object, state.customIndex);
-      if (object.key === mine?.key) { ctx.moveTo(x, y - 9); ctx.lineTo(x + 7, y + 7); ctx.lineTo(x, y + 3); ctx.lineTo(x - 7, y + 7); ctx.closePath(); ctx.fillStyle = "#b5eaff"; }
+      const chosen = object.key === state.targetKey || object.key === state.selectedKey || state.pickedKeys.includes(object.key); ctx.globalAlpha = object.kind === "cache" && object.availability === "opened" ? .35 : 1; ctx.beginPath(); ctx.fillStyle = filterColor(object, state.customIndex);
+      if (object.key === mine?.key) { const heading = Number.isFinite(state.viewHeading) ? state.viewHeading! : state.camera.angle ?? 0;
+        const angle = heading - (state.camera.angle ?? 0), c = Math.cos(angle), s = Math.sin(angle);
+        [[0, -9], [7, 7], [0, 3], [-7, 7]].forEach(([dx, dy], i) => { const px = x + c * dx - s * dy, py = y + s * dx + c * dy; if (i) ctx.lineTo(px, py); else ctx.moveTo(px, py); }); ctx.closePath(); ctx.fillStyle = "#b5eaff"; }
       else if (object.kind === "extraction") { ctx.rect(x - 6, y - 6, 12, 12); }
       else if (object.kind === "feather") { ctx.moveTo(x, y - 7); ctx.lineTo(x + 5, y); ctx.lineTo(x, y + 7); ctx.lineTo(x - 5, y); ctx.closePath(); } else ctx.arc(x, y, chosen ? 5 : 3.5, 0, Math.PI * 2);
       ctx.fill(); ctx.strokeStyle = "#0c1119"; ctx.lineWidth = 1.5; ctx.stroke();
-      if (chosen) { ctx.beginPath(); ctx.arc(x, y, 11, 0, Math.PI * 2); ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.stroke(); }
+      ctx.globalAlpha = 1;
+      if (chosen) { ctx.beginPath(); ctx.arc(x, y, 11, 0, Math.PI * 2); ctx.strokeStyle = object.key === state.targetKey ? "#ffd66b" : "#fff"; ctx.lineWidth = 2; ctx.stroke(); }
     }
-    ctx.fillStyle = "#a8becb"; ctx.font = "12px system-ui"; ctx.fillText("Вид сверху · X / Z", 14, height - 16);
+    ctx.fillStyle = "#a8becb"; ctx.font = "12px system-ui"; ctx.fillText(state.rotateWithView ? "Вид сверху · направление взгляда вверх" : "Вид сверху · X / Z", 14, height - 16);
   }
   onMount(() => {
     loadFilters();
-    void refresh(); void refreshArchives(); const timer = setInterval(() => void refresh(), 1000); return () => { alive = false; generation++; clearInterval(timer); }; });
+    void refresh(); void refreshArchives(); const timer = setInterval(() => void refresh(), 1000); const poseTimer = setInterval(() => void refreshPose(), 50); return () => { alive = false; generation++; clearInterval(timer); clearInterval(poseTimer); }; });
 </script>
 
 <section class="mission" aria-label="Карта миссии">
+  {#if sceneError}<p class="error" role="status">{sceneError}</p>{/if}
   <section class="source-panel" aria-label="Источник данных миссии">
     <div class="source-options"><label>Источник<select bind:value={source} disabled={status?.busy || status?.tracking || actionBusy}><option value="live">Игра</option><option value="archive">Сохранённая запись</option></select></label>
       {#if source === "archive"}<label class="archive-choice">Запись<select bind:value={archiveId} onchange={chooseArchive} disabled={loadingArchives || status?.busy || actionBusy || !archives.length}><option value="" disabled>Выберите запись</option>{#each archives as archive}<option value={archive.id}>{archive.label} · {missionTime(archive.createdAt)}</option>{/each}</select></label>
@@ -271,19 +341,24 @@
     {#if followKey}<p class="follow-status" role="status">{followHint || (followingMe ? "Вид следует за вашим персонажем по связи с мини-картой." : "Вид следует за выбранным игроком.")} <button onclick={() => { followKey = ""; followingMe = false; followHint = ""; }}>Прекратить следование</button></p>{:else if followHint}<p role="status">{followHint}</p>{/if}
     <details class="warnings"><summary>Частичная карта · {myAvatar ? "ваш персонаж найден по мини-карте" : "ваш персонаж пока не определён"} · о данных</summary><p>Геометрия может покрывать только часть миссии. Пунктир показывает границы зон родной мини-карты, а не стены. Свой персонаж определяется по согласованным связям игрока, камеры и мини-карты; переход в Оператора и режим наблюдения ещё требуют проверки. Маршруты не построены.</p>{#if scene.zones?.length && !scene.zonesFresh}<p>Свежие границы зон не подтверждены. Сохранена последняя согласованная карта.</p>{/if}{#if scene.warnings.length}<ul>{#each scene.warnings as warning}<li>{warning}</li>{/each}</ul>{/if}</details>
     <div class="display-controls"><div class="filters" aria-label="Фильтры объектов">{#each MISSION_FILTERS as filter}<label><input type="checkbox" bind:checked={filters[filter.key]} /><i style:background={filter.color}></i>{filter.label}<span>{objects.filter(o => objectFilter(o.kind) === filter.key && !objectFilterEntry(o, customIndex)).length}</span></label>{/each}{#each customFilters as custom (custom.id)}<label><input type="checkbox" checked={custom.enabled} onchange={(event) => saveFilters(customFilters.map(filter => filter.id === custom.id ? { ...filter, enabled: event.currentTarget.checked } : filter))} /><i style:background={custom.color}></i>{custom.name}<span>{customCounts.get(custom.id) ?? 0}</span></label>{/each}</div>
-    <div class="height-controls"><label class="slice"><input type="checkbox" bind:checked={showZones} />Границы зон</label><label class="slice"><input type="checkbox" bind:checked={sliceEnabled} />Ограничить по высоте</label>{#if sliceEnabled}<label class="height-range">Высота Y: {heightCenter.toFixed(1)}<input type="range" min={Math.floor(bounds.minY)} max={Math.max(Math.ceil(bounds.maxY), Math.floor(bounds.minY) + 1)} step="0.5" bind:value={heightCenter} /></label><label>Диапазон<select bind:value={heightHalfWidth}><option value={2}>± 2</option><option value={4}>± 4</option><option value={8}>± 8</option><option value={16}>± 16</option></select></label><span class="muted">Это срез координат, а не определённый этаж.</span>{/if}</div>
+    <div class="height-controls"><label>Тайники<select bind:value={cacheState}><option value="all">Все состояния</option><option value="available">Можно открыть</option><option value="unknown">Состояние неизвестно</option><option value="opened">Открытые</option></select></label><label class="slice"><input type="checkbox" bind:checked={showZones} />Границы зон</label><label class="slice"><input type="checkbox" bind:checked={sliceEnabled} />Ограничить по высоте</label>{#if sliceEnabled}<label class="height-range">Высота Y: {heightCenter.toFixed(1)}<input type="range" min={Math.floor(bounds.minY)} max={Math.max(Math.ceil(bounds.maxY), Math.floor(bounds.minY) + 1)} step="0.5" bind:value={heightCenter} /></label><label>Диапазон<select bind:value={heightHalfWidth}><option value={2}>± 2</option><option value={4}>± 4</option><option value={8}>± 8</option><option value={16}>± 16</option></select></label><span class="muted">Это срез координат, а не определённый этаж.</span>{/if}</div>
     </div>
     <div class="explorer">
-      <section class="map-panel" aria-label="Схема расположения объектов"><div class="map-tools"><span>Схема по прочитанным данным</span><div><button aria-label="Уменьшить карту" onclick={() => zoom(1 / 1.4)}>−</button><button aria-label="Увеличить карту" onclick={() => zoom(1.4)}>+</button><button disabled={!myAvatar} title={myAvatar ? "Персонаж определён по связи с родной мини-картой" : "Согласованная связь с вашим персонажем пока не найдена"} onclick={focusMe}>{status?.tracking ? "Следовать за мной" : "Показать меня"}</button><button onclick={resetMap}>Показать всё</button></div></div>
+      <section class="map-panel" aria-label="Схема расположения объектов"><div class="map-tools"><span>Схема по прочитанным данным</span><div><button aria-label="Уменьшить карту" onclick={() => zoom(1 / 1.4)}>−</button><button aria-label="Увеличить карту" onclick={() => zoom(1.4)}>+</button><button disabled={!myAvatar} title={myAvatar ? "Персонаж определён по связи с родной мини-картой" : "Согласованная связь с вашим персонажем пока не найдена"} onclick={focusMe}>{status?.tracking ? "Следовать за мной" : "Показать меня"}</button><button title="Поворачивать карту по игровой камере. Направление ещё нужно сверить в живой миссии." aria-pressed={rotateWithView} disabled={!rotateWithView && (!myAvatar || !Number.isFinite(viewHeading))} onclick={toggleHeading}>По взгляду{rotateWithView ? " · вкл." : ""}</button><button onclick={resetMap}>Показать всё</button></div></div>
+        <div class="target-bar"><button disabled={!nearestCache} onclick={() => nearestCache && chooseTarget(nearestCache)}>Ближайший закрытый тайник</button>
+          {#if target}<span><strong>Цель: {target.label}</strong> · {distanceLabel(myAvatar, target)}{target.kind === "cache" ? target.availability === "opened" ? " · уже открыт" : target.availability === "unknown" ? " · состояние неизвестно" : " · можно открыть" : ""}</span><button onclick={() => selectObject(target!)}>Показать цель</button><button onclick={() => targetKey = ""}>Убрать цель</button>
+          {:else if targetKey}<span>Цель больше не видна в текущих данных.</span><button onclick={() => targetKey = ""}>Убрать цель</button>{/if}
+        </div>
+        {#if rotateWithView && !Number.isFinite(viewHeading)}<p class="map-help">Направление взгляда временно недоступно. Поворот сохранён.</p>{/if}
         <canvas bind:this={canvas} use:resizeCanvas tabindex="0" aria-label="Схема объектов. Стрелки перемещают вид, плюс и минус меняют масштаб, Home показывает всё. Объекты доступны также списком рядом." onwheel={wheel} onpointerdown={pointerDown} onpointermove={pointerMove} onpointerup={pointerUp} onpointercancel={() => drag = null} onkeydown={keyboard}></canvas>
         {#if !scene.meshes.length}<p class="map-empty">Геометрия не извлечена. Точки показывают только расположение объектов в общей системе координат.</p>{/if}
         <p class="map-help">Перетаскивайте схему и меняйте масштаб колёсиком. Светлые поверхности расположены выше. Выберите точку или объект в списке. Ctrl + щелчок — выделить несколько точек для фильтра.</p>
       </section>
-      <section class="object-panel" aria-label="Найденные объекты"><div class="list-heading"><h2>Объекты</h2><span>{visibleObjects.length} из {objects.length}</span></div>{#if filterSelection.length}<button class="clear-selection" onclick={() => { pickedKeys = []; selectedKey = ""; }}>Снять выделение · {filterSelection.length}</button>{/if}<label class="search">Поиск объекта<input type="search" bind:value={query} placeholder="Русское или английское название" /></label>
-        {#if !objects.length}<p class="empty">В этом чтении объекты не определены. Это не означает, что на миссии нет предметов.</p>{:else if !visibleObjects.length}<p class="empty">Нет объектов с выбранными фильтрами. Измените поиск, категории или диапазон высоты.</p>{:else}<ul class="object-list">{#each visibleObjects.slice(0, listLimit) as object, objectIndex (object.key)}<li class="selectable-object"><input type="checkbox" aria-label={`Выбрать для фильтра: ${object.label || objectKindLabel(object.kind)} · объект ${objectIndex + 1}`} checked={pickedKeys.includes(object.key)} onchange={() => togglePicked(object.key)} /><button class:selected={object.key === selectedKey} onclick={() => selectObject(object)}><i style:background={filterColor(object, customIndex)}></i><span><strong>{object.key === myAvatar?.key ? "Вы · по мини-карте" : object.label || objectKindLabel(object.kind)}</strong>{#if object.nameEn && object.nameEn !== object.label}<small>{object.nameEn}</small>{/if}<small>{objectKindLabel(object.kind)} · Высота {object.position[1].toFixed(1)}{object.kind === "cache" ? object.availability === "available" ? " · Можно открыть" : object.availability === "opened" ? " · Открыт" : " · Состояние неизвестно" : ""}{object.positionFresh === false ? " · прежние координаты" : ""}</small></span></button></li>{/each}</ul>{#if visibleObjects.length > listLimit}<button class="more" onclick={() => listLimit += 100}>Показать ещё {Math.min(100, visibleObjects.length - listLimit)}</button>{/if}{/if}
+      <section class="object-panel" aria-label="Найденные объекты"><div class="list-heading"><h2>Объекты</h2><span>{visibleObjects.length} из {objects.length}</span></div>{#if filterSelection.length}<button class="clear-selection" onclick={() => { pickedKeys = []; selectedKey = ""; }}>Снять выделение · {filterSelection.length}</button>{/if}<label class="search">Поиск объекта<input type="search" bind:value={query} placeholder="Русское или английское название" /></label><label class="distance-sort"><input type="checkbox" bind:checked={sortByDistance} disabled={!myAvatar && !sortByDistance} />Сначала ближайшие</label>
+        {#if !objects.length}<p class="empty">В этом чтении объекты не определены. Это не означает, что на миссии нет предметов.</p>{:else if !visibleObjects.length}<p class="empty">Нет объектов с выбранными фильтрами. Измените поиск, категории или диапазон высоты.</p>{:else}<ul class="object-list">{#each visibleObjects.slice(0, listLimit) as object, objectIndex (object.key)}<li class="selectable-object"><input type="checkbox" aria-label={`Выбрать для фильтра: ${object.label || objectKindLabel(object.kind)} · объект ${objectIndex + 1}`} checked={pickedKeys.includes(object.key)} onchange={() => togglePicked(object.key)} /><button class:selected={object.key === selectedKey} onclick={() => selectObject(object)}><i style:background={filterColor(object, customIndex)}></i><span><strong>{object.key === myAvatar?.key ? "Вы · по мини-карте" : object.label || objectKindLabel(object.kind)}</strong>{#if object.nameEn && object.nameEn !== object.label}<small>{object.nameEn}</small>{/if}<small>{objectKindLabel(object.kind)} · Высота {object.position[1].toFixed(1)}{object.kind === "cache" ? object.availability === "available" ? " · Можно открыть" : object.availability === "opened" ? " · Открыт" : " · Состояние неизвестно" : ""}{object.positionFresh === false ? " · прежние координаты" : ""}</small>{#if myAvatar && object.key !== myAvatar.key}<small>{distanceLabel(myAvatar, object)}</small>{/if}</span></button></li>{/each}</ul>{#if visibleObjects.length > listLimit}<button class="more" onclick={() => listLimit += 100}>Показать ещё {Math.min(100, visibleObjects.length - listLimit)}</button>{/if}{/if}
       </section>
     </div>
-    {#if selected}<section class="object-detail" aria-label="Выбранный объект"><div><h2>{selected.label || objectKindLabel(selected.kind)}</h2>{#if selected.nameEn && selected.nameEn !== selected.label}<p>{selected.nameEn}</p>{/if}<p>{selected.availability === "available" ? "Действие открытия тайника подтверждено." : selected.availability === "opened" ? "Тайник открыт: действие открытия исчезло, анимация подтверждена." : selected.kind === "lootspot" ? "Возможное место появления. Наличие предмета здесь не подтверждено." : "Доступность взаимодействия не подтверждена. Объект может сохраняться в памяти после изменения его состояния."}</p>{#if selected.positionFresh === false}<p>Свежие координаты пока не прочитаны. Показано последнее положение.</p>{/if}</div><div class="selected-actions"><button onclick={() => selectObject(selected!)}>Центрировать на объекте</button>{#if scene.source === "live" && selected.kind === "avatar" && selected.key !== myAvatar?.key}<button disabled={!status?.tracking} onclick={() => startFollowing(selected!)}>Следовать за игроком</button>{/if}</div><dl><div><dt>Координаты</dt><dd>X {selected.position[0].toFixed(2)} · Y {selected.position[1].toFixed(2)} · Z {selected.position[2].toFixed(2)}</dd></div><div><dt>Тип</dt><dd>{objectKindLabel(selected.kind)}</dd></div>{#each selected.details as detail}<div><dt>{detail.label}</dt><dd>{detail.value}</dd></div>{/each}</dl><details><summary>Данные для исследования</summary><p>{selected.typeNames.join(" → ") || "Название класса не определено"}</p>{#if selected.itemPath}<code>{selected.itemPath}</code>{/if}</details></section>{/if}
+    {#if selected}<section class="object-detail" aria-label="Выбранный объект"><div><h2>{selected.label || objectKindLabel(selected.kind)}</h2>{#if selected.nameEn && selected.nameEn !== selected.label}<p>{selected.nameEn}</p>{/if}<p>{selected.availability === "available" ? "Действие открытия тайника подтверждено." : selected.availability === "opened" ? "Тайник открыт: действие открытия исчезло, анимация подтверждена." : selected.kind === "lootspot" ? "Возможное место появления. Наличие предмета здесь не подтверждено." : "Доступность взаимодействия не подтверждена. Объект может сохраняться в памяти после изменения его состояния."}</p>{#if selected.positionFresh === false}<p>Свежие координаты пока не прочитаны. Показано последнее положение.</p>{/if}</div><div class="selected-actions">{#if selected.kind !== "avatar"}<button onclick={() => chooseTarget(selected!)}>Выбрать целью</button>{/if}<button onclick={() => selectObject(selected!)}>Центрировать на объекте</button>{#if scene.source === "live" && selected.kind === "avatar" && selected.key !== myAvatar?.key}<button disabled={!status?.tracking} onclick={() => startFollowing(selected!)}>Следовать за игроком</button>{/if}</div><dl><div><dt>Координаты</dt><dd>X {selected.position[0].toFixed(2)} · Y {selected.position[1].toFixed(2)} · Z {selected.position[2].toFixed(2)}</dd></div><div><dt>Тип</dt><dd>{objectKindLabel(selected.kind)}</dd></div>{#each selected.details as detail}<div><dt>{detail.label}</dt><dd>{detail.value}</dd></div>{/each}</dl><details><summary>Данные для исследования</summary><p>{selected.typeNames.join(" → ") || "Название класса не определено"}</p>{#if selected.itemPath}<code>{selected.itemPath}</code>{/if}</details></section>{/if}
     {#if difference && previousScene}<details class="comparison"><summary>Изменения относительно {missionTime(previousScene.capturedAt)} · Новых {difference.added.length} · Больше не видны {difference.absent.length}</summary><p>Сравниваются тип, адрес и положение в двух чтениях. Это различие выборок, а не журнал событий миссии.</p><div class="comparison-lists"><div><h3>Появились в выборке</h3>{#if !difference.added.length}<p>Нет новых записей.</p>{:else}<ul>{#each difference.added.slice(0, 30) as object}<li>{object.label || objectKindLabel(object.kind)}</li>{/each}</ul>{#if difference.added.length > 30}<p>И ещё {difference.added.length - 30}.</p>{/if}{/if}</div><div><h3>Больше не видны в выборке</h3>{#if !difference.absent.length}<p>Все прежние записи остаются.</p>{:else}<ul>{#each difference.absent.slice(0, 30) as object}<li>{object.label || objectKindLabel(object.kind)}</li>{/each}</ul>{#if difference.absent.length > 30}<p>И ещё {difference.absent.length - 30}.</p>{/if}{/if}</div></div></details>{/if}
     <details class="export"><summary>Сохранить результат для анализа</summary><p>JSON содержит разобранные объекты и геометрию. OBJ содержит геометрию для просмотра в 3D-редакторе.</p><div class="export-buttons"><button disabled={exporting || status?.busy} onclick={() => void exportScene("json")}>Сохранить JSON</button><button disabled={exporting || status?.busy || !scene.meshes.length} onclick={() => void exportScene("obj")}>Сохранить OBJ</button></div>{#if exportPath}<p role="status">Результат сохранён: <code>{exportPath}</code></p>{/if}<p class="muted">Прочитано {missionBytes(scene.stats.scannedBytes)} · Геометрических частей: {scene.stats.meshCount} · Полигонов: {scene.stats.faceCount.toLocaleString("ru-RU")}</p></details>
   {:else if !status?.busy}<div class="initial"><h2>Запустите карту на миссии</h2><p>После первого чтения схема будет обновляться во время игры. Для разбора прошлой миссии выберите сохранённый снимок.</p></div>{/if}
@@ -291,6 +366,11 @@
 </section>
 
 <style>
+  .target-bar { display:flex; flex-wrap:wrap; align-items:center; gap:.5rem; padding:.5rem .75rem; color:#dfebf2; font-size:.78rem; border-bottom:1px solid #314350; }
+  .target-bar span { flex:1; min-width:200px; }
+  .target-bar button { background:#273d4b; color:#f4f8fb; border-color:#567386; font-size:.74rem; }
+  .map-tools button[aria-pressed="true"] { background:#397c67; }
+  .distance-sort { flex-direction:row; align-items:center; margin:.6rem 0; }
   .object-list .selectable-object { display:flex; align-items:flex-start; gap:.2rem; }
   .selectable-object > input { flex-shrink:0; margin-top:1rem; cursor:pointer; }
   .object-list .selectable-object > button { flex:1; width:auto; }

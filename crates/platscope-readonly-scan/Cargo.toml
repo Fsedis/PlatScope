@@ -15,7 +15,7 @@ platscope-domain = { path = "../platscope-domain" }
 regex = "1"
 memchr = "2"
 reqwest.workspace = true
-serde.workspace = true
+serde = { workspace = true, features = ["rc"] }
 serde_json.workspace = true
 sysinfo = { version = "0.32", default-features = false, features = ["system"] }
 zeroize.workspace = true

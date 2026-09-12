@@ -8,7 +8,7 @@ mod profile;
 mod source;
 mod types;
 
-pub use analyze::{analyze_archive, analyze_live, refresh_live};
+pub use analyze::{LocalPose, LocalPoseReader, analyze_archive, analyze_live, refresh_live};
 pub use archive::ArchiveMemory;
 use serde::{Deserialize, Serialize};
 pub use source::{Memory, MemoryModule, MemoryRange};
@@ -23,13 +23,13 @@ pub struct AnalysisProgress {
     pub total_bytes: u64,
     pub object_count: u64,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Detail {
     pub label: String,
     pub value: String,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SceneObject {
     pub key: String,
@@ -88,7 +88,9 @@ pub struct Scene {
     pub complete: bool,
     pub profile: String,
     pub objects: Vec<SceneObject>,
-    pub meshes: Vec<SceneMesh>,
+    pub meshes: std::sync::Arc<Vec<SceneMesh>>,
+    #[serde(default)]
+    pub camera_heading: Option<f32>,
     #[serde(default)]
     pub players: Vec<ScenePlayer>,
     #[serde(default)]
