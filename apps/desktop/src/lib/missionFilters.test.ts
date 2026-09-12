@@ -3,7 +3,7 @@ import { addFilterObjects, objectRule, objectIsVisible, filterColor, parseMissio
 import type { MissionObject, MissionFilter } from "./missionResearch";
 const object = (extra: Partial<MissionObject> = {}): MissionObject => ({ key:"address-old", kind:"decoration", label:"Деталь окружения", nameEn:"Panel", itemPath:null, position:[1,2,3], typeNames:["Decoration"], availability:"unknown", details:[{label:"Ресурс",value:"/Lotus/Levels/Panel"}], ...extra });
 const filter = (extra: Partial<CustomMissionFilter> = {}): CustomMissionFilter => ({id:"custom",name:"Мои панели",color:"#cc55aa",enabled:true,rules:[],...extra});
-const standard: Record<MissionFilter, boolean> = {feather:true,pickup:true,players:true,npc:false,other:true};
+const standard: Record<MissionFilter, boolean> = {feather:true,pickup:true,players:true,npc:false,other:true,goals:true,lootspots:false};
 
 describe("свои фильтры карты", () => {
   it("сопоставляет объект следующей миссии по ресурсу, без адресов, координат и русского имени", () => {

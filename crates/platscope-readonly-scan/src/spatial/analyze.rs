@@ -85,6 +85,7 @@ fn object(
     family: &str,
     vt: u64,
     decoder: &mut Decoder,
+    base: u64,
 ) -> Result<(SceneObject, Identity)> {
     let mut id = identity(m, a, vt)?;
     let info = decoder.chain(m, id.metadata)?;
@@ -149,11 +150,31 @@ fn object(
             item_path = Some(path);
             (if feather { "feather" } else { "pickup" }, label, en)
         }
-        "avatar" => (
-            "avatar",
-            "Варфрейм или оператор".into(),
-            "Warframe / Operator".into(),
-        ),
+        "avatar" => {
+            super::context::owner(m, a, base)?;
+            (
+                "avatar",
+                "Варфрейм или оператор".into(),
+                "Warframe / Operator".into(),
+            )
+        }
+        "extraction" | "waypoint" | "terminal" => {
+            let (_, zone) = handle(m, a + 0x428)?;
+            let meta = q(m, zone + 8)?;
+            if !decoder.chain(m, meta)?.names.iter().any(|n| n == "Zone *") {
+                return Err("Не подтверждена зона действия".into());
+            }
+            id.zone = Some(zone);
+            let (kind, label, name) = interaction(family, &info)?;
+            details.push(detail("Ресурс", name));
+            if kind == "lootspot" {
+                details.push(detail(
+                    "Назначение",
+                    "Возможное место появления; наличие предмета не подтверждено",
+                ));
+            }
+            (kind, label.into(), name.into())
+        }
         "npc" => {
             let kind = character_kind(
                 family,
@@ -210,10 +231,12 @@ fn object(
         if let Ok((_, zone)) = handle(m, a + 0x428) {
             id.zone = Some(zone);
         }
-        details.push(detail(
-            "Принадлежность",
-            "Владелец и активный персонаж не определены",
-        ));
+        if family == "avatar" {
+            details.push(detail(
+                "Принадлежность",
+                "Подтверждена двусторонней связью с игроком",
+            ));
+        }
     }
     Ok((
         SceneObject {
@@ -230,6 +253,54 @@ fn object(
         },
         id,
     ))
+}
+fn interaction(
+    family: &str,
+    info: &super::types::TypeInfo,
+) -> Result<(&'static str, &'static str, &'static str)> {
+    let tag = info.field("Tag").unwrap_or_default();
+    let has_script = |path: &str| {
+        info.properties
+            .iter()
+            .any(|s| s.lines().any(|l| l == format!("Script={path}")))
+    };
+    match family {
+        "extraction"
+            if tag == "ExtractionTrigger" && has_script("/Lotus/Scripts/ExtractionTimer.lua") =>
+        {
+            Ok(("extraction", "Эвакуация", "ExtractionTrigger"))
+        }
+        "waypoint" => match tag.as_str() {
+            "RareLootCrateWaypoint" => Ok((
+                "lootspot",
+                "Возможное место редкого контейнера",
+                "RareLootCrateWaypoint",
+            )),
+            "UltraRareLootCrateWaypoint" => Ok((
+                "lootspot",
+                "Возможное место особо редкого контейнера",
+                "UltraRareLootCrateWaypoint",
+            )),
+            "ScannablePlant" => Ok(("lootspot", "Возможное место растения", "ScannablePlant")),
+            "SentientArtifactWaypoint" => Ok((
+                "lootspot",
+                "Возможное место артефакта",
+                "SentientArtifactWaypoint",
+            )),
+            _ => Err("Неизвестное назначение точки".into()),
+        },
+        "terminal" if has_script("/Lotus/Scripts/BipedSpawner.lua") => {
+            Ok(("terminal", "Терминал союзного МОА", "BipedSpawner"))
+        }
+        "terminal" if has_script("/Lotus/Scripts/Rescue.lua") => {
+            Ok(("terminal", "Терминал спасения", "RescuePanicButton"))
+        }
+        "terminal" if has_script("/Lotus/Scripts/PanicButton.lua") => {
+            Ok(("terminal", "Терминал безопасности", "PanicButton"))
+        }
+        // Остальные действия не получают выдуманного назначения по одному базовому классу.
+        _ => Err("Назначение действия не подтверждено".into()),
+    }
 }
 fn run(
     m: &mut dyn Memory,
@@ -303,7 +374,7 @@ fn run(
             last_report = Instant::now();
         }
     }
-    let mut scene=Scene{format:1,source:source.into(),started_at,captured_at:stamp(),complete,profile:"warframe-2026-09-12-validated".into(),objects:Vec::new(),meshes:Vec::new(),warnings:vec!["Снимок не атомарен: объекты прочитаны в разные моменты времени.".into(),"Геометрия исследовательская: принадлежность текущему региону и переходы между частями не гарантированы.".into(),"По координатам нельзя установить, доступен ли предмет и был ли он подобран.".into()],stats:SceneStats{scanned_bytes:scanned,..Default::default()},identities:Vec::new(),process:None,discovery_profile:Some(profile.clone()),discovery_ranges:Vec::new(),discovery_cursor:0};
+    let mut scene=Scene{format:1,source:source.into(),started_at,captured_at:stamp(),complete,profile:"warframe-2026-09-12-validated".into(),objects:Vec::new(),meshes:Vec::new(),players:Vec::new(),zones:Vec::new(),zones_fresh:false,warnings:vec!["Снимок не атомарен: объекты прочитаны в разные моменты времени.".into(),"Геометрия исследовательская: принадлежность текущему региону и переходы между частями не гарантированы.".into(),"По координатам нельзя установить, доступен ли предмет и был ли он подобран.".into()],stats:SceneStats{scanned_bytes:scanned,..Default::default()},identities:Vec::new(),process:None,discovery_profile:Some(profile.clone()),discovery_ranges:Vec::new(),discovery_cursor:0};
     if failed_chunks > 0 {
         scene.complete = false;
         scene.warnings.push(format!(
@@ -340,7 +411,7 @@ fn run(
                 }
             }
         } else {
-            match object(m, a, family, vt, &mut decoder) {
+            match object(m, a, family, vt, &mut decoder, profile.base) {
                 Ok((obj, id)) => {
                     scene.objects.push(obj);
                     scene.identities.push(id)
@@ -379,6 +450,7 @@ fn run(
         }
     }
     scene.discovery_ranges = pools.into_values().collect();
+    super::context::update(m, &mut scene, profile.base, cancel)?;
     scene.stats.object_count = scene.objects.len() as u64;
     scene.stats.mesh_count = scene.meshes.len() as u64;
     scene.captured_at = stamp();
@@ -442,6 +514,9 @@ pub fn refresh_live(pid: u32, scene: &Scene, cancel: &AtomicBool) -> Result<Scen
     };
     let mut result = refresh_objects(&mut m, scene, cancel)?;
     discover(&mut m, &mut result, cancel)?;
+    if let Some(profile) = &scene.discovery_profile {
+        super::context::update(&mut m, &mut result, profile.base, cancel)?;
+    }
     result.stats.object_count = result.objects.len() as u64;
     result.captured_at = stamp();
     if !m.process.alive() {
@@ -556,7 +631,7 @@ fn discover(m: &mut dyn Memory, scene: &mut Scene, cancel: &AtomicBool) -> Resul
         if started.elapsed() > Duration::from_millis(80) || scene.objects.len() >= MAX_OBJECTS {
             break;
         }
-        if let Ok((object, id)) = object(m, a, family, vt, &mut decoder) {
+        if let Ok((object, id)) = object(m, a, family, vt, &mut decoder, profile.base) {
             scene.objects.push(object);
             scene.identities.push(id);
         }

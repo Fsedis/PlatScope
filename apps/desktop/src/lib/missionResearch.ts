@@ -4,32 +4,45 @@ export function objectMatchesSearch(object: MissionObject, query: string): boole
     object.kind === "feather" ? "перо перья" : object.kind === "npc" ? "неигровой персонаж" : ""]);
 }
 export type Position3 = [number, number, number];
-export type MissionObjectKind = "feather" | "pickup" | "avatar" | "npc" | "hostage" | "spawnpoint" | "panel" | "locker" | "decoration";
+export type MissionObjectKind = "feather" | "pickup" | "avatar" | "npc" | "hostage" | "spawnpoint" | "panel" | "locker" | "decoration" | "extraction" | "terminal" | "lootspot";
 export interface MissionObject {
   key: string; kind: MissionObjectKind; label: string; nameEn: string; itemPath: string | null;
   position: Position3; positionFresh?: boolean; typeNames: string[]; availability: "unknown"; details: { label: string; value: string }[];
 }
 export interface MissionMesh { key: string; vertices: Position3[]; faces: number[][]; adjacency: [number, number][] }
+export interface MissionPlayer { key: string; avatarKey: string; operatorKey: string | null; local: boolean }
+export interface MissionZone { key: string; min: Position3; max: Position3 }
 export interface MissionScene {
   format: 1; source: "archive" | "live"; startedAt: string; capturedAt: string; complete: boolean; profile: string;
   objects: MissionObject[]; meshes: MissionMesh[]; warnings: string[];
+  players?: MissionPlayer[]; zones?: MissionZone[]; zonesFresh?: boolean;
   stats: { scannedBytes: number; objectCount: number; meshCount: number; vertexCount: number; faceCount: number };
 }
 export interface MissionResearchStatus { busy: boolean; cancelling: boolean; phase: string; error: string | null; revision: number; gameRunning: boolean; tracking: boolean; scannedBytes: number }
 export interface MissionArchive { id: string; label: string; createdAt: string; sizeBytes: number; snapshots: { sequence: number; startedAt: string; endedAt: string; complete: boolean; bytes: number; holes: number }[] }
-export type MissionFilter = "feather" | "pickup" | "players" | "npc" | "other";
+export type MissionFilter = "feather" | "pickup" | "players" | "npc" | "other" | "goals" | "lootspots";
 export const MISSION_FILTERS: { key: MissionFilter; label: string; color: string }[] = [
   { key: "feather", label: "Перья", color: "#f4c97e" }, { key: "pickup", label: "Предметы", color: "#78d6b0" },
   { key: "players", label: "Игроки", color: "#83cfff" }, { key: "npc", label: "NPC", color: "#e49baa" }, { key: "other", label: "Прочее", color: "#9eb9e9" },
+  { key: "goals", label: "Эвакуация и терминалы", color: "#8de4bb" }, { key: "lootspots", label: "Возможные места лута", color: "#c5a6ee" },
 ];
-export function objectFilter(kind: MissionObjectKind): MissionFilter { return kind === "feather" ? "feather" : kind === "pickup" ? "pickup" : kind === "avatar" ? "players" : kind === "npc" || kind === "hostage" || kind === "spawnpoint" ? "npc" : "other"; }
-export function objectKindLabel(kind: MissionObjectKind): string { return ({ feather: "Перо", pickup: "Предмет", avatar: "Игрок", npc: "NPC", hostage: "Заложник", spawnpoint: "Точка появления", panel: "Панель", locker: "Шкафчик", decoration: "Объект окружения" })[kind] ?? "Объект"; }
+export function objectFilter(kind: MissionObjectKind): MissionFilter { return kind === "feather" ? "feather" : kind === "pickup" ? "pickup" : kind === "avatar" ? "players" : kind === "extraction" || kind === "terminal" ? "goals" : kind === "lootspot" ? "lootspots" : kind === "npc" || kind === "hostage" || kind === "spawnpoint" ? "npc" : "other"; }
+export function objectKindLabel(kind: MissionObjectKind): string { return ({ feather: "Перо", pickup: "Предмет", avatar: "Игрок", npc: "NPC", hostage: "Заложник", spawnpoint: "Точка появления", panel: "Панель", locker: "Шкафчик", decoration: "Объект окружения", extraction: "Эвакуация", terminal: "Терминал", lootspot: "Возможное место появления" })[kind] ?? "Объект"; }
+export function localAvatar(scene: Pick<MissionScene, "players" | "objects">): MissionObject | null {
+  const players = scene.players?.filter(p => p.local) ?? [];
+  if (players.length !== 1) return null;
+  return scene.objects.find(o => o.key === players[0].avatarKey && o.kind === "avatar" && o.positionFresh !== false && finitePosition(o.position)) ?? null;
+}
+export function zoneInHeightSlice(zone: MissionZone, enabled: boolean, center: number, halfWidth: number): boolean {
+  return finitePosition(zone.min) && finitePosition(zone.max) && zone.min.every((v, i) => v <= zone.max[i]) && (!enabled || zone.min[1] <= center + halfWidth && zone.max[1] >= center - halfWidth);
+}
 export const finitePosition = (p: readonly number[]): boolean => p.length >= 3 && p.slice(0, 3).every(Number.isFinite);
 export interface MapBounds { minX: number; maxX: number; minZ: number; maxZ: number; minY: number; maxY: number }
-export function sceneBounds(scene: Pick<MissionScene, "objects" | "meshes">): MapBounds {
+export function sceneBounds(scene: Pick<MissionScene, "objects" | "meshes" | "zones">): MapBounds {
   let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity, minY = Infinity, maxY = -Infinity;
   const include = (p: Position3) => { if (!finitePosition(p)) return; minX = Math.min(minX, p[0]); maxX = Math.max(maxX, p[0]); minY = Math.min(minY, p[1]); maxY = Math.max(maxY, p[1]); minZ = Math.min(minZ, p[2]); maxZ = Math.max(maxZ, p[2]); };
   scene.objects.forEach(o => include(o.position)); scene.meshes.forEach(m => m.vertices.forEach(include));
+  scene.zones?.forEach(zone => { if (zoneInHeightSlice(zone, false, 0, 0)) { include(zone.min); include(zone.max); } });
   if (!Number.isFinite(minX)) return { minX: -1, maxX: 1, minZ: -1, maxZ: 1, minY: 0, maxY: 0 };
   if (maxX - minX < 1) { minX -= .5; maxX += .5; } if (maxZ - minZ < 1) { minZ -= .5; maxZ += .5; }
   return { minX, maxX, minZ, maxZ, minY, maxY };

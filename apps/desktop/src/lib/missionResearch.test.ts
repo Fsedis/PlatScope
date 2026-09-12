@@ -1,9 +1,36 @@
 import { describe, it, expect } from "vitest";
 import { objectFilter, followFrame, followTargetSignature, sceneBounds, fitCamera, mapScale, worldToCanvas, canvasToWorld, zoomAt, scaledHeight, inHeightSlice, faceInHeightSlice, compareScenes, objectSampleKey, type MissionScene, type MissionObject, type Position3 } from "./missionResearch";
 import { makeMissionScene, makeMissionResearchMock } from "./missionResearchMock";
-import { objectMatchesSearch } from "./missionResearch";
+import { objectMatchesSearch, localAvatar, zoneInHeightSlice } from "./missionResearch";
 const object = (extra: Partial<MissionObject> = {}): MissionObject => ({ key: "one", kind: "feather", label: "Перо", nameEn: "Voidplume", itemPath: "ZarimanDogTagCommon", position: [2, 3, 5], availability: "unknown", details: [], typeNames: ["PickUp"], ...extra });
 const scene = (objects: MissionObject[] = []): MissionScene => ({ format: 1, source: "archive", startedAt: "2026-09-12T07:00:00Z", capturedAt: "2026-09-12T07:00:30Z", complete: true, profile: "test", objects, meshes: [], warnings: [], stats: { scannedBytes: 0, objectCount: objects.length, meshCount: 0, vertexCount: 0, faceCount: 0 } });
+
+describe("принадлежность игрока и зоны мини-карты", () => {
+  it("не выбирает по движению, при неоднозначной или устаревшей связи", () => {
+    const s = scene([object({kind:"avatar"}), object({key:"npc",kind:"npc"})]);
+    expect(localAvatar(s)).toBeNull();
+    s.players = [{key:"owner",avatarKey:"one",operatorKey:null,local:true}];
+    expect(localAvatar(s)?.key).toBe("one");
+    s.objects[0].positionFresh = false; expect(localAvatar(s)).toBeNull();
+    s.objects[0].positionFresh = true;
+    s.players.push({...s.players[0],key:"other"}); expect(localAvatar(s)).toBeNull();
+    s.players = [{...s.players[0],avatarKey:"npc"}]; expect(localAvatar(s)).toBeNull();
+  });
+  it("учитывает границы зон при показе всей карты и срезе высоты", () => {
+    const s = scene(); const zone = {key:"zone",min:[-100,-20,-200] as Position3,max:[100,10,200] as Position3}; s.zones=[zone];
+    expect(sceneBounds(s)).toEqual({minX:-100,maxX:100,minY:-20,maxY:10,minZ:-200,maxZ:200});
+    expect(zoneInHeightSlice(zone,true,12,2)).toBe(true);
+    expect(zoneInHeightSlice(zone,true,13,2)).toBe(false);
+    expect(zoneInHeightSlice({...zone,min:[NaN,0,0]},false,0,0)).toBe(false);
+    expect(zoneInHeightSlice({...zone,min:[101,0,0]},false,0,0)).toBe(false);
+  });
+  it("отделяет возможные места лута от предметов и эвакуации", () => {
+    expect(objectFilter("lootspot")).toBe("lootspots");
+    expect(objectFilter("extraction")).toBe("goals");
+    expect(objectFilter("terminal")).toBe("goals");
+    expect(objectFilter("pickup")).toBe("pickup");
+  });
+});
 
 describe("проекция карты миссии", () => {
   it("ищет русское и английское имя, тип и несколько слов без различия е/ё", () => {

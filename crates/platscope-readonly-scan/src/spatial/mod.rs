@@ -1,6 +1,7 @@
 //! Ограниченное исследование сцены. Состояния доступности и принадлежность игроку не угадываются.
 mod analyze;
 mod archive;
+mod context;
 mod geometry;
 mod profile;
 mod source;
@@ -50,6 +51,21 @@ pub struct SceneMesh {
     pub faces: Vec<Vec<u32>>,
     pub adjacency: Vec<[u32; 2]>,
 }
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScenePlayer {
+    pub key: String,
+    pub avatar_key: String,
+    pub operator_key: Option<String>,
+    pub local: bool,
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneZone {
+    pub key: String,
+    pub min: [f32; 3],
+    pub max: [f32; 3],
+}
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SceneStats {
@@ -70,6 +86,12 @@ pub struct Scene {
     pub profile: String,
     pub objects: Vec<SceneObject>,
     pub meshes: Vec<SceneMesh>,
+    #[serde(default)]
+    pub players: Vec<ScenePlayer>,
+    #[serde(default)]
+    pub zones: Vec<SceneZone>,
+    #[serde(default)]
+    pub zones_fresh: bool,
     pub warnings: Vec<String>,
     pub stats: SceneStats,
     #[serde(skip)]

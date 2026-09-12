@@ -35,7 +35,15 @@ impl Profile {
                 return Err("Код игры отличается от проверенной версии; карта не построена".into());
             }
         }
-        for (meta, name) in [(0x28ed2a0, "PickUp *"), (0x297bf70, "TennoAvatar *")] {
+        for (meta, name) in [
+            (0x28ed2a0, "PickUp *"),
+            (0x297bf70, "TennoAvatar *"),
+            (0x29c9600, "LotusHumanPlayer *"),
+            (0x29e7ea0, "MiniMap *"),
+            (0x28ecf80, "MultiAvatarTrigger *"),
+            (0x28d6f40, "Waypoint *"),
+            (0x2960650, "CipherAction *"),
+        ] {
             if q(m, base + meta)? != base + 0x203fc60 {
                 return Err("Не подтверждена структура типов игры".into());
             }
@@ -76,6 +84,9 @@ impl Profile {
             (0x20fd898, "decoration"),
             (0x2341320, "effect"),
             (0x2208c58, "spawnpoint"),
+            (0x21a6fb0, "extraction"),
+            (0x2113b98, "waypoint"),
+            (0x22a1638, "terminal"),
         ]
         .into_iter()
         .map(|(r, n)| (self.base + r, n))
