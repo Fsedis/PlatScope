@@ -1,6 +1,7 @@
 //! Ограниченное исследование сцены. Состояния доступности и принадлежность игроку не угадываются.
 mod analyze;
 mod archive;
+mod cache;
 mod context;
 mod geometry;
 mod profile;
@@ -36,6 +37,8 @@ pub struct SceneObject {
     pub label: String,
     pub name_en: String,
     pub item_path: Option<String>,
+    #[serde(default)]
+    pub variant_key: Option<String>,
     pub position: [f32; 3],
     #[serde(default = "fresh_position")]
     pub position_fresh: bool,

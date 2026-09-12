@@ -3,9 +3,24 @@ import { addFilterObjects, objectRule, objectIsVisible, filterColor, parseMissio
 import type { MissionObject, MissionFilter } from "./missionResearch";
 const object = (extra: Partial<MissionObject> = {}): MissionObject => ({ key:"address-old", kind:"decoration", label:"Деталь окружения", nameEn:"Panel", itemPath:null, position:[1,2,3], typeNames:["Decoration"], availability:"unknown", details:[{label:"Ресурс",value:"/Lotus/Levels/Panel"}], ...extra });
 const filter = (extra: Partial<CustomMissionFilter> = {}): CustomMissionFilter => ({id:"custom",name:"Мои панели",color:"#cc55aa",enabled:true,rules:[],...extra});
-const standard: Record<MissionFilter, boolean> = {feather:true,pickup:true,players:true,npc:false,other:true,goals:true,lootspots:false};
+const standard: Record<MissionFilter, boolean> = {feather:true,pickup:true,players:true,npc:false,other:true,goals:true,lootspots:false,caches:true};
 
 describe("свои фильтры карты", () => {
+  it("включает все экземпляры при полном и коротком пути, в том числе из сохранённого фильтра", () => {
+    const copies = [object(), object({ key: "another", details: [{ label: "Ресурс", value: "Panel" }] })];
+    const saved = filter({ rules: [{ key: JSON.stringify(["decoration", "resource", "/Lotus/Levels/Panel"]), label: "Панель", nameEn: "Panel" }] });
+    expect(copies.every(copy => objectIsVisible(copy, {...standard, other: false}, [saved]))).toBe(true);
+  });
+  it("отличает варианты одной модели и сохраняет выбор всех экземпляров варианта", () => {
+    const first = object({variantKey:"type-v1:a"});
+    const copy = object({key:"next-mission",position:[10,20,30],variantKey:"type-v1:a"});
+    const different = object({variantKey:"type-v1:b"});
+    const stored = parseMissionFilters(serializeMissionFilters([addFilterObjects(filter(),[first])]))[0];
+    expect(objectIsVisible(copy,{...standard,other:false},[stored])).toBe(true);
+    expect(objectIsVisible(different,{...standard,other:false},[stored])).toBe(false);
+    const all = addFilterObjects(filter(),[first],"model");
+    expect(objectIsVisible(different,{...standard,other:false},[all])).toBe(true);
+  });
   it("сопоставляет объект следующей миссии по ресурсу, без адресов, координат и русского имени", () => {
     const first = object();
     const next = object({key:"address-new",position:[90,7,15],label:"Новое русское имя"});

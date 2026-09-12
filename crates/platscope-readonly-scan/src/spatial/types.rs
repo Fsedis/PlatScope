@@ -10,6 +10,51 @@ pub(super) struct TypeInfo {
     pub properties: Vec<String>,
 }
 impl TypeInfo {
+    /// Стабильное описание игрового типа: без адреса экземпляра и текущего состояния.
+    pub fn variant_key(&self) -> String {
+        use sha2::{Digest, Sha256};
+        let mut hash = Sha256::new();
+        for value in self.names.iter().chain(self.properties.iter()) {
+            // Один Mesh может быть записан полным или относительным путём.
+            let normalized = value
+                .lines()
+                .map(|line| {
+                    if let Some(mesh) = line.strip_prefix("Mesh=") {
+                        format!("Mesh={}", mesh.rsplit('/').next().unwrap_or(mesh))
+                    } else {
+                        line.trim_end().to_owned()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            hash.update((normalized.len() as u64).to_le_bytes());
+            hash.update(normalized.as_bytes());
+        }
+        format!("type-v1:{:x}", hash.finalize())
+    }
+    /// Первое верхнеуровневое поле с учётом переопределений производного типа.
+    pub fn block(&self, name: &str) -> Option<String> {
+        let prefix = format!("{name}=");
+        for properties in &self.properties {
+            let mut depth = 0i32;
+            let mut selected = None;
+            for line in properties.lines() {
+                if depth == 0
+                    && let Some(value) = line.strip_prefix(&prefix)
+                {
+                    selected = Some(value.to_owned());
+                } else if let Some(value) = &mut selected {
+                    value.push('\n');
+                    value.push_str(line);
+                }
+                depth += line.matches('{').count() as i32 - line.matches('}').count() as i32;
+                if depth == 0 && selected.is_some() {
+                    return selected;
+                }
+            }
+        }
+        None
+    }
     pub fn field(&self, name: &str) -> Option<String> {
         let prefix = format!("{name}=");
         self.properties

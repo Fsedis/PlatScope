@@ -23,7 +23,7 @@ fn linked(m: &mut dyn Memory, address: u64, offset: u64) -> Result<u64> {
     }
     Ok(object)
 }
-fn has_type(m: &mut dyn Memory, address: u64, base: u64, expected: u64) -> Result<()> {
+pub(super) fn has_type(m: &mut dyn Memory, address: u64, base: u64, expected: u64) -> Result<()> {
     let handle = q(m, checked(address, 16)?)?;
     if q(m, checked(handle, 0)?)? != address {
         return Err("Обратная ссылка объекта не совпадает".into());

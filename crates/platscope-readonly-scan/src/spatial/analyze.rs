@@ -99,6 +99,7 @@ fn object(
         "Объект в памяти; доступность взаимодействия не установлена",
     )];
     let mut item_path = None;
+    let mut availability = "unknown";
     let (kind, label, name_en) = match family {
         "pickup" => {
             let (_, zone) = handle(m, a + 0x428)?;
@@ -215,7 +216,10 @@ fn object(
                 return Err("Декорация без зоны".into());
             }
             id.zone = Some(zone);
-            let (kind, label) = if mesh.contains("LootLockerIcon") {
+            let (kind, label) = if family == "decoration" && super::cache::is_grineer_cache(&info) {
+                availability = super::cache::state(m, a, decoder, base).unwrap_or("unknown");
+                ("cache", "Тайник Гринир")
+            } else if mesh.contains("LootLockerIcon") {
                 ("locker", "Обозначение шкафчика")
             } else if mesh.contains("ConsoleDoorPanel") {
                 ("panel", "Панель управления")
@@ -223,7 +227,15 @@ fn object(
                 ("decoration", "Деталь окружения")
             };
             details.push(detail("Ресурс", mesh.clone()));
-            (kind, label.into(), short_resource(&mesh))
+            (
+                kind,
+                label.into(),
+                if kind == "cache" {
+                    "Grineer Resource Cache".into()
+                } else {
+                    short_resource(&mesh)
+                },
+            )
         }
         _ => return Err("Неизвестное семейство".into()),
     };
@@ -238,6 +250,28 @@ fn object(
             ));
         }
     }
+    for (field, label) in [
+        ("OverrideMaterial", "Материалы варианта"),
+        ("MaterialForSwap", "Материал после изменения"),
+        ("ServerChildren", "Дочерние действия варианта"),
+        ("CompleteScript", "Действие варианта"),
+    ] {
+        if let Some(value) = info.block(field) {
+            let lines: Vec<_> = value
+                .lines()
+                .filter(|l| {
+                    l.starts_with('/')
+                        || l.starts_with("Type=")
+                        || l.starts_with("Script=")
+                        || l.starts_with("Function=")
+                })
+                .take(12)
+                .collect();
+            if !lines.is_empty() {
+                details.push(detail(label, lines.join(" · ")));
+            }
+        }
+    }
     Ok((
         SceneObject {
             key: format!("0x{a:x}"),
@@ -245,10 +279,11 @@ fn object(
             label,
             name_en,
             item_path,
+            variant_key: Some(info.variant_key()),
             position,
             position_fresh: true,
             type_names: info.names,
-            availability: "unknown".into(),
+            availability: availability.into(),
             details,
         },
         id,
@@ -589,6 +624,26 @@ fn refresh_objects(m: &mut dyn Memory, scene: &Scene, cancel: &AtomicBool) -> Re
         true
     });
     result.identities = identities;
+    if let Some(profile) = &scene.discovery_profile {
+        let mut decoder = Decoder::new(profile.clone())?;
+        for object in result
+            .objects
+            .iter_mut()
+            .filter(|o| o.kind == "cache")
+            .take(64)
+        {
+            let id = result
+                .identities
+                .iter()
+                .find(|id| format!("0x{:x}", id.address) == object.key);
+            object.availability = if let Some(id) = id.filter(|id| id.missed_reads == 0) {
+                super::cache::state(m, id.address, &mut decoder, profile.base).unwrap_or("unknown")
+            } else {
+                "unknown"
+            }
+            .into();
+        }
+    }
     result.stats.object_count = result.objects.len() as u64;
     Ok(result)
 }

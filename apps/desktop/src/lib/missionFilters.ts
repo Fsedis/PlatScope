@@ -4,53 +4,67 @@ export interface MissionFilterRule { key: string; label: string; nameEn: string 
 export interface CustomMissionFilter { id: string; name: string; color: string; enabled: boolean; rules: MissionFilterRule[] }
 export const MISSION_FILTER_STORAGE = "platscope.mission-filters.v1";
 export type MissionFilterIndex = Map<string, { visible: boolean; color: string | null; groups: string[] }>;
+export type FilterScope = "variant" | "model";
+const resourceName = (value: string) => value.trim().replace(/^"|"$/g, "").replaceAll("\\", "/").split("/").pop()!.toLowerCase();
+function canonicalRuleKey(key: string): string {
+  try {
+    const parts = JSON.parse(key);
+    if (Array.isArray(parts) && parts[1] === "resource" && typeof parts[2] === "string") return JSON.stringify([parts[0], "resource", resourceName(parts[2])]);
+  } catch { /* Старые неизвестные правила сохраняются без потери данных. */ }
+  return key;
+}
+export function objectFilterEntry(object: MissionObject, index: MissionFilterIndex) {
+  return index.get(objectRule(object).key) ?? index.get(objectRule(object, "model").key);
+}
 export function indexMissionFilters(filters: CustomMissionFilter[]): MissionFilterIndex {
   const index: MissionFilterIndex = new Map();
   for (const filter of filters) for (const rule of filter.rules) {
-    const entry = index.get(rule.key) ?? { visible:false, color:null, groups:[] };
+    const key = canonicalRuleKey(rule.key);
+    const entry = index.get(key) ?? { visible:false, color:null, groups:[] };
     entry.visible ||= filter.enabled;
     if (filter.enabled && !entry.color) entry.color = filter.color;
     if (!entry.groups.includes(filter.id)) entry.groups.push(filter.id);
-    index.set(rule.key, entry);
+    index.set(key, entry);
   }
   return index;
 }
 export function countMissionFilters(objects: MissionObject[], index: MissionFilterIndex): Map<string, number> {
   const counts = new Map<string, number>();
-  for (const object of objects) for (const id of index.get(objectRule(object).key)?.groups ?? []) counts.set(id, (counts.get(id) ?? 0) + 1);
+  for (const object of objects) for (const id of objectFilterEntry(object, index)?.groups ?? []) counts.set(id, (counts.get(id) ?? 0) + 1);
   return counts;
 }
 const normalizePath = (value: string) => value.replace(/^\/Lotus\/StoreItems\//, "/Lotus/");
 
 /** Правило описывает тип/ресурс, а не адрес экземпляра или его координаты. */
-export function objectRule(object: MissionObject): MissionFilterRule {
+export function objectRule(object: MissionObject, scope: FilterScope = "variant"): MissionFilterRule {
   const resource = object.details.find(detail => detail.label === "Ресурс")?.value;
-  const identity = object.itemPath ? ["item", normalizePath(object.itemPath)]
-    : resource ? ["resource", resource]
+  const identity = scope === "variant" && object.variantKey ? ["variant", object.variantKey]
+    : object.itemPath ? ["item", normalizePath(object.itemPath)]
+    : resource ? ["resource", resourceName(resource)]
     : ["type", [...object.typeNames].sort(), object.nameEn];
   return { key: JSON.stringify([object.kind, ...identity]), label: object.label, nameEn: object.nameEn };
 }
 
 export function filterMatches(filter: CustomMissionFilter, object: MissionObject): boolean {
-  const key = objectRule(object).key;
-  return filter.rules.some(rule => rule.key === key);
+  const keys = [objectRule(object).key, objectRule(object, "model").key];
+  return filter.rules.some(rule => keys.includes(canonicalRuleKey(rule.key)));
 }
 
-export function addFilterObjects(filter: CustomMissionFilter, objects: MissionObject[]): CustomMissionFilter {
-  const rules = new Map(filter.rules.map(rule => [rule.key, rule]));
-  for (const object of objects) { const rule = objectRule(object); rules.set(rule.key, rule); }
+export function addFilterObjects(filter: CustomMissionFilter, objects: MissionObject[], scope: FilterScope = "variant"): CustomMissionFilter {
+  const rules = new Map(filter.rules.map(rule => [canonicalRuleKey(rule.key), {...rule, key: canonicalRuleKey(rule.key)}]));
+  for (const object of objects) { const rule = objectRule(object, scope); rules.set(rule.key, rule); }
   if (rules.size > 200) throw new Error("В одном фильтре можно сохранить до 200 типов объектов.");
   return { ...filter, rules: [...rules.values()] };
 }
 
 export function objectIsVisible(object: MissionObject, standard: Record<MissionFilter, boolean>, custom: CustomMissionFilter[] | MissionFilterIndex): boolean {
   const index = Array.isArray(custom) ? indexMissionFilters(custom) : custom;
-  return index.get(objectRule(object).key)?.visible ?? standard[objectFilter(object.kind)];
+  return objectFilterEntry(object, index)?.visible ?? standard[objectFilter(object.kind)];
 }
 
 export function filterColor(object: MissionObject, custom: CustomMissionFilter[] | MissionFilterIndex): string {
   const index = Array.isArray(custom) ? indexMissionFilters(custom) : custom;
-  return index.get(objectRule(object).key)?.color
+  return objectFilterEntry(object, index)?.color
     ?? MISSION_FILTERS.find(filter => filter.key === objectFilter(object.kind))!.color;
 }
 

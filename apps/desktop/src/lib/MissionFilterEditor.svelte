@@ -1,8 +1,13 @@
 <script lang="ts">
-  import { addFilterObjects, type CustomMissionFilter } from "./missionFilters";
+  import { addFilterObjects, filterMatches, objectRule, type FilterScope, type CustomMissionFilter } from "./missionFilters";
   import type { MissionObject } from "./missionResearch";
   export let filters: CustomMissionFilter[] = [];
   export let selected: MissionObject[] = [];
+  export let objects: MissionObject[] = [];
+  let scope: FilterScope = "variant";
+  $: preview = { id: "preview", name: "", color: "#ffffff", enabled: true, rules: selected.map(object => objectRule(object, scope)) };
+  $: matchingCount = objects.filter(object => filterMatches(preview, object)).length;
+  $: typeCount = new Set(preview.rules.map(rule => rule.key)).size;
   export let onchange: (filters: CustomMissionFilter[]) => void;
   let mode: "add" | "manage" | null = null;
   let target = "";
@@ -22,9 +27,9 @@
     if (!existing && (!name.trim() || filters.some(filter => filter.name.toLocaleLowerCase("ru") === name.trim().toLocaleLowerCase("ru")))) { error = "Введите новое, непустое название фильтра."; return; }
     if (!existing && filters.length >= 40) { error = "Можно сохранить до 40 фильтров."; return; }
     try {
-      const next = addFilterObjects(existing ?? { id: crypto.randomUUID(), name: name.trim(), color, enabled: true, rules: [] }, selected);
+      const next = addFilterObjects(existing ? { ...existing, enabled: true } : { id: crypto.randomUUID(), name: name.trim(), color, enabled: true, rules: [] }, selected, scope);
       commit(existing ? filters.map(filter => filter.id === next.id ? next : filter) : [...filters, next]);
-      notice = `Типы выбранных объектов добавлены в «${next.name}».`; mode = null; name = "";
+      notice = `В «${next.name}» добавлены типы: ${typeCount}. Подходящих объектов на карте: ${matchingCount}. Фильтр включён.`; mode = null; name = "";
     } catch (reason) { error = reason instanceof Error ? reason.message : "Не удалось добавить объекты."; }
   }
   function edit(filter: CustomMissionFilter) { editingId = filter.id; editName = filter.name; editColor = filter.color; }
@@ -35,10 +40,10 @@
 </script>
 
 <section class="custom-editor" aria-label="Свои фильтры">
-  <div class="actions"><button disabled={!selected.length} onclick={() => { mode = mode === "add" ? null : "add"; error = ""; notice = ""; }}>Добавить в фильтр{selected.length ? ` · ${selected.length}` : ""}</button><button onclick={() => { mode = mode === "manage" ? null : "manage"; error = ""; notice = ""; }}>Настроить фильтры{filters.length ? ` · ${filters.length}` : ""}</button>{#if !selected.length}<span>Выберите объект на карте или отметьте несколько объектов в списке.</span>{/if}</div>
+  <div class="actions"><button disabled={!selected.length} onclick={() => { mode = mode === "add" ? null : "add"; error = ""; notice = ""; }}>Добавить в фильтр{selected.length ? ` · объектов: ${matchingCount}` : ""}</button><button onclick={() => { mode = mode === "manage" ? null : "manage"; error = ""; notice = ""; }}>Настроить фильтры{filters.length ? ` · ${filters.length}` : ""}</button>{#if !selected.length}<span>Выберите объект на карте или отметьте несколько объектов в списке.</span>{/if}</div>
   {#if notice}<p role="status">{notice}</p>{/if}
   {#if error}<p class="error" role="alert">{error}</p>{/if}
-  {#if mode === "add"}<div class="panel"><p>В фильтр попадут все объекты выбранных типов, в том числе на следующих миссиях.</p><div class="fields"><label>Куда добавить<select bind:value={target}><option value="">Создать новый фильтр</option>{#each filters as filter}<option value={filter.id}>{filter.name}</option>{/each}</select></label>{#if !target}<label>Название фильтра<input maxlength="60" bind:value={name} placeholder="Например, шкафчики" /></label><label>Цвет<input type="color" bind:value={color} /></label>{/if}<button class="primary" disabled={!selected.length || (!target && !name.trim())} onclick={add}>{target ? "Добавить выбранные типы" : "Создать фильтр с объектами"}</button><button onclick={() => mode = null}>Отмена</button></div></div>{/if}
+  {#if mode === "add"}<div class="panel"><p>В фильтр попадут все экземпляры выбранных типов, в том числе на следующих миссиях. Сейчас совпадений: {matchingCount}; типов: {typeCount}.</p><div class="fields"><label>Какие объекты<select bind:value={scope}><option value="variant">Этот вариант</option><option value="model">Все варианты модели</option></select></label><label>Куда добавить<select bind:value={target}><option value="">Создать новый фильтр</option>{#each filters as filter}<option value={filter.id}>{filter.name}</option>{/each}</select></label>{#if !target}<label>Название фильтра<input maxlength="60" bind:value={name} placeholder="Например, шкафчики" /></label><label>Цвет<input type="color" bind:value={color} /></label>{/if}<button class="primary" disabled={!selected.length || (!target && !name.trim())} onclick={add}>{target ? "Добавить выбранные типы" : "Создать фильтр с объектами"}</button><button onclick={() => mode = null}>Отмена</button></div></div>{/if}
   {#if mode === "manage"}<div class="panel"><p>Типы, добавленные в свои фильтры, показываются по их переключателям. Остальные объекты — по стандартным группам. Все изменения сохраняются автоматически.</p>{#if !filters.length}<p>Своих фильтров пока нет. Выберите объекты и нажмите «Добавить в фильтр».</p>{/if}{#each filters as filter (filter.id)}<details><summary><i style:background={filter.color}></i>{filter.name} · типов: {filter.rules.length}</summary><div class="fields">{#if editingId === filter.id}<label>Новое название<input maxlength="60" bind:value={editName} /></label><label>Новый цвет<input type="color" bind:value={editColor} /></label><button onclick={saveEdit}>Сохранить изменения</button>{:else}<button onclick={() => edit(filter)}>Изменить название и цвет</button>{/if}<button onclick={() => { commit(filters.filter(item => item.id !== filter.id)); notice = `Фильтр «${filter.name}» удалён.`; }}>Удалить фильтр</button></div><ul>{#each filter.rules as rule}<li><span>{rule.label || "Тип объекта"}{#if rule.nameEn && rule.nameEn !== rule.label}<small>{rule.nameEn}</small>{/if}</span><button aria-label={`Убрать тип ${rule.label || rule.nameEn} из ${filter.name}`} onclick={() => commit(filters.map(item => item.id === filter.id ? { ...item, rules: item.rules.filter(entry => entry.key !== rule.key) } : item))}>Убрать из фильтра</button></li>{/each}</ul>{#if !filter.rules.length}<p>Фильтр пуст. Добавьте в него объекты.</p>{/if}</details>{/each}</div>{/if}
   {#if undo}<button class="undo" onclick={() => { const previous = undo!; undo = null; onchange(previous); notice = "Последнее изменение отменено."; }}>Отменить последнее изменение фильтров</button>{/if}
 </section>
