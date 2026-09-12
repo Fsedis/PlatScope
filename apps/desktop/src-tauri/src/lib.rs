@@ -3,6 +3,7 @@
 mod app_lifecycle;
 mod binary_recording;
 mod dbwin_capture;
+mod game_names;
 mod inventory_refresh;
 mod market_account;
 mod market_profiles;
@@ -57,6 +58,7 @@ struct AppState {
     // Сводка читает справочники независимо от длительного обновления рынка и OCR.
     world_database: Mutex<Database>,
     inventory_database: Mutex<Database>,
+    game_names: Mutex<game_names::Cache>,
     inventory_refresh: inventory_refresh::InventoryRefreshService,
     market_data_service: MarketDataService,
     live_pricing_service: LivePricingService,
@@ -4082,6 +4084,7 @@ pub fn run() {
                 reward_database: Mutex::new(reward_database),
                 world_database: Mutex::new(world_database),
                 inventory_database: Mutex::new(inventory_database),
+                game_names: Mutex::new(game_names::Cache::default()),
                 inventory_refresh,
                 market_data_service,
                 live_pricing_service,

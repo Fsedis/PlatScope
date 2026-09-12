@@ -1,10 +1,17 @@
 import { describe, it, expect } from "vitest";
 import { objectFilter, followFrame, followTargetSignature, sceneBounds, fitCamera, mapScale, worldToCanvas, canvasToWorld, zoomAt, scaledHeight, inHeightSlice, faceInHeightSlice, compareScenes, objectSampleKey, type MissionScene, type MissionObject, type Position3 } from "./missionResearch";
 import { makeMissionScene, makeMissionResearchMock } from "./missionResearchMock";
+import { objectMatchesSearch } from "./missionResearch";
 const object = (extra: Partial<MissionObject> = {}): MissionObject => ({ key: "one", kind: "feather", label: "Перо", nameEn: "Voidplume", itemPath: "ZarimanDogTagCommon", position: [2, 3, 5], availability: "unknown", details: [], typeNames: ["PickUp"], ...extra });
 const scene = (objects: MissionObject[] = []): MissionScene => ({ format: 1, source: "archive", startedAt: "2026-09-12T07:00:00Z", capturedAt: "2026-09-12T07:00:30Z", complete: true, profile: "test", objects, meshes: [], warnings: [], stats: { scannedBytes: 0, objectCount: objects.length, meshCount: 0, vertexCount: 0, faceCount: 0 } });
 
 describe("проекция карты миссии", () => {
+  it("ищет русское и английское имя, тип и несколько слов без различия е/ё", () => {
+    const found = object({label:"Чертёж награды", nameEn:"Reward Blueprint"});
+    for (const query of ["чертеж", "ЧЕРТЁЖ", "reward blueprint", "перья чертеж", "  "]) expect(objectMatchesSearch(found, query)).toBe(true);
+    expect(objectMatchesSearch(found, "шкафчик")).toBe(false);
+    expect(objectMatchesSearch(object({kind:"npc"}), "неигровой персонаж")).toBe(true);
+  });
   it("учитывает отрицательные координаты объектов и геометрии без привязки к игроку", () => {
     const s = scene([object({ position: [-350, -28, 290] })]); s.meshes = [{ key: "mesh", vertices: [[200, 33, -150], [-400, 0, 0]], faces: [], adjacency: [] }];
     expect(sceneBounds(s)).toEqual({ minX: -400, maxX: 200, minY: -28, maxY: 33, minZ: -150, maxZ: 290 });

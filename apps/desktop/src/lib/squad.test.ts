@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { buildText, refinementName, shardColor, rivenText, type SquadEquipment } from "./squad";
+import { buildText, refinementName, shardColor, rivenText, equipmentMatchesSearch, type SquadEquipment } from "./squad";
 describe("список для повторения билда", () => {
+  it("ищет русское имя и состав сохранённого билда независимо от его заголовка", () => {
+    const part = { path:"/Lotus/Test", name:"Висп Прайм", nameEn:"Wisp Prime", kind:"equipment", rank:null };
+    const equipment: SquadEquipment = {key:"saved",category:"Варфрейм",item:part,level:30,forma:null,upgrades:[{...part,name:"Поток Прайм",nameEn:"Primed Flow"}],modularParts:[],unreadableUpgrades:0,
+      shards:[{color:"ACC_RED",effect:{...part,name:"Сила способностей",nameEn:"Ability Strength"}}],abilityOverride:{ability:{...part,name:"Рёв",nameEn:"Roar"},slot:4}};
+    for (const query of ["висп", "WISP PRIME", "  висп   рев ", "Поток", "primed flow", "багровый", "сила способностей", "мой билд"]) {
+      expect(equipmentMatchesSearch(equipment, query, ["Мой билд"]), query).toBe(true);
+    }
+    expect(equipmentMatchesSearch(equipment, "рев нейтрализация")).toBe(false);
+    expect(equipmentMatchesSearch(equipment, "")).toBe(true);
+  });
   it("сохраняет порядок, пустые и неизвестные позиции, ранги и связанные свойства разлома", () => {
     const part = {path:"/Lotus/Upgrades/Mods/Randomized/Test",name:"Разлом",nameEn:"Riven",kind:"mod",rank:8,slotIndex:2,fingerprint:{weaponPath:"/Lotus/Weapons/Guandao",weaponName:"Гуаньдао",weaponNameEn:"Guandao",masteryRank:12,rerolls:null,polarity:null,buffs:[{tag:"WeaponCritDamageMod",value:920199989}],curses:[{tag:"ComboDurationMod",value:317116412}]}};
     const equipment: SquadEquipment = {key:"configuration:1",category:"Ближний бой",item:{...part,fingerprint:null},level:null,forma:null,source:"memoryConfiguration",configuration:1,inventoryResolved:true,upgrades:[part],modularParts:[],unreadableUpgrades:1,upgradeSlots:[{index:0,status:"empty",part:null},{index:1,status:"unresolved",part:null},{index:2,status:"resolved",part}]};

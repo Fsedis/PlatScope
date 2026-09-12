@@ -1,8 +1,8 @@
 //! Отряд, снимки экипировки и личная коллекция билдов. Сырой JSON процесса
 //! не сохраняется: только перечисленные ниже поля, без адресов и идентификаторов.
 use crate::AppState;
+use crate::game_names::{self, GameNames};
 use chrono::Utc;
-use platscope_domain::{GameMetadataSnapshot, ItemCatalog};
 use platscope_readonly_scan::{
     scan::find_wf_pid,
     squad::{Candidate, capture, capture_suits},
@@ -10,6 +10,7 @@ use platscope_readonly_scan::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::sync::Arc;
 use std::{collections::HashMap, sync::Mutex, time::Duration};
 use tauri::{AppHandle, Manager, State};
 
@@ -288,74 +289,66 @@ impl Service {
 }
 
 #[derive(Default)]
-struct Names(HashMap<String, (String, String, String)>);
+struct Names(Arc<GameNames>);
 impl Names {
-    fn new(catalog: Option<&ItemCatalog>, metadata: Option<&GameMetadataSnapshot>) -> Self {
-        let mut names = Self::default();
-        if let Some(metadata) = metadata {
-            for relic in &metadata.relics {
-                names.0.insert(
-                    relic.relic_game_ref.clone(),
-                    (
-                        relic.display_name_en.clone(),
-                        relic.display_name_en.clone(),
-                        "relic".into(),
-                    ),
-                );
+    fn localize_part(&self, part: &mut Part) {
+        let translated = self.part(&part.path);
+        if !translated.name.is_empty()
+            && (translated.name != translated.name_en
+                || part.name.is_empty()
+                || part.name == part.name_en)
+        {
+            part.name = translated.name;
+        }
+        if !translated.name_en.is_empty() {
+            part.name_en = translated.name_en;
+        }
+        if let Some(fingerprint) = &mut part.fingerprint
+            && let Some(path) = &fingerprint.weapon_path
+        {
+            let weapon = self.part(path);
+            if !weapon.name.is_empty() {
+                fingerprint.weapon_name = Some(weapon.name);
             }
-            for item in &metadata.mastery_items {
-                names.0.insert(
-                    item.game_ref.clone(),
-                    (
-                        item.display_name_ru
-                            .clone()
-                            .unwrap_or_else(|| item.display_name_en.clone()),
-                        item.display_name_en.clone(),
-                        "equipment".into(),
-                    ),
-                );
-            }
-            for item in &metadata.item_localizations {
-                names.0.entry(item.game_ref.clone()).or_insert_with(|| {
-                    (
-                        item.display_name_ru.clone(),
-                        String::new(),
-                        "unknown".into(),
-                    )
-                });
+            if !weapon.name_en.is_empty() {
+                fingerprint.weapon_name_en = Some(weapon.name_en);
             }
         }
-        if let Some(catalog) = catalog {
-            for item in &catalog.items {
-                if let Some(path) = &item.game_ref {
-                    let kind = if item.tags.iter().any(|t| t == "arcane_enhancement") {
-                        "arcane"
-                    } else if item.tags.iter().any(|t| t == "mod") {
-                        "mod"
-                    } else {
-                        "unknown"
-                    };
-                    names.0.insert(
-                        path.clone(),
-                        (
-                            item.display_name_ru
-                                .clone()
-                                .unwrap_or_else(|| item.display_name_en.clone()),
-                            item.display_name_en.clone(),
-                            kind.into(),
-                        ),
-                    );
-                }
+    }
+
+    fn localize_equipment(&self, equipment: &mut Equipment) {
+        self.localize_part(&mut equipment.item);
+        for part in equipment
+            .upgrades
+            .iter_mut()
+            .chain(&mut equipment.modular_parts)
+        {
+            self.localize_part(part);
+        }
+        for slot in equipment.upgrade_slots.iter_mut().flatten() {
+            if let Some(part) = &mut slot.part {
+                self.localize_part(part);
             }
         }
-        names
+        for shard in equipment.shards.iter_mut().flatten() {
+            self.localize_part(&mut shard.effect);
+        }
+        if let Some(ability) = &mut equipment.ability_override {
+            self.localize_part(&mut ability.ability);
+        }
+        for part in [&mut equipment.context.focus, &mut equipment.context.relic]
+            .into_iter()
+            .flatten()
+        {
+            self.localize_part(part);
+        }
     }
 
     fn part(&self, path: &str) -> Part {
-        let normalized = path.replace("/Lotus/StoreItems/", "/Lotus/");
+        let normalized = game_names::normalize_path(path);
         let (mut name, mut en, mut kind) = self
             .0
-            .get(&normalized)
+            .lookup(&normalized)
             .cloned()
             .unwrap_or_else(|| (String::new(), String::new(), "unknown".into()));
         if name.is_empty()
@@ -363,6 +356,9 @@ impl Names {
         {
             name = ru.into();
             en = english.into();
+        }
+        if name.is_empty() {
+            name.clone_from(&en);
         }
         if kind == "unknown" {
             kind = if normalized.contains("/Upgrades/Mods/") {
@@ -862,17 +858,7 @@ fn poll(app: &AppHandle) {
     let revision = service.revision;
     drop(service);
     let result = capture(pid);
-    let names = state
-        .inventory_database
-        .lock()
-        .ok()
-        .map(|db| {
-            Names::new(
-                db.load_current_catalog().ok().flatten().as_ref(),
-                db.load_current_game_metadata().ok().flatten().as_ref(),
-            )
-        })
-        .unwrap_or_default();
+    let names = Names(game_names::get(&state));
     let Ok(mut service) = state.squad.lock() else {
         return;
     };
@@ -934,7 +920,7 @@ fn view(state: &AppState) -> Result<View, String> {
         .map_err(|e| e.to_string())?
         .unwrap_or_default();
     let service = state.squad.lock().map_err(|e| e.to_string())?;
-    Ok(View {
+    let mut result = View {
         enabled: service.enabled,
         running: service.pid.is_some(),
         scanning: service.scanning,
@@ -948,7 +934,21 @@ fn view(state: &AppState) -> Result<View, String> {
         configurations: service.configurations.clone(),
         configurations_at: service.configurations_at.clone(),
         reading_configurations: service.reading_configurations,
-    })
+    };
+    drop(service);
+    let names = Names(game_names::get(state));
+    for member in &mut result.members {
+        for equipment in &mut member.equipment {
+            names.localize_equipment(equipment);
+        }
+    }
+    for equipment in &mut result.configurations {
+        names.localize_equipment(equipment);
+    }
+    for build in &mut result.saved {
+        names.localize_equipment(&mut build.equipment);
+    }
+    Ok(result)
 }
 
 #[tauri::command]
@@ -966,17 +966,7 @@ pub(crate) async fn squad_read_configurations(state: State<'_, AppState>) -> Res
         service.configurations_revision
     };
     let result = tauri::async_runtime::spawn_blocking(move || capture_suits(pid)).await;
-    let names = state
-        .inventory_database
-        .lock()
-        .ok()
-        .map(|db| {
-            Names::new(
-                db.load_current_catalog().ok().flatten().as_ref(),
-                db.load_current_game_metadata().ok().flatten().as_ref(),
-            )
-        })
-        .unwrap_or_default();
+    let names = Names(game_names::get(&state));
     let result = result
         .map_err(|_| "Не удалось завершить чтение конфигураций.".to_owned())
         .and_then(|r| r.map_err(|e| e.to_string()));
@@ -1183,6 +1173,23 @@ pub(crate) fn service(enabled: bool) -> Mutex<Service> {
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn saved_equipment_is_relocalized_without_losing_build_data() {
+        let names = Names(Arc::new(game_names::test_names()));
+        let original = json!({"key":"old", "category":"Варфрейм", "item":{"path":"/Lotus/StoreItems/Test", "name":"Test", "nameEn":"Test", "kind":"equipment", "rank":null},
+            "level":30,"forma":4,"upgrades":[],"modularParts":[],"unreadableUpgrades":0,
+            "shards":[{"color":"ACC_RED","effect":{"path":"/Lotus/Test","name":"Test","nameEn":"Test","kind":"unknown","rank":7}}],
+            "abilityOverride":{"slot":4,"ability":{"path":"/Lotus/Powers/RhinoRoarAbility","name":"","nameEn":"","kind":"unknown","rank":null}}});
+        let mut equipment: Equipment = serde_json::from_value(original).unwrap();
+        names.localize_equipment(&mut equipment);
+        assert_eq!(equipment.item.name, "Чертёж");
+        assert_eq!(equipment.item.name_en, "Test");
+        assert_eq!(equipment.forma, Some(4));
+        let shard = &equipment.shards.unwrap()[0];
+        assert_eq!(shard.effect.name, "Чертёж");
+        assert_eq!(shard.effect.rank, Some(7));
+        assert_eq!(equipment.ability_override.unwrap().ability.name, "Рёв");
+    }
     #[test]
     fn inventory_resolves_reused_references_and_keeps_unknown_positions_private() {
         let inventory = json!({

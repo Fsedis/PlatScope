@@ -339,13 +339,39 @@ pub(crate) fn mission_research_status(state: State<'_, AppState>) -> Result<Stat
 }
 #[tauri::command]
 pub(crate) fn mission_research_scene(state: State<'_, AppState>) -> Result<Option<Scene>, String> {
+    localized_scene(&state)
+}
+
+fn localized_scene(state: &AppState) -> Result<Option<Scene>, String> {
     let service = state.mission_research.lock().map_err(|e| e.to_string())?;
-    Ok(service
+    let mut scene = service
         .inner
         .lock()
         .map_err(|e| e.to_string())?
         .scene
-        .clone())
+        .clone();
+    drop(service);
+    if let Some(scene) = &mut scene {
+        localize_scene(scene, &crate::game_names::get(state));
+    }
+    Ok(scene)
+}
+
+fn localize_scene(scene: &mut Scene, names: &crate::game_names::GameNames) {
+    for object in &mut scene.objects {
+        if let Some(path) = &object.item_path
+            && let Some((ru, en, _)) = names.lookup(path)
+        {
+            if !ru.is_empty() {
+                object.label.clone_from(ru);
+            } else if !en.is_empty() {
+                object.label.clone_from(en);
+            }
+            if !en.is_empty() {
+                object.name_en.clone_from(en);
+            }
+        }
+    }
 }
 #[tauri::command]
 pub(crate) async fn mission_research_archives(app: AppHandle) -> Result<Vec<ArchiveView>, String> {
@@ -430,16 +456,7 @@ pub(crate) async fn mission_research_export(
     app: AppHandle,
 ) -> Result<String, String> {
     let state = app.state::<AppState>();
-    let scene = state
-        .mission_research
-        .lock()
-        .map_err(|e| e.to_string())?
-        .inner
-        .lock()
-        .map_err(|e| e.to_string())?
-        .scene
-        .clone()
-        .ok_or("Сначала прочитайте сцену.")?;
+    let scene = localized_scene(&state)?.ok_or("Сначала прочитайте сцену.")?;
     let root = state.data_directory.join("mission-exports");
     tauri::async_runtime::spawn_blocking(move || export(&root, &format, &scene))
         .await
@@ -527,6 +544,23 @@ mod tests {
                 {"key":"b","vertices":[[2,0,0],[3,0,0],[2,1,0]],"faces":[[0,2,1]],"adjacency":[]}
             ],"warnings":["Покрытие неполное"],"stats":{"scannedBytes":123,"objectCount":1,"meshCount":2,"vertexCount":6,"faceCount":2}
         })).unwrap()
+    }
+
+    #[test]
+    fn scene_localization_preserves_coordinates_and_identity() {
+        let mut scene = sample_scene("live");
+        scene.objects[0].item_path = Some("/Lotus/StoreItems/Test".into());
+        let before = scene.objects[0].clone();
+        localize_scene(&mut scene, &crate::game_names::test_names());
+        assert_eq!(scene.objects[0].label, "Чертёж");
+        assert_eq!(scene.objects[0].name_en, "Test");
+        assert_eq!(
+            scene.objects[0].position.map(f32::to_bits),
+            before.position.map(f32::to_bits)
+        );
+        assert_eq!(scene.objects[0].key, before.key);
+        assert_eq!(scene.objects[0].kind, before.kind);
+        assert_eq!(scene.objects[0].availability, before.availability);
     }
 
     #[test]

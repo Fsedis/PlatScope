@@ -1,3 +1,8 @@
+import { matchesSearch } from "./searchText";
+export function objectMatchesSearch(object: MissionObject, query: string): boolean {
+  return matchesSearch(query, [object.label, object.nameEn, object.itemPath, objectKindLabel(object.kind), ...object.typeNames,
+    object.kind === "feather" ? "перо перья" : object.kind === "npc" ? "неигровой персонаж" : ""]);
+}
 export type Position3 = [number, number, number];
 export type MissionObjectKind = "feather" | "pickup" | "avatar" | "npc" | "hostage" | "spawnpoint" | "panel" | "locker" | "decoration";
 export interface MissionObject {

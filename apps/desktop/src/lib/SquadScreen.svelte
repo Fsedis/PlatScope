@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import SquadRiven from "./SquadRiven.svelte";
   import { invoke } from "@tauri-apps/api/core";
-  import { buildText, partName, refinementName, shardColor, type SquadView } from "./squad";
+  import { buildText, partName, refinementName, shardColor, equipmentMatchesSearch, type SquadView } from "./squad";
 
   let view: SquadView | null = null;
   let loading = true;
@@ -27,13 +27,13 @@
   let mounted = true;
   let polling = false;
   $: members = view?.members ?? [];
-  $: saved = (view?.saved ?? []).filter(b => `${b.title} ${b.player} ${b.equipment.item.nameEn}`.toLocaleLowerCase("ru").includes(query.trim().toLocaleLowerCase("ru")));
+  $: saved = (view?.saved ?? []).filter(b => equipmentMatchesSearch(b.equipment, query, [b.title, b.player, b.note]));
   $: member = members.find(m => m.name === player) ?? members[0] ?? null;
   $: selectedBuild = saved.find(b => b.id === savedId) ?? saved[0] ?? null;
   $: if (editing && selectedBuild?.id !== editingId) editing = false;
   $: if (deleting && selectedBuild?.id !== deletingId) deleting = false;
   $: configurationCategories = [...new Set((view?.configurations ?? []).map(e => e.category))];
-  $: configurations = (view?.configurations ?? []).filter(e => (!configurationCategory || e.category === configurationCategory) && `${e.item.name} ${e.item.nameEn} ${e.item.fingerprint?.weaponName ?? ""} ${e.item.fingerprint?.weaponNameEn ?? ""} ${e.item.path}`.toLocaleLowerCase("ru").includes(configurationQuery.trim().toLocaleLowerCase("ru")));
+  $: configurations = (view?.configurations ?? []).filter(e => (!configurationCategory || e.category === configurationCategory) && equipmentMatchesSearch(e, configurationQuery));
   $: configuration = configurations.find(e => e.key === configurationKey) ?? configurations[0] ?? null;
   $: equipment = mode === "configuration" ? configuration : mode === "saved" ? selectedBuild?.equipment ?? null : member?.equipment.find(e => e.key === equipmentKey) ?? member?.equipment[0] ?? null;
   $: sourcePlayer = mode === "configuration" ? "Владелец не подтверждён" : mode === "saved" ? selectedBuild?.player ?? "" : member?.name ?? "";
@@ -123,11 +123,11 @@
           {/each}
         {:else if mode === "configuration"}
           <label class="search">Категория<select bind:value={configurationCategory}><option value="">Всё снаряжение</option>{#each configurationCategories as category}<option value={category}>{category}</option>{/each}</select></label>
-          <label class="search">Найти предмет или оружие<input type="search" bind:value={configurationQuery} placeholder="Русское или английское название" /></label>
+          <label class="search">Найти предмет или состав билда<input type="search" bind:value={configurationQuery} placeholder="Русское или английское название" /></label>
           {#if !configurations.length}<p class="empty">{configurationQuery ? "Предмет не найден. Измените запрос или категорию." : view.configurationsAt ? "Конфигурации не найдены. Откройте Арсенал и повторите чтение." : "Нажмите «Прочитать конфигурации», чтобы получить моды, ранги, осколки и моды разлома."}</p>{/if}
           {#each configurations as e (e.key)}<button class="row" class:selected={equipment?.key === e.key} onclick={() => { configurationKey = e.key; notice = ""; }}><strong>{partName(e.item)}</strong>{#if e.item.nameEn !== e.item.name}<small>{e.item.nameEn}</small>{/if}<span>{e.category}{e.configuration ? ` · Конфигурация ${e.configuration}` : ""}</span>{#if e.item.fingerprint}<small>{e.item.fingerprint.weaponName || e.item.fingerprint.weaponNameEn || "Оружие не определено"}</small>{/if}</button>{/each}
         {:else}
-          <label class="search">Найти билд<input type="search" bind:value={query} placeholder="Название или игрок" /></label>
+          <label class="search">Найти билд<input type="search" bind:value={query} placeholder="Предмет, мод, способность или игрок" /></label>
           {#if !saved.length}<div class="empty"><strong>{query ? "Билды не найдены" : "Коллекция пока пуста"}</strong><p>{query ? "Измените поисковый запрос." : "Откройте предмет сопартийца в текущем отряде и нажмите «Сохранить билд»."}</p></div>{/if}
           {#each saved as b (b.id)}
             <button class="row" class:selected={selectedBuild?.id === b.id} onclick={() => { savedId = b.id; editing = false; deleting = false; notice = ""; }}><strong>{b.title}</strong><small>{b.player} · {b.equipment.category}</small><span>{date(b.savedAt)}</span></button>

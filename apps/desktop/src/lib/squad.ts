@@ -1,3 +1,5 @@
+import { matchesSearch } from "./searchText";
+
 export interface RivenFingerprint {
   weaponPath: string | null; weaponName: string | null; weaponNameEn: string | null;
   masteryRank: number | null; rerolls: number | null; polarity: string | null;
@@ -35,6 +37,16 @@ export function shardColor(color: string): string {
   return base ? `${base}${color.endsWith("_MYTHIC") ? " · усиленный" : ""}` : "Неизвестный цвет";
 }
 export function partName(part: SquadPart): string { return part.name || part.nameEn || "Неизвестный предмет"; }
+export function equipmentMatchesSearch(equipment: SquadEquipment, query: string, extra: string[] = []): boolean {
+  const parts = [equipment.item, ...equipment.upgrades, ...equipment.modularParts,
+    ...(equipment.upgradeSlots ?? []).flatMap(slot => slot.part ? [slot.part] : []),
+    ...(equipment.shards ?? []).map(shard => shard.effect),
+    ...[equipment.abilityOverride?.ability, equipment.context?.focus, equipment.context?.relic].filter((part): part is SquadPart => Boolean(part))];
+  return matchesSearch(query, [equipment.category, ...extra,
+    ...(equipment.shards ?? []).map(shard => shardColor(shard.color)),
+    ...parts.flatMap(part => [part.name, part.nameEn, part.path, part.fingerprint?.weaponName, part.fingerprint?.weaponNameEn,
+      ...(part.fingerprint ? [...part.fingerprint.buffs, ...part.fingerprint.curses].map(stat => rivenStatName(stat.tag)) : [])])]);
+}
 export function rivenStatName(tag: string): string {
   const names: Record<string,string> = { ComboDurationMod:"Длительность комбо", SlideAttackCritChanceMod:"Шанс крита при атаке в скольжении", WeaponCritChanceMod:"Шанс критического удара", WeaponCritDamageMod:"Критический урон", WeaponDamageAmountMod:"Урон", WeaponElectricityDamageMod:"Урон электричеством", WeaponFactionDamageCorpus:"Урон по Корпусу", WeaponFactionDamageGrineer:"Урон по Гринир", WeaponFactionDamageInfested:"Урон по заражённым", WeaponMeleeFactionDamageInfested:"Урон по заражённым", WeaponFireIterationsMod:"Мультивыстрел", WeaponFireRateMod:"Скорость стрельбы / атаки", WeaponImpactDamageMod:"Ударный урон", WeaponMeleeComboBonusOnHitMod:"Вероятность дополнительного счётчика комбо", WeaponReloadSpeedMod:"Скорость перезарядки", WeaponSlashDamageMod:"Режущий урон", WeaponStunChanceMod:"Шанс статуса" };
   return names[tag] ?? tag;
