@@ -78,6 +78,10 @@ internal static partial class Program
                 }, JsonOptions));
                 return 0;
             }
+            if (args.FirstOrDefault() == "--self-test-trigger")
+            {
+                return RunRewardTriggerRegression() ? 0 : 3;
+            }
             if (args.FirstOrDefault() == "--self-test-russian")
             {
                 return RunRussianSelfTest();
@@ -231,7 +235,7 @@ internal static partial class Program
             && CountMatched(twoPlayerResult) == 2
             && twoPlayerResult.Rewards.Count == 2;
         var matchingIsValid = RunMatchingRegression(engine);
-        return layoutsAreValid && matchingIsValid ? 0 : 3;
+        return layoutsAreValid && matchingIsValid && RunRewardTriggerRegression() ? 0 : 3;
     }
 
     private static Bitmap BuildRussianSelfTestScreenshot(IReadOnlyList<string> labels)
@@ -1294,9 +1298,10 @@ internal static class DbwinRewardWatcher
         return 0;
     }
 
-    private static bool IsRewardMarker(string line) =>
+    // OpenVoidProjectionRewardScreen сообщает о начале открытия, а не о готовых карточках.
+    // В отряде до Got rewards проходит больше окна OCR; ранний запуск поглощал готовность cooldown.
+    internal static bool IsRewardMarker(string line) =>
         line.Contains("ProjectionRewardChoice.lua: Got rewards", StringComparison.Ordinal)
-        || line.Contains("VoidProjections: OpenVoidProjectionRewardScreen", StringComparison.Ordinal)
         || line.Contains("ProjectionRewardChoice.lua: Missing icon data!", StringComparison.Ordinal);
 
     private static bool TryGetProjectionPath(string line, out string path)

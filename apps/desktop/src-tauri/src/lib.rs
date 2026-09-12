@@ -3890,7 +3890,6 @@ fn handle_reward_trigger_event(app_handle: &AppHandle, event: RewardTriggerEvent
 fn reward_log_contains_reward_screen(log: &str) -> bool {
     log.contains("Got rewards")
         || log.contains("ProjectionRewardChoice.lua: Missing icon data!")
-        || log.contains("VoidProjections: OpenVoidProjectionRewardScreen")
 }
 
 fn reward_log_projection_paths(log: &str) -> HashSet<String> {
@@ -4747,7 +4746,7 @@ mod tests {
 
     #[test]
     fn reward_log_markers_match_current_warframe_messages() {
-        assert!(reward_log_contains_reward_screen(
+        assert!(!reward_log_contains_reward_screen(
             "Script [Info]: VoidProjections: OpenVoidProjectionRewardScreen"
         ));
         assert!(reward_log_contains_reward_screen(
