@@ -28,6 +28,21 @@ export function indexMissionFilters(filters: CustomMissionFilter[]): MissionFilt
   }
   return index;
 }
+/** Выключенный фильтр скрывает точки, но сохраняет поиск назначенных ему типов. */
+export function missionDiscoveryKeys(filters: CustomMissionFilter[]): string[] {
+  return [...new Set(filters.flatMap(filter => filter.rules.map(rule => canonicalRuleKey(rule.key))))].sort();
+}
+/** Одна строка на вариант; первый объект сохраняет выбранную сортировку списка. */
+export function groupMissionObjects(objects: MissionObject[], grouped: boolean): { key: string; object: MissionObject; count: number }[] {
+  const groups = new Map<string, { key: string; object: MissionObject; count: number }>();
+  for (const object of objects) {
+    const key = grouped && object.kind !== "avatar"
+      ? JSON.stringify([objectRule(object).key, object.availability, object.positionFresh !== false]) : object.key;
+    const entry = groups.get(key);
+    if (entry) entry.count++; else groups.set(key, { key, object, count: 1 });
+  }
+  return [...groups.values()];
+}
 export function countMissionFilters(objects: MissionObject[], index: MissionFilterIndex): Map<string, number> {
   const counts = new Map<string, number>();
   for (const object of objects) for (const id of objectFilterEntry(object, index)?.groups ?? []) counts.set(id, (counts.get(id) ?? 0) + 1);

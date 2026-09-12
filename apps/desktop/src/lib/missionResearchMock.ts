@@ -71,6 +71,7 @@ export function makeMissionResearchMock(variant: string | null = null) {
     }
     if (command === "mission_research_cancel") { status = { ...status, busy: false, cancelling: false, phase: "Чтение отменено" }; return structuredClone(status); }
     if (command === "mission_research_export") { if (!scene) throw "Сначала прочитайте миссию."; if (args.format !== "json" && args.format !== "obj") throw "Неизвестный формат."; return `C:\\PlatScope\\diagnostics\\mission-research\\mission-preview.${args.format}`; }
+    if (command === "mission_research_filters") return null;
     if (command === "mission_research_track") { if (args.enabled && (!scene || scene.source !== "live")) throw "Сначала прочитайте миссию из игры."; status.tracking = Boolean(args.enabled); return structuredClone(status); }
     throw `Неизвестная команда исследования: ${command}`;
   };

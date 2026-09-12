@@ -437,7 +437,7 @@
       inventory: selectedCopy.inventoryLede,
       equipped_mods: selectedCopy.equippedModsLede,
       squad: "Посмотрите экипировку сопартийцев и сохраните идеи для своих билдов.",
-      mission: "Живая карта предметов и персонажей. Записи для разбора после миссии.",
+      mission: "Находите предметы на карте и объединяйте их в свои фильтры.",
       insights: selectedCopy.insightsLede,
       bounty_hunter: selectedCopy.bountyHunterLede,
       settings: selectedCopy.settingsLede,

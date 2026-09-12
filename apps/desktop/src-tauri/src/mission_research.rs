@@ -16,7 +16,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tauri::{AppHandle, Manager, State};
 
@@ -43,6 +43,7 @@ struct Inner {
     generation: u64,
     live_pid: Option<u32>,
     desired_live: bool,
+    discovery_rules: Arc<spatial::DiscoveryRules>,
 }
 #[derive(Default)]
 pub(crate) struct Service {
@@ -216,15 +217,20 @@ impl Service {
             .name("mission-position-refresh".into())
             .spawn(move || {
                 while !cancel.load(Ordering::Relaxed) {
+                    let tick_started = Instant::now();
                     let sample = shared.lock().ok().and_then(|s| {
                         (s.generation == generation && s.status.tracking)
-                            .then(|| s.scene.clone().map(|scene| (scene, s.status.revision)))
+                            .then(|| {
+                                s.scene.clone().map(|scene| {
+                                    (scene, s.status.revision, s.discovery_rules.clone())
+                                })
+                            })
                             .flatten()
                     });
-                    let Some((scene, revision)) = sample else {
+                    let Some((scene, revision, rules)) = sample else {
                         break;
                     };
-                    let result = spatial::refresh_live(pid, &scene, &cancel);
+                    let result = spatial::refresh_live_filtered(pid, &scene, &rules, &cancel);
                     if let Ok(mut inner) = shared.lock() {
                         if inner.generation != generation || cancel.load(Ordering::Relaxed) {
                             break;
@@ -257,11 +263,13 @@ impl Service {
                             }
                         }
                     }
-                    for _ in 0..10 {
+                    while let Some(remaining) =
+                        Duration::from_secs(1).checked_sub(tick_started.elapsed())
+                    {
                         if cancel.load(Ordering::Relaxed) {
                             break;
                         }
-                        std::thread::sleep(Duration::from_millis(100));
+                        std::thread::sleep(remaining.min(Duration::from_millis(100)));
                     }
                 }
             });
@@ -575,6 +583,20 @@ pub(crate) fn mission_research_track(
         .lock()
         .map_err(|e| e.to_string())?
         .track(enabled)
+}
+#[tauri::command]
+pub(crate) fn mission_research_filters(
+    keys: Vec<String>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let rules = spatial::DiscoveryRules::parse(keys)?;
+    let service = state.mission_research.lock().map_err(|e| e.to_string())?;
+    service
+        .inner
+        .lock()
+        .map_err(|e| e.to_string())?
+        .discovery_rules = Arc::new(rules);
+    Ok(())
 }
 #[tauri::command]
 pub(crate) async fn mission_research_export(

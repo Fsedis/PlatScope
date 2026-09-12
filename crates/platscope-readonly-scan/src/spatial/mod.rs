@@ -3,13 +3,16 @@ mod analyze;
 mod archive;
 mod cache;
 mod context;
+mod filter_discovery;
 mod geometry;
 mod profile;
 mod source;
 mod types;
 
+pub use analyze::refresh_live_filtered;
 pub use analyze::{LocalPose, LocalPoseReader, analyze_archive, analyze_live, refresh_live};
 pub use archive::ArchiveMemory;
+pub use filter_discovery::DiscoveryRules;
 use serde::{Deserialize, Serialize};
 pub use source::{Memory, MemoryModule, MemoryRange};
 use std::{path::Path, sync::atomic::AtomicBool};
@@ -109,6 +112,8 @@ pub struct Scene {
     pub(crate) discovery_ranges: Vec<MemoryRange>,
     #[serde(skip)]
     pub(crate) discovery_cursor: usize,
+    #[serde(skip)]
+    pub(crate) filter_discovery: filter_discovery::DiscoveryState,
 }
 #[derive(Clone, Debug)]
 pub(crate) struct Identity {

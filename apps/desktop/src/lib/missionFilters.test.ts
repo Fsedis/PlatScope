@@ -1,11 +1,30 @@
 import { describe, expect, it } from "vitest";
-import { addFilterObjects, objectRule, objectIsVisible, filterColor, parseMissionFilters, serializeMissionFilters, type CustomMissionFilter } from "./missionFilters";
+import { addFilterObjects, objectRule, objectIsVisible, filterColor, parseMissionFilters, serializeMissionFilters, missionDiscoveryKeys, groupMissionObjects, type CustomMissionFilter } from "./missionFilters";
 import type { MissionObject, MissionFilter } from "./missionResearch";
 const object = (extra: Partial<MissionObject> = {}): MissionObject => ({ key:"address-old", kind:"decoration", label:"Деталь окружения", nameEn:"Panel", itemPath:null, position:[1,2,3], typeNames:["Decoration"], availability:"unknown", details:[{label:"Ресурс",value:"/Lotus/Levels/Panel"}], ...extra });
 const filter = (extra: Partial<CustomMissionFilter> = {}): CustomMissionFilter => ({id:"custom",name:"Мои панели",color:"#cc55aa",enabled:true,rules:[],...extra});
 const standard: Record<MissionFilter, boolean> = {feather:true,pickup:true,players:true,npc:false,other:true,goals:true,lootspots:false,caches:true};
 
 describe("свои фильтры карты", () => {
+  it("сворачивает одинаковые экземпляры, сохраняя разные варианты, состояния и игроков", () => {
+    const first = object({ variantKey: "variant-a", kind: "cache", availability: "available" });
+    const copy = {...first, key: "copy"};
+    const opened = {...first, key: "opened", availability: "opened" as const};
+    const other = {...first, key: "other", variantKey: "variant-b"};
+    const players = [object({key:"player-1", kind:"avatar"}), object({key:"player-2", kind:"avatar"})];
+    const entries = groupMissionObjects([first,copy,opened,other,...players],true);
+    expect(entries.map(entry => entry.count)).toEqual([2,1,1,1,1]);
+    expect(entries[0].object).toBe(first);
+    expect(groupMissionObjects([first,copy],false)).toHaveLength(2);
+  });
+  it("передаёт сохранённые типы в поиск без дублей, включая скрытые группы", () => {
+    const first = addFilterObjects(filter(), [object()]);
+    const hidden = { ...first, id: "hidden", enabled: false };
+    const restored = parseMissionFilters(serializeMissionFilters([first, hidden]));
+    expect(missionDiscoveryKeys(restored)).toEqual([objectRule(object()).key]);
+    expect(missionDiscoveryKeys([hidden])).toEqual(missionDiscoveryKeys(restored));
+    expect(missionDiscoveryKeys([])).toEqual([]);
+  });
   it("включает все экземпляры при полном и коротком пути, в том числе из сохранённого фильтра", () => {
     const copies = [object(), object({ key: "another", details: [{ label: "Ресурс", value: "Panel" }] })];
     const saved = filter({ rules: [{ key: JSON.stringify(["decoration", "resource", "/Lotus/Levels/Panel"]), label: "Панель", nameEn: "Panel" }] });

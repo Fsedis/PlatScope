@@ -4132,6 +4132,7 @@ pub fn run() {
             mission_research::mission_research_analyze_archive,
             mission_research::mission_research_cancel,
             mission_research::mission_research_track,
+            mission_research::mission_research_filters,
             mission_research::mission_research_export,
             squad::squad_status,
             memory_recording::memory_recording_status,
