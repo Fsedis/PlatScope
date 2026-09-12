@@ -4,6 +4,8 @@
     | "market"
     | "inventory"
     | "equipped_mods"
+    | "squad"
+    | "mission"
     | "insights"
     | "bounty_hunter"
     | "settings";
@@ -12,6 +14,10 @@
 <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
   {#if screen === "world_activity"}
     <circle cx="12" cy="12" r="9" /><path d="M12 6v6l4 2M3 12h2m14 0h2M12 3v2m0 14v2" />
+  {:else if screen === "squad"}
+    <circle cx="9" cy="7" r="3" /><path d="M3 21v-3a6 6 0 0 1 12 0v3M16 4a3 3 0 0 1 0 6m2 4a5 5 0 0 1 3 4v3" />
+  {:else if screen === "mission"}
+    <path d="m3 5 6-2 6 2 6-2v16l-6 2-6-2-6 2zM9 3v16m6-14v16" /><circle cx="12" cy="11" r="2" />
   {:else if screen === "market"}
     <path d="M4 17V9m5 8V5m5 12v-6m5 6V3M3 20h18" />
   {:else if screen === "inventory"}

@@ -7,3 +7,9 @@ pub mod error;
 pub mod inventory;
 mod poison;
 pub mod scan;
+pub mod squad;
+pub mod squad_log;
+
+pub mod binary_snapshot;
+pub mod research;
+pub mod spatial;

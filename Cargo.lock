@@ -466,6 +466,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ad534f4357a5264cce5019c989cf66a4f0dc4e0d1b1d15f8aacec0ff7360273"
 dependencies = [
  "find-msvc-tools",
+ "jobserver",
+ "libc",
  "shlex",
 ]
 
@@ -2104,6 +2106,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "jobserver"
+version = "0.1.35"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1c00acbd29eabad4a2392fa0e921c874934dbbf4194312ad20f04a0ed67a3cb3"
+dependencies = [
+ "getrandom 0.4.3",
+ "libc",
+]
+
+[[package]]
 name = "js-sys"
 version = "0.3.104"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2940,7 +2952,7 @@ checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
 
 [[package]]
 name = "platscope-account"
-version = "0.1.76"
+version = "0.1.77"
 dependencies = [
  "chrono",
  "futures-util",
@@ -2956,7 +2968,7 @@ dependencies = [
 
 [[package]]
 name = "platscope-core"
-version = "0.1.76"
+version = "0.1.77"
 dependencies = [
  "chrono",
  "hex",
@@ -2981,7 +2993,7 @@ dependencies = [
 
 [[package]]
 name = "platscope-desktop"
-version = "0.1.76"
+version = "0.1.77"
 dependencies = [
  "chrono",
  "platscope-core",
@@ -3005,7 +3017,7 @@ dependencies = [
 
 [[package]]
 name = "platscope-domain"
-version = "0.1.76"
+version = "0.1.77"
 dependencies = [
  "chrono",
  "serde",
@@ -3015,7 +3027,7 @@ dependencies = [
 
 [[package]]
 name = "platscope-insights"
-version = "0.1.76"
+version = "0.1.77"
 dependencies = [
  "platscope-domain",
  "serde",
@@ -3023,7 +3035,7 @@ dependencies = [
 
 [[package]]
 name = "platscope-inventory"
-version = "0.1.76"
+version = "0.1.77"
 dependencies = [
  "chrono",
  "hex",
@@ -3035,7 +3047,7 @@ dependencies = [
 
 [[package]]
 name = "platscope-pricing"
-version = "0.1.76"
+version = "0.1.77"
 dependencies = [
  "chrono",
  "platscope-domain",
@@ -3045,7 +3057,7 @@ dependencies = [
 
 [[package]]
 name = "platscope-providers"
-version = "0.1.76"
+version = "0.1.77"
 dependencies = [
  "async-trait",
  "chrono",
@@ -3064,24 +3076,28 @@ dependencies = [
 
 [[package]]
 name = "platscope-readonly-scan"
-version = "0.1.76"
+version = "0.1.77"
 dependencies = [
  "anyhow",
  "chrono",
+ "flate2",
+ "memchr",
  "platscope-domain",
  "platscope-inventory",
  "regex",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "sha2",
  "sysinfo",
  "windows 0.58.0",
  "zeroize",
+ "zstd-safe",
 ]
 
 [[package]]
 name = "platscope-selling"
-version = "0.1.76"
+version = "0.1.77"
 dependencies = [
  "platscope-domain",
  "platscope-trends",
@@ -3090,7 +3106,7 @@ dependencies = [
 
 [[package]]
 name = "platscope-storage"
-version = "0.1.76"
+version = "0.1.77"
 dependencies = [
  "chrono",
  "platscope-domain",
@@ -3102,7 +3118,7 @@ dependencies = [
 
 [[package]]
 name = "platscope-trends"
-version = "0.1.76"
+version = "0.1.77"
 dependencies = [
  "chrono",
  "platscope-domain",
@@ -3111,7 +3127,7 @@ dependencies = [
 
 [[package]]
 name = "platscope-wfm"
-version = "0.1.76"
+version = "0.1.77"
 dependencies = [
  "tokio",
 ]
@@ -6440,6 +6456,25 @@ name = "zmij"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
+
+[[package]]
+name = "zstd-safe"
+version = "7.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "64d80649ab6db9d9f6f9c80a40becd948eda4714a0a5ac8c4d157a32231c7882"
+dependencies = [
+ "zstd-sys",
+]
+
+[[package]]
+name = "zstd-sys"
+version = "2.1.0+zstd.1.5.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ef0a8027ec3ee71300ab3bcbcd0393f434aa72b91ca6d635a39941deae8eea0"
+dependencies = [
+ "cc",
+ "pkg-config",
+]
 
 [[package]]
 name = "zvariant"

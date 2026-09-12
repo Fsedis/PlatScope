@@ -1,4 +1,7 @@
 import { mockIPC } from "@tauri-apps/api/mocks";
+import { makeDbwinCaptureMock } from "./dbwinCaptureMock";
+import { makeSquadMock } from "./squadMock";
+import { makeMissionResearchMock } from "./missionResearchMock";
 import { makeMasteryMock } from "./masteryMock";
 import { makeWorldActivityMock } from "./worldActivityMock";
 import { makeOpportunityPlanMock } from "./opportunityPlanMock";
@@ -333,6 +336,7 @@ function connectedDemoAccount(): AccountView {
 
 export async function installMarketBrowserMock(): Promise<void> {
   const mockOptions = new URLSearchParams(window.location.search);
+  const dbwinCaptureMock = makeDbwinCaptureMock(mockOptions.get("mockDbwin"));
   let inventoryRefreshEnabled = true;
   let inventoryPriceChecks = 0;
   let accountReads = 0;
@@ -406,7 +410,12 @@ export async function installMarketBrowserMock(): Promise<void> {
       inventory.summary.sellableQuantity = inventory.items.reduce((total, item) => total + item.sellableQuantity, 0);
     }
   }
+  const squadMock = makeSquadMock();
+  const missionMock = makeMissionResearchMock(mockOptions.get("mockMission"));
   mockIPC((command, args) => {
+    if (command.startsWith("mission_research_")) return missionMock(command, args as Record<string, unknown> | undefined);
+    if (command.startsWith("squad_") || command.startsWith("memory_recording_") || command.startsWith("binary_recording_")) return squadMock(command, args as Record<string, unknown> | undefined);
+    if (["dbwin_capture_status", "start_dbwin_capture", "stop_dbwin_capture", "mark_dbwin_capture", "open_dbwin_capture_folder"].includes(command)) return dbwinCaptureMock(command, args as Record<string, unknown> | undefined);
     const savedGoals = (): MockSavedGoal[] => {
       try { const value: unknown = JSON.parse(localStorage.getItem("platscope.mock.personal-goals") ?? "[]"); return Array.isArray(value) ? value.flatMap(entry => typeof entry === "string" ? [{setSlug:entry,completedAt:null,completionPending:false}] : entry && typeof entry.setSlug === "string" ? [entry as MockSavedGoal] : []) : []; } catch { return []; }
     };

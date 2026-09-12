@@ -10,6 +10,8 @@
   import WorldActivityScreen from "./lib/WorldActivityScreen.svelte";
   import { startWorldActivityAlerts, worldPreferences } from "./lib/worldActivityStore";
   import EquippedModsScreen from "./lib/EquippedModsScreen.svelte";
+  import SquadScreen from "./lib/SquadScreen.svelte";
+  import MissionResearch from "./lib/MissionResearch.svelte";
   import MarketActionIcon from "./lib/MarketActionIcon.svelte";
   import MarketItemDetail from "./lib/MarketItemDetail.svelte";
   import InsightsScreen from "./lib/InsightsScreen.svelte";
@@ -126,7 +128,7 @@
 
   $: shell = shellCopy[$locale];
   $: navigationLabels = { world_activity: shell.worldActivity, market: shell.market, inventory: shell.inventory,
-    equipped_mods: shell.equippedMods, insights: shell.insights, bounty_hunter: shell.bountyHunter, settings: shell.settings };
+    equipped_mods: shell.equippedMods, squad: "Отряд и билды", mission: "Миссия", insights: shell.insights, bounty_hunter: shell.bountyHunter, settings: shell.settings };
 
   let status: FoundationStatus | null = null;
   let refreshOutcome: MarketRefreshOutcome | null = null;
@@ -420,6 +422,8 @@
       market: selectedCopy.market,
       inventory: selectedCopy.inventory,
       equipped_mods: selectedCopy.equippedMods,
+      squad: "Отряд и билды",
+      mission: "Миссия",
       insights: selectedCopy.insights,
       bounty_hunter: selectedCopy.bountyHunter,
       settings: selectedCopy.settings,
@@ -432,6 +436,8 @@
       market: selectedCopy.marketLede,
       inventory: selectedCopy.inventoryLede,
       equipped_mods: selectedCopy.equippedModsLede,
+      squad: "Посмотрите экипировку сопартийцев и сохраните идеи для своих билдов.",
+      mission: "Живая карта предметов и персонажей. Записи для разбора после миссии.",
       insights: selectedCopy.insightsLede,
       bounty_hunter: selectedCopy.bountyHunterLede,
       settings: selectedCopy.settingsLede,
@@ -746,6 +752,10 @@
     />
   {:else if activeScreen === "equipped_mods"}
     <EquippedModsScreen onInventoryChange={() => void loadStatus()} />
+  {:else if activeScreen === "squad"}
+    <SquadScreen />
+  {:else if activeScreen === "mission"}
+    <MissionResearch />
   {:else if activeScreen === "insights"}
     <InsightsScreen
       onOpenSettings={() => navigateTo("settings")}

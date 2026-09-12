@@ -1,9 +1,14 @@
 #![forbid(unsafe_code)]
 
 mod app_lifecycle;
+mod binary_recording;
+mod dbwin_capture;
 mod inventory_refresh;
 mod market_account;
 mod market_profiles;
+mod memory_recording;
+mod mission_research;
+mod squad;
 mod trade_log;
 
 use std::collections::{HashMap, HashSet};
@@ -65,6 +70,11 @@ struct AppState {
     read_only_inventory_scanner: Arc<ReadOnlyInventoryScanner>,
     reward_scan_in_flight: AtomicBool,
     reward_realtime_active: AtomicBool,
+    dbwin_capture: Mutex<dbwin_capture::Recorder>,
+    squad: Mutex<squad::Service>,
+    memory_recording: Mutex<memory_recording::Recorder>,
+    binary_recording: Mutex<binary_recording::Recorder>,
+    mission_research: Mutex<mission_research::Service>,
     reward_relic_paths: Mutex<HashSet<String>>,
     latest_reward_scan: Mutex<Option<RelicRewardScanView>>,
     reward_overlay_generation: AtomicU64,
@@ -138,6 +148,11 @@ struct RewardTriggerEvent {
     path: Option<String>,
     reset: Option<bool>,
     source: Option<String>,
+    debug_capture_supported: Option<bool>,
+    process_id: Option<u32>,
+    received_at: Option<DateTime<Utc>>,
+    message: Option<String>,
+    raw_base64: Option<String>,
 }
 
 struct RewardScanGuard<'a>(&'a AtomicBool);
@@ -3594,6 +3609,17 @@ fn handle_reward_markers(
         .collect();
 }
 
+fn reset_log_consumers(app: &AppHandle) {
+    if let Ok(service) = app.state::<AppState>().mission_research.lock() {
+        service.invalidate();
+    }
+    app.state::<AppState>().inventory_refresh.reset_log();
+    if let Ok(mut squad) = app.state::<AppState>().squad.lock() {
+        squad.reset();
+    }
+}
+
+#[allow(clippy::too_many_lines)]
 fn spawn_reward_log_watcher(app_handle: AppHandle) {
     tauri::async_runtime::spawn(async move {
         let Some(path) = std::env::var_os("LOCALAPPDATA")
@@ -3620,7 +3646,7 @@ fn spawn_reward_log_watcher(app_handle: AppHandle) {
             interval.tick().await;
             let Ok(metadata) = fs::metadata(&path) else {
                 if offset.is_some() {
-                    app_handle.state::<AppState>().inventory_refresh.reset_log();
+                    reset_log_consumers(&app_handle);
                 }
                 offset = None;
                 log_created = None;
@@ -3643,7 +3669,7 @@ fn spawn_reward_log_watcher(app_handle: AppHandle) {
                 continue;
             };
             if file_len < current_offset || metadata.created().ok() != log_created {
-                app_handle.state::<AppState>().inventory_refresh.reset_log();
+                reset_log_consumers(&app_handle);
                 log_created = metadata.created().ok();
                 offset = Some(0);
                 reward_live_from = Some(0);
@@ -3664,6 +3690,10 @@ fn spawn_reward_log_watcher(app_handle: AppHandle) {
                 continue;
             };
             offset = Some(new_offset);
+            if let Ok(mut squad) = app_handle.state::<AppState>().squad.lock() {
+                squad.feed(&chunk);
+                squad.set_log_ready(new_offset == file_len);
+            }
             let now_ms = u64::try_from(watcher_started.elapsed().as_millis()).unwrap_or(u64::MAX);
             handle_trade_log_chunk(
                 &app_handle,
@@ -3681,6 +3711,10 @@ fn spawn_reward_log_watcher(app_handle: AppHandle) {
                     .unwrap_or(usize::MAX)
                     .min(chunk.len());
                 if let Some(live_chunk) = chunk.get(skip..) {
+                    if let Ok(mut service) = app_handle.state::<AppState>().mission_research.lock()
+                    {
+                        service.feed_log(live_chunk);
+                    }
                     app_handle
                         .state::<AppState>()
                         .inventory_refresh
@@ -3738,6 +3772,9 @@ fn spawn_reward_realtime_watcher(app_handle: AppHandle) {
             .state::<AppState>()
             .reward_realtime_active
             .store(false, Ordering::Release);
+        if let Ok(mut recorder) = app_handle.state::<AppState>().dbwin_capture.lock() {
+            recorder.disconnected();
+        }
         let status = child.wait().ok().and_then(|result| result.code());
         tracing::warn!(
             event = "reward_realtime_watcher_stopped",
@@ -3762,6 +3799,7 @@ fn start_reward_realtime_process(
     command
         .arg("--watch-warframe-log")
         .arg(std::process::id().to_string())
+        .arg("--forward-debug-lines")
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
     if watcher_payload.is_some() {
@@ -3785,6 +3823,12 @@ fn start_reward_realtime_process(
 fn handle_reward_trigger_event(app_handle: &AppHandle, event: RewardTriggerEvent) {
     match event.event_type.as_str() {
         "ready" => {
+            if let Ok(mut recorder) = app_handle.state::<AppState>().dbwin_capture.lock() {
+                recorder.connected(
+                    event.debug_capture_supported.unwrap_or(false),
+                    event.already_exists.unwrap_or(false),
+                );
+            }
             app_handle
                 .state::<AppState>()
                 .reward_realtime_active
@@ -3794,6 +3838,17 @@ fn handle_reward_trigger_event(app_handle: &AppHandle, event: RewardTriggerEvent
                 shared_listener_already_existed = event.already_exists.unwrap_or(false),
                 "real-time Warframe reward trigger is ready"
             );
+        }
+        "debug_line" => {
+            if let (Some(pid), Some(received_at), Some(message), Some(raw)) = (
+                event.process_id,
+                event.received_at,
+                event.message,
+                event.raw_base64,
+            ) && let Ok(mut recorder) = app_handle.state::<AppState>().dbwin_capture.lock()
+            {
+                recorder.record(pid, received_at, &message, &raw);
+            }
         }
         "reward" => {
             tracing::info!(
@@ -3831,7 +3886,9 @@ fn handle_reward_trigger_event(app_handle: &AppHandle, event: RewardTriggerEvent
 }
 
 fn reward_log_contains_reward_screen(log: &str) -> bool {
-    log.contains("Got rewards") || log.contains("ProjectionRewardChoice.lua: Missing icon data!")
+    log.contains("Got rewards")
+        || log.contains("ProjectionRewardChoice.lua: Missing icon data!")
+        || log.contains("VoidProjections: OpenVoidProjectionRewardScreen")
 }
 
 fn reward_log_projection_paths(log: &str) -> HashSet<String> {
@@ -3959,7 +4016,13 @@ async fn refresh_game_metadata_in_background(app_handle: &AppHandle, state: &App
 
 fn desktop_builder() -> tauri::Builder<tauri::Wry> {
     tauri::Builder::default()
-        .on_window_event(app_lifecycle::handle_window_event)
+        .on_window_event(|window, event| {
+            dbwin_capture::on_close(window, event);
+            memory_recording::on_close(window, event);
+            binary_recording::on_close(window, event);
+            mission_research::on_close(window, event);
+            app_lifecycle::handle_window_event(window, event);
+        })
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -4009,6 +4072,11 @@ pub fn run() {
                 "PlatScope foundation initialized"
             );
 
+            let squad = squad::service(
+                database
+                    .get_setting::<bool>("squad.enabled.v1")?
+                    .unwrap_or(true),
+            );
             app.manage(AppState {
                 database: Mutex::new(database),
                 reward_database: Mutex::new(reward_database),
@@ -4027,6 +4095,11 @@ pub fn run() {
                 read_only_inventory_scanner: Arc::new(ReadOnlyInventoryScanner::new()),
                 reward_scan_in_flight: AtomicBool::new(false),
                 reward_realtime_active: AtomicBool::new(false),
+                dbwin_capture: Mutex::new(dbwin_capture::Recorder::default()),
+                memory_recording: Mutex::new(memory_recording::Recorder::default()),
+                binary_recording: Mutex::new(binary_recording::Recorder::default()),
+                mission_research: Mutex::new(mission_research::Service::default()),
+                squad,
                 reward_relic_paths: Mutex::new(HashSet::new()),
                 latest_reward_scan: Mutex::new(None),
                 reward_overlay_generation: AtomicU64::new(0),
@@ -4040,11 +4113,46 @@ pub fn run() {
             spawn_reward_log_watcher(app.handle().clone());
             inventory_refresh::spawn(app.handle().clone());
             spawn_reward_realtime_watcher(app.handle().clone());
+            dbwin_capture::spawn_limit_check(app.handle().clone());
+            squad::spawn(app.handle().clone());
+            memory_recording::spawn(app.handle().clone());
+            mission_research::spawn(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             foundation_status,
+            mission_research::mission_research_status,
+            mission_research::mission_research_scene,
+            mission_research::mission_research_archives,
+            mission_research::mission_research_scan_live,
+            mission_research::mission_research_analyze_archive,
+            mission_research::mission_research_cancel,
+            mission_research::mission_research_track,
+            mission_research::mission_research_export,
+            squad::squad_status,
+            memory_recording::memory_recording_status,
+            memory_recording::memory_recording_start,
+            memory_recording::memory_recording_stop,
+            memory_recording::memory_recording_sample,
+            memory_recording::memory_recording_folder,
+            binary_recording::binary_recording_status,
+            binary_recording::binary_recording_start,
+            binary_recording::binary_recording_stop,
+            binary_recording::binary_recording_sample,
+            binary_recording::binary_recording_folder,
+            squad::squad_read_configurations,
+            squad::squad_set_enabled,
+            squad::squad_refresh,
+            squad::squad_save_build,
+            squad::squad_edit_build,
+            squad::squad_delete_build,
+            squad::squad_export_text,
             diagnostics_status,
+            dbwin_capture::dbwin_capture_status,
+            dbwin_capture::start_dbwin_capture,
+            dbwin_capture::stop_dbwin_capture,
+            dbwin_capture::mark_dbwin_capture,
+            dbwin_capture::open_dbwin_capture_folder,
             export_diagnostics_report,
             refresh_market_data,
             refresh_game_metadata,
@@ -4634,6 +4742,9 @@ mod tests {
 
     #[test]
     fn reward_log_markers_match_current_warframe_messages() {
+        assert!(reward_log_contains_reward_screen(
+            "Script [Info]: VoidProjections: OpenVoidProjectionRewardScreen"
+        ));
         assert!(reward_log_contains_reward_screen(
             "Script [Info]: Got rewards; waiting for choice"
         ));

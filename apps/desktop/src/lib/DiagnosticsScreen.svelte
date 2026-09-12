@@ -1,6 +1,7 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { onMount } from "svelte";
+  import DbwinCapture from "./DbwinCapture.svelte";
   import { localeCode, useLocale } from "./i18n";
 
   import { describeFoundationStatus, providerLabel } from "./foundation";
@@ -80,6 +81,7 @@
 </script>
 
 <div class="diagnostics-shell" aria-busy={loading}>
+  <DbwinCapture />
   <div class="diagnostics-intro" aria-label={c.localState}>
     <div class="intro-actions">
       <button type="button" onclick={loadDiagnostics} disabled={loading || exporting}>

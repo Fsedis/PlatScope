@@ -7,6 +7,7 @@
 /apps/desktop/src-tauri/resources/THIRD_PARTY_NOTICES.md
 /apps/desktop/src-tauri/resources/reward-ocr/
 /coverage/
+**/__pycache__/
 .env
 .env.*
 !.env.example

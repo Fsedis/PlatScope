@@ -58,7 +58,8 @@ internal static partial class Program
                 return DbwinRewardWatcher.Run(
                     parentProcessId,
                     args.Contains("--allow-any-process"),
-                    watcherRequest);
+                    watcherRequest,
+                    args.Contains("--forward-debug-lines"));
             }
             if (args.FirstOrDefault() == "--emit-debug-line")
             {
@@ -1164,7 +1165,7 @@ internal static class DbwinRewardWatcher
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool CloseHandle(IntPtr handle);
 
-    internal static int Run(int parentProcessId, bool allowAnyProcess, WatchRequest? watcherRequest)
+    internal static int Run(int parentProcessId, bool allowAnyProcess, WatchRequest? watcherRequest, bool forwardDebugLines = false)
     {
         if (parentProcessId <= 0)
         {
@@ -1223,6 +1224,7 @@ internal static class DbwinRewardWatcher
             type = "ready",
             alreadyExists,
             visualFallback = visualThread is not null,
+            debugCaptureSupported = forwardDebugLines,
         });
 
         try
@@ -1245,6 +1247,19 @@ internal static class DbwinRewardWatcher
                 var length = Array.IndexOf(bytes, (byte)0);
                 if (length <= 0) continue;
                 var line = Encoding.UTF8.GetString(bytes, 0, length);
+                // Передаём только сообщения разрешённого процесса. Родитель сохраняет их
+                // исключительно во время явно запущенной диагностической сессии.
+                if (forwardDebugLines)
+                {
+                    watcherState.Emit(new
+                    {
+                        type = "debug_line",
+                        processId = sourceProcessId,
+                        receivedAt = DateTimeOffset.UtcNow,
+                        message = line,
+                        rawBase64 = Convert.ToBase64String(bytes, 0, length),
+                    });
+                }
                 if (TryGetProjectionPath(line, out var projectionPath))
                 {
                     var reset = watcherState.AddProjection(projectionPath);
@@ -1281,6 +1296,7 @@ internal static class DbwinRewardWatcher
 
     private static bool IsRewardMarker(string line) =>
         line.Contains("ProjectionRewardChoice.lua: Got rewards", StringComparison.Ordinal)
+        || line.Contains("VoidProjections: OpenVoidProjectionRewardScreen", StringComparison.Ordinal)
         || line.Contains("ProjectionRewardChoice.lua: Missing icon data!", StringComparison.Ordinal);
 
     private static bool TryGetProjectionPath(string line, out string path)
