@@ -514,7 +514,9 @@ fn confidence(
     if live.cluster_shift || live.disagrees_with_fair {
         confidence = PriceConfidence::Low;
     }
-    if freshness == PriceFreshness::Aging || source_is_fallback {
+    // Резервный источник уже исключён из High выше. Свежие подтверждённые
+    // сделки сохраняют Medium: иначе все расчёты возможностей отвергают зеркало.
+    if freshness == PriceFreshness::Aging {
         confidence = downgrade(confidence);
     }
     if matches!(freshness, PriceFreshness::Stale | PriceFreshness::Unknown) {
@@ -1268,7 +1270,7 @@ mod tests {
     }
 
     #[test]
-    fn stale_and_fallback_sources_lower_confidence_independently() {
+    fn fallback_keeps_trusted_fresh_prices_but_rejects_weak_or_old_signals() {
         let key = key(None, None);
         let records = vec![record(&key, MarketOrderType::Closed, 20.0, 10.0)];
         let mut stale_context = context(&key, &records, None, MarketItemKind::Standard);
@@ -1279,8 +1281,58 @@ mod tests {
 
         let mut fallback_context = context(&key, &records, None, MarketItemKind::Standard);
         fallback_context.source_is_fallback = true;
+        fallback_context.provider = ProviderId::FrameForgeMirror;
         let fallback = recommend(fallback_context);
         assert_eq!(fallback.freshness, PriceFreshness::Fresh);
-        assert_eq!(fallback.confidence, PriceConfidence::Low);
+        assert_eq!(fallback.confidence, PriceConfidence::Medium);
+        assert_eq!(fallback.fair_price, Some(20.0));
+        assert!(
+            fallback
+                .reasons
+                .iter()
+                .any(|reason| reason.code == PriceReasonCode::FallbackProvider)
+        );
+
+        for (date, freshness) in [
+            ((2026, 8, 30), PriceFreshness::Aging),
+            ((2026, 9, 10), PriceFreshness::Stale),
+            ((2026, 8, 25), PriceFreshness::Unknown),
+        ] {
+            fallback_context.as_of = NaiveDate::from_ymd_opt(date.0, date.1, date.2).unwrap();
+            let result = recommend(fallback_context);
+            assert_eq!(result.freshness, freshness);
+            assert_eq!(result.confidence, PriceConfidence::Low);
+        }
+        fallback_context.as_of = context(&key, &records, None, MarketItemKind::Standard).as_of;
+
+        let book = LiveOrderBook {
+            key: key.clone(),
+            fetched_at: Utc::now(),
+            orders: vec![order(LiveOrderSide::Sell, 20, UserStatus::InGame); 5],
+        };
+        fallback_context.live_order_book = Some(&book);
+        assert_eq!(
+            recommend(fallback_context).confidence,
+            PriceConfidence::Medium
+        );
+        let conflicting_book = LiveOrderBook {
+            orders: vec![order(LiveOrderSide::Sell, 50, UserStatus::InGame); 5],
+            ..book.clone()
+        };
+        fallback_context.live_order_book = Some(&conflicting_book);
+        assert_eq!(recommend(fallback_context).confidence, PriceConfidence::Low);
+        fallback_context.live_order_book = None;
+
+        let weak_records = vec![
+            record(&key, MarketOrderType::Closed, 20.0, 1.0),
+            record(&key, MarketOrderType::Sell, 30.0, 10.0),
+        ];
+        fallback_context.bulk_records = &weak_records;
+        assert_eq!(recommend(fallback_context).confidence, PriceConfidence::Low);
+        fallback_context.bulk_records = &[];
+        assert_eq!(
+            recommend(fallback_context).confidence,
+            PriceConfidence::Unknown
+        );
     }
 }
