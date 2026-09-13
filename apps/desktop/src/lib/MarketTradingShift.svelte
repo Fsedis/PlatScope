@@ -1,5 +1,6 @@
 <script lang="ts">
   import MarketOrderTable from "./MarketOrderTable.svelte";
+  import MarketPresence from "./MarketPresence.svelte";
   import KeepCopiesControl from "./KeepCopiesControl.svelte";
   import MarketOrderPrices from "./MarketOrderPrices.svelte";
   import MarketOrderInsight from "./MarketOrderInsight.svelte";
@@ -817,7 +818,7 @@
 <section class="sales-workspace" aria-labelledby="sales-heading">
   <header class="sales-header">
     <div><h2 id="sales-heading" class:sr-only={view === "orders"}>{view === "history" ? "История сделок" : "Мои объявления"}</h2><p>{view === "history" ? "Обмены из игры и ваши торговые партнёры." : "Выберите объявление, чтобы сравнить цены и изменить его."}</p></div>
-    {#if account?.connected}<div class="sales-header__actions"><button class="secondary account-button" aria-expanded={accountPanelOpen} onclick={() => accountPanelOpen = !accountPanelOpen}><span class="connection-dot"></span><span translate="no">{account.profile?.ingameName ?? "Warframe Market"}</span></button>{#if view === "orders" && rows.length}<button onclick={orderType === "buy" ? onBrowseMarket : onOpenInventory}>{orderType === "buy" ? "Создать заявку на покупку" : "Выставить предмет"}</button>{/if}</div>{/if}
+    {#if account?.connected}<div class="sales-header__actions"><MarketPresence disabled={accountBusy || applying} verified={account.profile?.verification ?? false} /><button class="secondary account-button" aria-expanded={accountPanelOpen} onclick={() => accountPanelOpen = !accountPanelOpen}><span translate="no">{account.profile?.ingameName ?? "Warframe Market"}</span></button>{#if view === "orders" && rows.length}<button onclick={orderType === "buy" ? onBrowseMarket : onOpenInventory}>{orderType === "buy" ? "Создать заявку на покупку" : "Выставить предмет"}</button>{/if}</div>{/if}
   </header>
   {#if errorMessage}<div class="inline-error" role="alert"><span>{errorMessage}</span>{#if !applying}<button class="secondary" onclick={() => loadAll()} disabled={loading}>Повторить загрузку</button>{/if}</div>{/if}
   {#if dataMessage}<p class="data-note" role="status">{dataMessage}</p>{/if}
@@ -916,7 +917,7 @@
   button { min-height:2rem; font-size:.8125rem; } .text-button { background:none; border-color:transparent; color:var(--accent); box-shadow:none; }
   .sales-header,.sales-header__actions,.account-panel,.orders-heading,.orders-toolbar,.batch-bar,.confirm-actions,.dialog-heading,.pending-notice { display:flex; align-items:center; justify-content:space-between; gap:.6rem; }
   .sales-header p { margin-top:.25rem; } .sales-header__actions,.confirm-actions { justify-content:flex-start; flex-wrap:wrap; }
-  .account-button { display:flex; align-items:center; gap:.45rem; } .connection-dot { width:.4rem; height:.4rem; background:var(--success); border-radius:50%; }
+  .account-button { display:flex; align-items:center; gap:.45rem; }
   .account-panel { padding:.75rem; border:1px solid var(--border); border-radius:.5rem; background:var(--surface-1); } .account-panel strong { font-size:.875rem; }
   .inline-error,.data-note { margin:0; border:1px solid var(--border); border-radius:.5rem; padding:.6rem .8rem; font-size:.8125rem; line-height:1.5; }
   .inline-error { display:flex; align-items:center; justify-content:space-between; gap:1rem; background:var(--danger-soft); color:var(--danger); border-color:var(--danger); } .data-note { background:var(--surface-2); }

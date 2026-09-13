@@ -1,5 +1,8 @@
 #![forbid(unsafe_code)]
 
+mod presence;
+pub use presence::{MarketPresence, PresenceConnection, PresenceService, PresenceView};
+
 use std::fmt;
 use std::time::Duration;
 

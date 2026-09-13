@@ -17,7 +17,8 @@ use std::time::{Duration, Instant};
 
 use chrono::{Duration as ChronoDuration, NaiveDate, Utc};
 pub use platscope_account::{
-    AccountOrder, AccountOrderType, AccountProfile, CreateListingInput, UpdateListingInput,
+    AccountOrder, AccountOrderType, AccountProfile, CreateListingInput, MarketPresence,
+    PresenceView, UpdateListingInput,
 };
 use platscope_account::{CredentialStore, OsCredentialStore, WfmAccountClient};
 use platscope_domain::{
@@ -189,6 +190,7 @@ pub struct AccountService {
     credentials: Arc<dyn CredentialStore>,
     operation_lock: tokio::sync::Mutex<()>,
     device_id: String,
+    presence: platscope_account::PresenceService,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3651,6 +3653,7 @@ impl AccountService {
             credentials: Arc::new(OsCredentialStore),
             operation_lock: tokio::sync::Mutex::new(()),
             device_id,
+            presence: platscope_account::PresenceService::default(),
         })
     }
 
@@ -3674,6 +3677,7 @@ impl AccountService {
     /// Возвращает [`CoreError`] при rejected credentials, keychain или account API error.
     pub async fn connect(&self, email: &str, password: &str) -> Result<AccountView, CoreError> {
         let _operation_guard = self.operation_lock.lock().await;
+        self.presence.stop().await;
         let token = self
             .client
             .sign_in(email, password, &self.device_id)
@@ -3695,6 +3699,7 @@ impl AccountService {
     /// Возвращает [`CoreError`] только если OS keychain не смог удалить credential.
     pub async fn disconnect(&self) -> Result<bool, CoreError> {
         let _operation_guard = self.operation_lock.lock().await;
+        self.presence.stop().await;
         let token = self.credentials.load()?;
         let remotely_revoked = match token.as_ref() {
             Some(token) => self.client.sign_out(token).await.is_ok(),
@@ -3702,6 +3707,28 @@ impl AccountService {
         };
         self.credentials.delete()?;
         Ok(remotely_revoked)
+    }
+
+    /// Читает серверный статус, сохраняя соединение между экранами приложения.
+    ///
+    /// # Errors
+    /// Возвращает ошибку при отсутствии учётных данных.
+    pub async fn presence(&self) -> Result<PresenceView, CoreError> {
+        let _guard = self.operation_lock.lock().await;
+        Ok(self.presence.view(self.require_token()?).await)
+    }
+
+    /// Устанавливает выбранный пользователем статус и ждёт подтверждения WFM.
+    ///
+    /// # Errors
+    /// Возвращает ошибку авторизации, соединения или отклонённой команды.
+    pub async fn set_presence(&self, status: MarketPresence) -> Result<PresenceView, CoreError> {
+        let _guard = self.operation_lock.lock().await;
+        self.require_token()?;
+        self.presence
+            .set(status)
+            .await
+            .map_err(CoreError::AccountData)
     }
 
     /// Создаёт listing только после явного подтверждения caller-а.

@@ -6,6 +6,7 @@ mod dbwin_capture;
 mod game_names;
 mod inventory_refresh;
 mod market_account;
+mod market_presence;
 mod market_profiles;
 mod memory_recording;
 mod mission_research;
@@ -4167,6 +4168,8 @@ pub fn run() {
             world_activity,
             open_market_items,
             account_status,
+            market_presence::account_presence,
+            market_presence::account_set_presence,
             market_account::account_set_orders_visibility,
             market_profiles::open_trade_partner_profile,
             market_profiles::open_market_user_profile,

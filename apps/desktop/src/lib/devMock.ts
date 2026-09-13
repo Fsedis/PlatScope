@@ -340,6 +340,7 @@ export async function installMarketBrowserMock(): Promise<void> {
   let inventoryRefreshEnabled = true;
   let inventoryPriceChecks = 0;
   let accountReads = 0;
+  let presenceStatus = "invisible";
   let mutationReads = 0;
   const salesScenario = mockOptions.get("mockSales");
   if (salesScenario) {
@@ -515,6 +516,18 @@ export async function installMarketBrowserMock(): Promise<void> {
         path: "C:\\Users\\Demo\\AppData\\Local\\PlatScope\\diagnostics\\platscope-diagnostics-20260827T091500000Z.json",
         bytes: 1_842,
       };
+    }
+    if (command === "account_presence" || command === "account_set_presence") {
+      if (!account.connected) throw new Error("WFM account is not connected");
+      if (command === "account_set_presence") {
+        if (mockOptions.get("mockPresence") === "error") return new Promise((_, reject) => setTimeout(() => reject(new Error("status rejected")), 700));
+        const status = (args as {status:string}).status;
+        if (!account.profile?.verification || !["online","ingame","invisible"].includes(status)) throw new Error("status rejected");
+        return new Promise(resolve => setTimeout(() => { presenceStatus = status; resolve({connection:"connected",status:presenceStatus,statusUntil:null,error:null}); }, 700));
+      }
+      return mockOptions.get("mockPresence") === "reconnecting"
+        ? {connection:"reconnecting",status:null,statusUntil:null,error:"Связь с Warframe Market потеряна. Восстанавливаем соединение…"}
+        : {connection:"connected",status:presenceStatus,statusUntil:null,error:null};
     }
     if (command === "account_status") {
       ++accountReads;
