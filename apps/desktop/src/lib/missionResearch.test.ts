@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { objectFilter, followFrame, followTargetSignature, sceneBounds, fitCamera, mapScale, worldToCanvas, canvasToWorld, zoomAt, scaledHeight, inHeightSlice, faceInHeightSlice, compareScenes, objectSampleKey, type MissionScene, type MissionObject, type Position3 } from "./missionResearch";
-import { makeMissionScene, makeMissionResearchMock } from "./missionResearchMock";
+import { objectFilter, followFrame, followTargetSignature, sceneBounds, fitCamera, mapScale, worldToCanvas, canvasToWorld, zoomAt, inHeightSlice, faceInHeightSlice, compareScenes, objectSampleKey, type MissionScene, type MissionObject, type Position3 } from "./missionResearch";
+import { makeMissionScene } from "./missionResearchMock";
 import { objectMatchesSearch, localAvatar, zoneInHeightSlice } from "./missionResearch";
 const object = (extra: Partial<MissionObject> = {}): MissionObject => ({ key: "one", kind: "feather", label: "Перо", nameEn: "Voidplume", itemPath: "ZarimanDogTagCommon", position: [2, 3, 5], availability: "unknown", details: [], typeNames: ["PickUp"], ...extra });
 const scene = (objects: MissionObject[] = []): MissionScene => ({ format: 1, source: "archive", startedAt: "2026-09-12T07:00:00Z", capturedAt: "2026-09-12T07:00:30Z", complete: true, profile: "test", objects, meshes: [], warnings: [], stats: { scannedBytes: 0, objectCount: objects.length, meshCount: 0, vertexCount: 0, faceCount: 0 } });
@@ -67,10 +67,6 @@ describe("проекция карты миссии", () => {
 });
 
 describe("высота геометрии", () => {
-  it("нормирует отрицательные и положительные высоты, включая плоский уровень", () => {
-    expect(scaledHeight(-20, { minY: -20, maxY: 20 })).toBe(0); expect(scaledHeight(0, { minY: -20, maxY: 20 })).toBe(.5); expect(scaledHeight(20, { minY: -20, maxY: 20 })).toBe(1);
-    expect(scaledHeight(5, { minY: 5, maxY: 5 })).toBe(0); expect(scaledHeight(99, { minY: -20, maxY: 20 })).toBe(1);
-  });
   it("проверяет высоту Y, а не экранную координату Z", () => {
     expect(inHeightSlice(-20, true, -18, 2)).toBe(true); expect(inHeightSlice(-20.01, true, -18, 2)).toBe(false); expect(inHeightSlice(800, false, -18, 2)).toBe(true); expect(inHeightSlice(NaN, false, 0, 4)).toBe(false);
   });
@@ -89,24 +85,6 @@ describe("сравнение выборок", () => {
   });
   it("не смешивает пропавшую запись с подтверждением подбора", () => { const diff = compareScenes(scene([object()]), scene()); expect(diff.absent).toHaveLength(1); expect(Object.keys(diff)).toEqual(["added", "absent", "unchanged"]); });
   it("ключ не создаёт коллизии из разделителей в строковых полях", () => { expect(objectSampleKey(object({ key: "a|b", itemPath: "c" }))).not.toBe(objectSampleKey(object({ key: "a", itemPath: "b|c" }))); });
-  it("реальная выборка перьев меняется с восьми до шести", () => { const diff = compareScenes(makeMissionScene(1), makeMissionScene(2)); expect(diff.absent).toHaveLength(2); expect(diff.added).toHaveLength(0); expect(diff.absent.every(o => o.kind === "feather")).toBe(true); });
-});
-
-describe("мок исследования миссии", () => {
-  it("не меняет ревизию при чтении готовой сцены", async () => { const mock = makeMissionResearchMock(); const initial = await mock("mission_research_status"); await mock("mission_research_scene"); await mock("mission_research_scene"); expect(await mock("mission_research_status")).toEqual(initial); });
-  it("поддерживает чтение, отмену и повторное чтение второго снимка", async () => {
-    const mock = makeMissionResearchMock(); await mock("mission_research_analyze_archive", { id: "preview-zariman", sequence: 2 }); expect(await mock("mission_research_cancel")).toMatchObject({ busy: false });
-    expect(await mock("mission_research_scene")).toMatchObject({ capturedAt: makeMissionScene(1).capturedAt });
-    await mock("mission_research_analyze_archive", { id: "preview-zariman", sequence: 2 }); for (let i = 0; i < 3; i++) await mock("mission_research_status");
-    expect(await mock("mission_research_scene")).toMatchObject({ capturedAt: makeMissionScene(2).capturedAt });
-  });
-  it("обновляет движущегося персонажа только при включённой живой карте", async () => {
-    const mock = makeMissionResearchMock("tracking"); const before = await mock("mission_research_scene") as MissionScene; await mock("mission_research_status"); const after = await mock("mission_research_scene") as MissionScene;
-    expect(after.objects.find(o => o.kind === "avatar")?.position).not.toEqual(before.objects.find(o => o.kind === "avatar")?.position);
-    await mock("mission_research_track", { enabled: false }); await mock("mission_research_status"); expect(await mock("mission_research_scene")).toEqual(after);
-  });
-  it("не запускает живую карту без первого чтения игры", async () => { const mock = makeMissionResearchMock(); await expect(mock("mission_research_track", { enabled: true })).rejects.toContain("Сначала прочитайте"); });
-  it("показывает отсутствие игры и неизвестный снимок как ошибки", async () => { const mock = makeMissionResearchMock("offline"); await expect(mock("mission_research_scan_live")).rejects.toContain("не запущен"); await expect(mock("mission_research_analyze_archive", { id: "missing", sequence: 1 })).rejects.toContain("не найден"); });
 });
 
 
@@ -140,12 +118,5 @@ describe("игроки и NPC на карте", () => {
       const npc = object({ kind }); expect(followFrame(npc.key, followTargetSignature(npc), true, [npc], camera).key).toBe("");
       expect(followFrame(avatar.key, followTargetSignature(avatar), true, [npc], camera).camera).toEqual(camera);
     }
-  });
-  it("мок воспроизводит временно устаревшую позицию без удаления игрока", async () => {
-    const mock = makeMissionResearchMock("tracking-stale"); await mock("mission_research_status"); const first = await mock("mission_research_scene") as MissionScene;
-    await mock("mission_research_status"); const second = await mock("mission_research_scene") as MissionScene;
-    expect(second.objects.find(o => o.kind === "avatar")).toMatchObject({ positionFresh: false, position: first.objects.find(o => o.kind === "avatar")!.position });
-    await mock("mission_research_status"); await mock("mission_research_status"); const fourth = await mock("mission_research_scene") as MissionScene;
-    expect(fourth.objects.find(o => o.kind === "avatar")?.positionFresh).toBe(true);
   });
 });

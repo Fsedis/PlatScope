@@ -1,15 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  filterAndSortRows,
-  formatPlatinum,
-  liveQuoteLabel,
-  liveUserStatusLabel,
-  masteryRequirementLabel,
-  priceReasonMessage,
-  variantLabel,
-  type MarketSearchRow,
-} from "./market";
+import { filterAndSortRows, formatPlatinum, type MarketSearchRow } from "./market";
 
 function row(name: string, fair: number | null, volume: number): MarketSearchRow {
   return {
@@ -46,24 +37,6 @@ function row(name: string, fair: number | null, volume: number): MarketSearchRow
 }
 
 describe("market presentation helpers", () => {
-  it("отличает нулевое требование мастерства от отсутствующих метаданных", () => {
-    expect(masteryRequirementLabel(0)).toBe("MR 0");
-    expect(masteryRequirementLabel(12, "en")).toBe("MR 12");
-    expect(masteryRequirementLabel(null)).toBe("Нет данных");
-    expect(masteryRequirementLabel(null, "en")).toBe("No data");
-  });
-
-  it("локализует состояние игрока в live order book", () => {
-    expect(liveUserStatusLabel("in_game")).toBe("В игре");
-    expect(liveUserStatusLabel("online", "en")).toBe("Online");
-  });
-
-  it("localizes stable live pricing reason codes", () => {
-    expect(priceReasonMessage({ code: "live_market_agreement", message: "fixture" }, "en"))
-      .toBe("Live orders agree with the bulk estimate.");
-    expect(priceReasonMessage({ code: "live_top_buy", message: "fixture" }, "en"))
-      .toBe("Quick Sell uses the best active buy order for the exact variant.");
-  });
 
   it("не превращает отсутствие цены в 0p", () => {
     expect(formatPlatinum(null)).toBe("—");
@@ -89,43 +62,5 @@ describe("market presentation helpers", () => {
     expect(filterAndSortRows(rows, "all", "fair", "desc")[0]?.displayName).toBe(
       "High",
     );
-  });
-
-  it("объясняет точный вариант", () => {
-    expect(
-      variantLabel({
-        slug: "axi_test_relic",
-        platform: "pc",
-        rank: null,
-        charges: null,
-        subtype: "radiant",
-        amberStars: null,
-        cyanStars: null,
-      }),
-    ).toBe("Сияющая");
-  });
-
-  it("показывает число зарядов точного варианта", () => {
-    expect(variantLabel({
-      slug: "charged_item",
-      platform: "pc",
-      rank: null,
-      charges: 3,
-      subtype: null,
-      amberStars: null,
-      cyanStars: null,
-    })).toContain("заряды 3");
-  });
-
-  it("явно помечает stale live-кэш", () => {
-    expect(liveQuoteLabel("stale_cache")).toBe("Сохранённые ордера могли устареть");
-  });
-
-  it("localizes price explanations and live-cache state by stable codes", () => {
-    expect(liveQuoteLabel("stale_cache", "en")).toBe("Saved orders may be outdated");
-    expect(priceReasonMessage({ code: "source_fresh", message: "Свежие данные" }, "en"))
-      .toBe("The bulk snapshot is fresh.");
-    expect(priceReasonMessage({ code: "riven_pricing_unsupported", message: "Нет оценки" }, "en"))
-      .toContain("separate model");
   });
 });

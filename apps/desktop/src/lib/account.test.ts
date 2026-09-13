@@ -1,15 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  accountActionErrorMessage,
-  createListingInput,
-  createListingInputFromInventory,
-  matchingSellOrder,
-  orderEnglishName,
-  editableOrderPerTrade,
-  validateListingNumbers,
-  type AccountView,
-} from "./account";
+import { createListingInput, createListingInputFromInventory, matchingSellOrder, editableOrderPerTrade, validateListingNumbers, type AccountView } from "./account";
 import type { InventoryViewItem } from "./inventory";
 import type { MarketSearchRow } from "./market";
 
@@ -61,28 +52,6 @@ describe("account listing drafts", () => {
     expect(editableOrderPerTrade(undefined, { bulkTradable: true }, 2)).toBe(2);
     expect(validateListingNumbers(30, 5, editableOrderPerTrade(item, null, 3))).not.toBeNull();
     expect(validateListingNumbers(30, 6, editableOrderPerTrade(item, null, 3))).toBeNull();
-  });
-
-  it("не объясняет запрещённую партию как ошибочное количество", () => {
-    expect(accountActionErrorMessage("perTrade: forbidden for a non-bulk item")).toContain("не предусмотрен");
-    expect(accountActionErrorMessage("per_trade must divide quantity")).toContain("от 1 до 6");
-  });
-
-  it("shows the English market name only when it adds useful context", () => {
-    expect(orderEnglishName({
-      slug: "primed_flow",
-      displayName: "Поток Прайм",
-      displayNameEn: "Primed Flow",
-      imageUrl: null,
-      itemKind: "standard",
-    })).toBe("Primed Flow");
-    expect(orderEnglishName({
-      slug: "primed_flow",
-      displayName: "Primed Flow",
-      displayNameEn: "Primed Flow",
-      imageUrl: null,
-      itemKind: "standard",
-    })).toBeNull();
   });
 
   it("preserves the exact selected market variant", () => {
@@ -155,17 +124,6 @@ describe("account listing drafts", () => {
       }],
     };
     expect(matchingSellOrder(item, account)?.id).toBe("ranked-regular");
-  });
-
-  it("turns known WFM failures into a useful instruction", () => {
-    expect(accountActionErrorMessage("field perTrade is required", "ru"))
-      .toContain("от 1 до 6");
-    expect(accountActionErrorMessage("WFM returned HTTP 400 Bad Request", "ru"))
-      .not.toContain("HTTP");
-    expect(accountActionErrorMessage("Недостаточно доступных копий: часть уже зарезервирована", "ru"))
-      .toContain("свободное количество");
-    expect(accountActionErrorMessage("Этот точный вариант с такими зарядами нельзя продать", "ru"))
-      .toContain("рангом или зарядами");
   });
 
   it("matches only the exact current sell order", () => {

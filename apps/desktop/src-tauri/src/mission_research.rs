@@ -921,9 +921,14 @@ mod tests {
             let mut inner = service.inner.lock().unwrap();
             inner.desired_live = true;
             inner.status.busy = true;
+            inner.status.tracking = true;
             inner.scene = Some(sample_scene("live"));
         }
-        service.feed_log("8.000 Sys [Info]: FSM::LoadLevel\n9.000 Game [Info]: Level loader: LS_POST_CREATE -> LS_COMPLETE\n");
+        service.feed_log("8.000 Sys [Info]: FSM::Load");
+        assert!(service.inner.lock().unwrap().status.tracking);
+        service.feed_log("Level\n9.000 Game [Info]: Level loader: LS_POST_CREATE -> LS_COMPLETE\n");
+        assert!(!service.inner.lock().unwrap().status.tracking);
+        assert!(!service.inner.lock().unwrap().desired_live);
         assert!(service.cancel.load(Ordering::Relaxed));
         assert!(service.inner.lock().unwrap().scene.is_none());
         assert!(
@@ -940,18 +945,6 @@ mod tests {
         );
         service.reset_log();
         assert!(!service.log_ready && service.last_load.is_none() && service.auto_after.is_none());
-    }
-    #[test]
-    fn level_change_stops_tracking_even_with_split_line() {
-        let mut service = Service::default();
-        service.inner.lock().unwrap().status.tracking = true;
-        service.inner.lock().unwrap().desired_live = true;
-        service.feed_log("123.000 Sys [Info]: FSM::Load");
-        assert!(service.inner.lock().unwrap().status.tracking);
-        service.feed_log("Level\n");
-        assert!(!service.inner.lock().unwrap().status.tracking);
-        assert!(service.cancel.load(Ordering::Relaxed));
-        assert!(!service.inner.lock().unwrap().desired_live);
     }
     #[test]
     fn streaming_rooms_never_clears_live_scene_or_requests_full_scan() {

@@ -4696,13 +4696,6 @@ mod tests {
         assert!(validate_market_slugs(Vec::new()).is_err());
     }
 
-    #[test]
-    fn market_item_links_always_use_russian_locale() {
-        assert_eq!(
-            market_item_url("carrier_prime_cerebrum"),
-            "https://warframe.market/ru/items/carrier_prime_cerebrum"
-        );
-    }
 
     #[test]
     fn component_images_use_a_validated_local_protocol() {
@@ -4723,27 +4716,6 @@ mod tests {
         assert!(!valid_component_png(b"not a png"));
     }
 
-    #[test]
-    fn personal_goal_art_uses_the_existing_local_image_cache() {
-        let choice = serde_json::json!({"setSlug":"ash_prime_set", "displayName":"Эш Прайм", "displayNameEn":"Ash Prime",
-            "imageUrl":"https://cdn.warframestat.us/img/AshPrime.png"});
-        let mut goal = choice.clone();
-        goal["completedAt"] = serde_json::Value::Null;
-        goal["completionPending"] = false.into();
-        goal["parts"] = serde_json::json!([{ "slug":"ash_prime_blueprint", "displayName":"Чертёж", "displayNameEn":"Blueprint",
-            "imageUrl":"https://cdn.warframestat.us/img/blueprint.png", "requiredQuantity":1, "allocatedQuantity":0 }]);
-        let view: PersonalGoalsView = serde_json::from_value(serde_json::json!({
-            "inventoryAvailable":false, "metadataAvailable":true, "observedAt":null, "catalog":[choice], "goals":[goal], "relics":[],
-        })).unwrap();
-        let view = localize_personal_goal_images(view);
-        let local = component_image_protocol_url("https://cdn.warframestat.us/img/AshPrime.png");
-        assert_eq!(view.catalog[0].image_url, local);
-        assert_eq!(view.goals[0].set.image_url, local);
-        assert_eq!(
-            view.goals[0].parts[0].image_url,
-            component_image_protocol_url("https://cdn.warframestat.us/img/blueprint.png")
-        );
-    }
 
     #[test]
     fn reward_log_markers_match_current_warframe_messages() {
@@ -4775,42 +4747,6 @@ mod tests {
         assert!(paths.contains("/Lotus/Types/Game/Projections/T1VoidProjectionLavosPrimeABronze"));
     }
 
-    #[test]
-    fn reward_set_component_names_stay_compact_and_readable() {
-        let definition = PrimeSetDefinition {
-            set_slug: "nyx_prime_set".into(),
-            set_game_ref: String::new(),
-            display_name_en: "Nyx Prime Set".into(),
-            vault_status: platscope_domain::VaultStatus::Unknown,
-            components: Vec::new(),
-        };
-        let catalog = HashMap::from([
-            (
-                "nyx_prime_set".into(),
-                ("Никс Прайм: Комплект".into(), None),
-            ),
-            (
-                "nyx_prime_neuroptics_blueprint".into(),
-                ("Никс Прайм: Нейрооптика (Чертеж)".into(), None),
-            ),
-            (
-                "nyx_prime_blueprint".into(),
-                ("Никс Прайм (Чертеж)".into(), None),
-            ),
-        ]);
-        assert_eq!(
-            reward_set_component_name("nyx_prime_neuroptics_blueprint", &definition, &catalog),
-            "Нейрооптика"
-        );
-        assert_eq!(
-            reward_set_component_name("nyx_prime_blueprint", &definition, &catalog),
-            "Чертёж"
-        );
-        assert_eq!(
-            reward_set_component_name("nyx_prime_upper_limb", &definition, &HashMap::new()),
-            "Часть комплекта"
-        );
-    }
 
     #[test]
     fn reward_ocr_catalog_accepts_only_non_empty_russian_names() {

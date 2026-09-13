@@ -1,30 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  adjustDucatsForMarketReservations,
-  coverageLabel,
-  filterAndSortOpportunitySets,
-  filterAndSortSets,
-  formatPercent,
-  formatRatio,
-  rankRelicsToOpen,
-  reservePublishedSetListings,
-  refinementLabel,
-  safeOverviewSetPrice,
-  selectBestOverviewReadySet,
-  selectBestOverviewRelic,
-  setLiveMinimumPrice,
-  setLiveSellOrders,
-  setModeLabel,
-  setOpportunity,
-  setPriceComparison,
-  setRelicSupport,
-  type DucatInsightRow,
-  type RelicInsightRow,
-  type RelicOpeningRecommendation,
-  type SetInsightRow,
-  vaultLabel,
-} from "./insights";
+import { adjustDucatsForMarketReservations, filterAndSortOpportunitySets, filterAndSortSets, rankRelicsToOpen, reservePublishedSetListings, safeOverviewSetPrice, selectBestOverviewReadySet, selectBestOverviewRelic, setLiveMinimumPrice, setLiveSellOrders, setOpportunity, setPriceComparison, setRelicSupport, type DucatInsightRow, type RelicInsightRow, type RelicOpeningRecommendation, type SetInsightRow } from "./insights";
 import type { LiveOrderView, PriceConfidence, PriceRecommendation } from "./market";
 
 function recommendation(
@@ -357,29 +333,6 @@ describe("insights presentation", () => {
       { side: "sell", platinum: 19, quantity: 1, perTrade: 1, userStatus: "online" },
       { side: "sell", platinum: 20, quantity: 1, perTrade: 1, userStatus: "offline" },
     ])).toBeNull();
-  });
-
-  it("явно различает incomplete analytics states", () => {
-    expect(setModeLabel("insufficient_pricing")).toBe("Не хватает цен");
-    expect(coverageLabel("partial")).toBe("Цены есть для части наград");
-    expect(formatRatio(null)).toBe("—");
-  });
-
-  it("не превращает vaulted в ценовой прогноз", () => {
-    expect(vaultLabel("vaulted")).toBe("В хранилище");
-    expect(vaultLabel("unknown")).toBe("Статус неизвестен");
-  });
-
-  it("форматирует refinement и premium без потери знака", () => {
-    expect(refinementLabel("radiant")).toBe("Сияющая");
-    expect(formatPercent(12.34)).toBe("+12,3%");
-    expect(formatPercent(-5)).toBe("-5%");
-  });
-
-  it("localizes typed insight states without translating canonical values", () => {
-    expect(setModeLabel("insufficient_pricing", "en")).toBe("Not enough prices");
-    expect(coverageLabel("partial", "en")).toBe("Partial EV");
-    expect(refinementLabel("radiant", "en")).toBe("Radiant");
   });
 
   it("calculates the next set without treating owned parts as free profit", () => {

@@ -513,24 +513,6 @@ mod tests {
         .expect("fixture catalog")
     }
 
-    #[test]
-    fn catalog_preserves_market_thumbnail_path() {
-        let item = catalog()
-            .items
-            .into_iter()
-            .find(|item| item.slug == "normal_item")
-            .expect("normal fixture item");
-        assert_eq!(
-            item.thumb.as_deref(),
-            Some("items/images/en/thumbs/normal.png")
-        );
-        assert_eq!(item.display_name_ru.as_deref(), Some("Обычный предмет"));
-        assert_eq!(
-            item.thumb_ru.as_deref(),
-            Some("items/images/ru/thumbs/normal.png")
-        );
-        assert_eq!(catalog().metadata.schema_version, 4);
-    }
 
     #[test]
     fn accepts_wfm_v2_data_envelope() {

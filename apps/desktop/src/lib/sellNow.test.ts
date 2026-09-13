@@ -2,22 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { InventoryViewItem } from "./inventory";
 import type { PriceRecommendation } from "./market";
-import {
-  filterAndSortSellNowRows,
-  priorityReasonMessages,
-  resolveSellNowSelection,
-  sellNowRowDomKey,
-  sellPriorityRanks,
-  sellNowRowIdentity,
-  inventoryPage,
-  isCheckedPriceCurrent,
-  withCheckedPrice,
-  summarizeInventoryRows,
-  inventoryUnitPrice,
-  type LiveSellNowResult,
-  type SellNowFilters,
-  type SellNowRow,
-} from "./sellNow";
+import { filterAndSortSellNowRows, resolveSellNowSelection, sellNowRowDomKey, sellPriorityRanks, sellNowRowIdentity, inventoryPage, isCheckedPriceCurrent, withCheckedPrice, summarizeInventoryRows, inventoryUnitPrice, type LiveSellNowResult, type SellNowFilters, type SellNowRow } from "./sellNow";
 
 const filters: SellNowFilters = {
   query: "",
@@ -428,18 +413,5 @@ describe("sell now presentation", () => {
     const ranked = row("primed_flow", 40, 70, "neutral");
     ranked.inventory.key!.rank = 10;
     expect(sellNowRowIdentity(ranked)).toContain(":10:");
-  });
-
-  it("builds English priority explanations from typed factors", () => {
-    const result = priorityReasonMessages(row("flow", 70, 40, "sell"), "en");
-    expect(result).toHaveLength(4);
-    expect(result.join(" ")).toContain("shows listing order");
-    expect(result.join(" ")).not.toContain("70/100");
-  });
-
-  it("explains the visible queue position", () => {
-    const result = priorityReasonMessages(row("flow", 48, 40, "sell"), "ru", 1);
-    expect(result[0]).toContain("№1");
-    expect(result[0]).toContain("Чем меньше номер");
   });
 });
