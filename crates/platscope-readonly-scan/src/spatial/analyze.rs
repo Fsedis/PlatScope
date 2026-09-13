@@ -409,7 +409,7 @@ fn run(
             last_report = Instant::now();
         }
     }
-    let mut scene=Scene{format:1,source:source.into(),started_at,captured_at:stamp(),complete,profile:"warframe-2026-09-12-validated".into(),objects:Vec::new(),meshes:Default::default(),camera_heading:None,players:Vec::new(),zones:Vec::new(),zones_fresh:false,warnings:vec!["Снимок не атомарен: объекты прочитаны в разные моменты времени.".into(),"Геометрия исследовательская: принадлежность текущему региону и переходы между частями не гарантированы.".into(),"По координатам нельзя установить, доступен ли предмет и был ли он подобран.".into()],stats:SceneStats{scanned_bytes:scanned,..Default::default()},identities:Vec::new(),process:None,discovery_profile:Some(profile.clone()),discovery_ranges:Vec::new(),discovery_cursor:0,filter_discovery:Default::default()};
+    let mut scene=Scene{format:1,source:source.into(),started_at,captured_at:stamp(),complete,profile:"warframe-2026-09-12-validated".into(),objects:Vec::new(),meshes:Default::default(),camera_heading:None,players:Vec::new(),zones:Vec::new(),zones_fresh:false,warnings:vec!["Снимок не атомарен: объекты прочитаны в разные моменты времени.".into(),"Геометрия исследовательская: принадлежность текущему региону и переходы между частями не гарантированы.".into(),"По координатам нельзя установить, доступен ли предмет и был ли он подобран.".into()],stats:SceneStats{scanned_bytes:scanned,..Default::default()},identities:Vec::new(),process:None,discovery_profile:Some(profile.clone()),discovery_ranges:Vec::new(),discovery_cursor:0,filter_discovery:Default::default(),registry_discovery:Default::default()};
     if failed_chunks > 0 {
         scene.complete = false;
         scene.warnings.push(format!(
@@ -630,10 +630,12 @@ pub fn refresh_live_filtered(
         modules: Vec::new(),
     };
     let mut result = refresh_objects(&mut m, scene, cancel)?;
-    super::filter_discovery::discover(&mut m, &mut result, rules, cancel)?;
-    discover(&mut m, &mut result, cancel)?;
     if let Some(profile) = &scene.discovery_profile {
         super::context::update(&mut m, &mut result, profile.base, cancel)?;
+    }
+    if !super::registry_discovery::discover(&mut m, &mut result, rules, cancel)? {
+        super::filter_discovery::discover(&mut m, &mut result, rules, cancel)?;
+        discover(&mut m, &mut result, cancel)?;
     }
     result.stats.object_count = result.objects.len() as u64;
     result.captured_at = stamp();

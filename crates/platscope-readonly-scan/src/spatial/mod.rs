@@ -6,6 +6,7 @@ mod context;
 mod filter_discovery;
 mod geometry;
 mod profile;
+mod registry_discovery;
 mod source;
 mod types;
 
@@ -114,6 +115,8 @@ pub struct Scene {
     pub(crate) discovery_cursor: usize,
     #[serde(skip)]
     pub(crate) filter_discovery: filter_discovery::DiscoveryState,
+    #[serde(skip)]
+    pub(crate) registry_discovery: registry_discovery::RegistryState,
 }
 #[derive(Clone, Debug)]
 pub(crate) struct Identity {

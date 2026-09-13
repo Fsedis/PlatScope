@@ -1,4 +1,4 @@
-//! Ручное чтение сцены и локальных записей. Длительные операции выполняются вне UI.
+//! Автозапуск сцены по EE.log и ручной разбор записей. Длительные операции вне UI.
 // Tauri передаёт состояние и аргументы команды по значению.
 #![allow(clippy::needless_pass_by_value)]
 use crate::AppState;
@@ -32,6 +32,7 @@ pub(crate) struct Status {
     game_running: bool,
     tracking: bool,
     scanned_bytes: u64,
+    auto_start: bool,
 }
 #[derive(Default)]
 struct Inner {
@@ -44,12 +45,17 @@ struct Inner {
     live_pid: Option<u32>,
     desired_live: bool,
     discovery_rules: Arc<spatial::DiscoveryRules>,
+    auto_paused: bool,
 }
 #[derive(Default)]
 pub(crate) struct Service {
     inner: Arc<Mutex<Inner>>,
     cancel: Arc<AtomicBool>,
     log_tail: String,
+    log_ready: bool,
+    loading_location: bool,
+    last_load: Option<String>,
+    auto_after: Option<Instant>,
 }
 enum Source {
     Live(u32),
@@ -58,7 +64,10 @@ enum Source {
 
 impl Service {
     fn status(&self) -> Result<Status, String> {
-        let mut status = self.inner.lock().map_err(|e| e.to_string())?.status.clone();
+        let inner = self.inner.lock().map_err(|e| e.to_string())?;
+        let mut status = inner.status.clone();
+        status.auto_start = !inner.auto_paused;
+        drop(inner);
         status.game_running = find_wf_pid().is_some();
         Ok(status)
     }
@@ -69,6 +78,7 @@ impl Service {
                 return Err("Дождитесь завершения текущего чтения или отмените его.".into());
             }
             inner.desired_live = matches!(&source, Source::Live(_));
+            inner.auto_paused = !inner.desired_live;
             inner.generation += 1;
             inner.status.busy = true;
             inner.status.tracking = false;
@@ -78,6 +88,7 @@ impl Service {
             inner.status.scanned_bytes = 0;
             inner.generation
         };
+        self.auto_after = None;
         self.cancel.store(true, Ordering::Relaxed);
         self.cancel = Arc::new(AtomicBool::new(false));
         let (shared, cancel) = (self.inner.clone(), self.cancel.clone());
@@ -146,6 +157,7 @@ impl Service {
             inner.status.cancelling = inner.status.busy;
             inner.status.tracking = false;
             inner.desired_live = false;
+            inner.auto_paused = true;
         }
     }
     pub(crate) fn invalidate(&self) {
@@ -169,20 +181,57 @@ impl Service {
                 inner.previous_objects = None;
                 inner.status.revision += 1;
             }
-            inner.status.phase = "Миссия сменилась. Запустите карту для новой миссии.".into();
+            inner.status.phase = "Локация меняется. Ожидаем завершения загрузки.".into();
         }
     }
     pub(crate) fn feed_log(&mut self, chunk: &str) {
         self.log_tail.push_str(chunk);
         if let Some(end) = self.log_tail.rfind('\n') {
-            if self.log_tail[..end].lines().any(mission_changed) {
-                self.invalidate();
+            let lines: Vec<_> = self.log_tail[..end].lines().map(str::to_owned).collect();
+            for line in lines {
+                if mission_changed(&line) && self.last_load.as_deref() != Some(line.trim()) {
+                    self.last_load = Some(line.trim().to_owned());
+                    self.loading_location = true;
+                    self.auto_after = None;
+                    self.invalidate();
+                } else if level_loaded(&line) && self.loading_location {
+                    self.loading_location = false;
+                    self.auto_after = Some(Instant::now() + Duration::from_secs(3));
+                }
             }
             self.log_tail.drain(..=end);
         }
         if self.log_tail.len() > 8192 {
             self.log_tail.clear();
         }
+    }
+    pub(crate) fn set_log_ready(&mut self, ready: bool) {
+        if ready && !self.log_ready && self.auto_after.is_some() {
+            // История журнала не запускает поиск каждой старой миссии.
+            self.auto_after = Some(Instant::now() + Duration::from_secs(3));
+        }
+        self.log_ready = ready;
+    }
+    pub(crate) fn reset_log(&mut self) {
+        self.invalidate();
+        self.log_tail.clear();
+        self.last_load = None;
+        self.log_ready = false;
+        self.loading_location = false;
+        self.auto_after = None;
+    }
+    fn take_auto_request(&mut self, now: Instant) -> bool {
+        if !self.log_ready || self.loading_location || self.auto_after.is_none_or(|at| at > now) {
+            return false;
+        }
+        let Ok(inner) = self.inner.lock() else {
+            return false;
+        };
+        if inner.status.busy {
+            return false;
+        }
+        self.auto_after = None;
+        !inner.auto_paused && !inner.status.tracking
     }
     fn track(&mut self, enabled: bool) -> Result<Status, String> {
         if !enabled {
@@ -207,6 +256,7 @@ impl Service {
             inner.generation += 1;
             inner.status.tracking = true;
             inner.desired_live = true;
+            inner.auto_paused = false;
             inner.status.error = None;
             (inner.generation, pid)
         };
@@ -286,19 +336,25 @@ impl Service {
 }
 
 // Подгрузка комнаты LS_CREATE_EX не означает переход в другую миссию.
-fn mission_changed(line: &str) -> bool {
+fn log_message(line: &str) -> Option<&str> {
     let Some((timestamp, message)) = line.trim().split_once(' ') else {
-        return false;
+        return None;
     };
-    timestamp.contains('.')
+    (timestamp.contains('.')
         && timestamp.bytes().all(|b| b.is_ascii_digit() || b == b'.')
-        && timestamp.parse::<f64>().is_ok_and(f64::is_finite)
-        && message.trim_start() == "Sys [Info]: FSM::LoadLevel"
+        && timestamp.parse::<f64>().is_ok_and(f64::is_finite))
+    .then_some(message.trim_start())
+}
+fn mission_changed(line: &str) -> bool {
+    log_message(line) == Some("Sys [Info]: FSM::LoadLevel")
+}
+fn level_loaded(line: &str) -> bool {
+    log_message(line) == Some("Game [Info]: Level loader: LS_POST_CREATE -> LS_COMPLETE")
 }
 
 pub(crate) fn spawn(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(2));
+        let mut interval = tokio::time::interval(Duration::from_secs(1));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             interval.tick().await;
@@ -306,6 +362,14 @@ pub(crate) fn spawn(app: AppHandle) {
             let Ok(mut service) = state.mission_research.lock() else {
                 continue;
             };
+            let Some(pid) = find_wf_pid() else {
+                service.reset_log();
+                continue;
+            };
+            if service.take_auto_request(Instant::now()) {
+                // Одна попытка на локацию. Ошибка не запускает цикл тяжёлых повторов.
+                let _ = service.start(Source::Live(pid));
+            }
             let ready = service.inner.lock().ok().and_then(|inner| {
                 (inner.desired_live && !inner.status.busy && !inner.status.tracking)
                     .then_some(inner.live_pid)
@@ -838,6 +902,44 @@ mod tests {
         ] {
             assert!(archive_path(Path::new("."), id).is_err());
         }
+    }
+    #[test]
+    fn location_auto_start_waits_for_loading_and_ignores_history_rooms_and_stop() {
+        let mut service = Service::default();
+        // История нескольких миссий не должна порождать несколько запусков.
+        service.feed_log("1.000 Sys [Info]: FSM::LoadLevel\n2.000 Game [Info]: Level loader: LS_POST_CREATE -> LS_COMPLETE\n3.000 Sys [Info]: FSM::Load");
+        assert!(!service.take_auto_request(Instant::now() + Duration::from_secs(30)));
+        service.feed_log("Level\n4.000 Game [Info]: Level loader: LS_POST_CREATE -> LS_COMPLETE\n");
+        service.set_log_ready(true);
+        assert!(!service.take_auto_request(Instant::now()));
+        assert!(service.take_auto_request(Instant::now() + Duration::from_secs(4)));
+        assert!(!service.take_auto_request(Instant::now() + Duration::from_secs(5)));
+        // Повтор завершения загрузки и поток комнат не запрашивают новую карту.
+        service.feed_log("4.000 Game [Info]: Level loader: LS_POST_CREATE -> LS_COMPLETE\n5.000 Game [Info]: Level loader: LS_PREPARE -> LS_CREATE_EX\n6.000 Game [Info]: Level loader: LS_POST_CREATE -> LS_COMPLETE\n7.000 Chat [Info]: Sys [Info]: FSM::LoadLevel\n");
+        assert!(!service.take_auto_request(Instant::now() + Duration::from_secs(30)));
+        {
+            let mut inner = service.inner.lock().unwrap();
+            inner.desired_live = true;
+            inner.status.busy = true;
+            inner.scene = Some(sample_scene("live"));
+        }
+        service.feed_log("8.000 Sys [Info]: FSM::LoadLevel\n9.000 Game [Info]: Level loader: LS_POST_CREATE -> LS_COMPLETE\n");
+        assert!(service.cancel.load(Ordering::Relaxed));
+        assert!(service.inner.lock().unwrap().scene.is_none());
+        assert!(
+            !service.take_auto_request(Instant::now() + Duration::from_secs(30)),
+            "Ждём выхода отменённого рабочего потока"
+        );
+        service.inner.lock().unwrap().status.busy = false;
+        assert!(service.take_auto_request(Instant::now() + Duration::from_secs(30)));
+        service.stop();
+        service.feed_log("10.000 Sys [Info]: FSM::LoadLevel\n11.000 Game [Info]: Level loader: LS_POST_CREATE -> LS_COMPLETE\n");
+        assert!(
+            !service.take_auto_request(Instant::now() + Duration::from_secs(30)),
+            "Ручная остановка запрещает автоматический перезапуск"
+        );
+        service.reset_log();
+        assert!(!service.log_ready && service.last_load.is_none() && service.auto_after.is_none());
     }
     #[test]
     fn level_change_stops_tracking_even_with_split_line() {

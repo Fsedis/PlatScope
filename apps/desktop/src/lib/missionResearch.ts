@@ -18,7 +18,7 @@ export interface MissionScene {
   cameraHeading?: number | null; players?: MissionPlayer[]; zones?: MissionZone[]; zonesFresh?: boolean;
   stats: { scannedBytes: number; objectCount: number; meshCount: number; vertexCount: number; faceCount: number };
 }
-export interface MissionResearchStatus { busy: boolean; cancelling: boolean; phase: string; error: string | null; revision: number; gameRunning: boolean; tracking: boolean; scannedBytes: number }
+export interface MissionResearchStatus { busy: boolean; cancelling: boolean; phase: string; error: string | null; revision: number; gameRunning: boolean; tracking: boolean; scannedBytes: number; autoStart?: boolean }
 export interface MissionArchive { id: string; label: string; createdAt: string; sizeBytes: number; snapshots: { sequence: number; startedAt: string; endedAt: string; complete: boolean; bytes: number; holes: number }[] }
 export type MissionFilter = "feather" | "pickup" | "players" | "npc" | "other" | "goals" | "lootspots" | "caches";
 export const MISSION_FILTERS: { key: MissionFilter; label: string; color: string }[] = [

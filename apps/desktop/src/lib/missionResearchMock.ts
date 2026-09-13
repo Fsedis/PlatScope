@@ -23,9 +23,9 @@ export function makeMissionScene(sequence = 1, source: "archive" | "live" = "arc
     stats: { scannedBytes: 7_000_000_000, objectCount: objects.length, meshCount: meshes.length, vertexCount: meshes.reduce((sum, m) => sum + m.vertices.length, 0), faceCount: meshes.reduce((sum, m) => sum + m.faces.length, 0) } };
 }
 export function makeMissionResearchMock(variant: string | null = null) {
-  let scene: MissionScene | null = variant === "empty" || variant === "offline" || variant === "error" ? null : makeMissionScene(1, variant?.startsWith("tracking") ? "live" : "archive");
+  let scene: MissionScene | null = variant === "auto" || variant === "empty" || variant === "offline" || variant === "error" ? null : makeMissionScene(1, variant?.startsWith("tracking") ? "live" : "archive");
   if (scene && variant === "partial") { scene.complete = false; scene.warnings.unshift("Не все области памяти удалось прочитать."); }
-  let status: MissionResearchStatus = { busy: false, cancelling: false, phase: "", error: variant === "error" ? "Не удалось открыть сохранённый блок. Проверьте целостность папки записи." : null, revision: scene ? 1 : 0, gameRunning: variant !== "offline", tracking: Boolean(variant?.startsWith("tracking")), scannedBytes: 0 };
+  let status: MissionResearchStatus = { busy: false, cancelling: false, phase: "", error: variant === "error" ? "Не удалось открыть сохранённый блок. Проверьте целостность папки записи." : null, revision: scene ? 1 : 0, gameRunning: variant !== "offline", tracking: Boolean(variant?.startsWith("tracking")), scannedBytes: 0, autoStart: variant === "auto" || Boolean(variant?.startsWith("tracking")) };
   let poseTicks = 0; let epoch = 1; let updateCalls = 0; let previous: { revision: number; objects: MissionObject[] } | null = null;
   let polls = 0; let liveTicks = 0; let nextSequence = 1; let nextSource: "archive" | "live" = "live";
   const archive: MissionArchive = { id: "preview-zariman", label: "Зариман · проверочная запись", createdAt: "2026-09-12T07:10:00Z", sizeBytes: 4_400_000_000, snapshots: [1, 2].map(sequence => ({ sequence, startedAt: `2026-09-12T07:${sequence === 1 ? "10" : "14"}:00Z`, endedAt: `2026-09-12T07:${sequence === 1 ? "10" : "14"}:30Z`, complete: true, bytes: 7_000_000_000, holes: 0 })) };
@@ -67,12 +67,12 @@ export function makeMissionResearchMock(variant: string | null = null) {
       if (command === "mission_research_analyze_archive" && (args.id !== archive.id || !archive.snapshots.some(s => s.sequence === args.sequence))) throw "Снимок не найден.";
       if (variant === "error") throw "Не удалось прочитать данные. Предыдущий результат сохранён.";
       nextSequence = command === "mission_research_analyze_archive" ? Number(args.sequence) : scene ? 2 : 1; nextSource = command === "mission_research_analyze_archive" ? "archive" : "live";
-      polls = 0; status = { ...status, busy: true, cancelling: false, error: null, phase: "Читаем сохранённые области", scannedBytes: 0 }; return structuredClone(status);
+      polls = 0; status = { ...status, busy: true, cancelling: false, error: null, phase: "Читаем сохранённые области", scannedBytes: 0, autoStart: command === "mission_research_scan_live" }; return structuredClone(status);
     }
-    if (command === "mission_research_cancel") { status = { ...status, busy: false, cancelling: false, phase: "Чтение отменено" }; return structuredClone(status); }
+    if (command === "mission_research_cancel") { status = { ...status, busy: false, cancelling: false, phase: "Чтение отменено", autoStart: false, tracking: false }; return structuredClone(status); }
     if (command === "mission_research_export") { if (!scene) throw "Сначала прочитайте миссию."; if (args.format !== "json" && args.format !== "obj") throw "Неизвестный формат."; return `C:\\PlatScope\\diagnostics\\mission-research\\mission-preview.${args.format}`; }
     if (command === "mission_research_filters") return null;
-    if (command === "mission_research_track") { if (args.enabled && (!scene || scene.source !== "live")) throw "Сначала прочитайте миссию из игры."; status.tracking = Boolean(args.enabled); return structuredClone(status); }
+    if (command === "mission_research_track") { if (args.enabled && (!scene || scene.source !== "live")) throw "Сначала прочитайте миссию из игры."; status.tracking = Boolean(args.enabled); status.autoStart = Boolean(args.enabled); return structuredClone(status); }
     throw `Неизвестная команда исследования: ${command}`;
   };
 }

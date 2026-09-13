@@ -3612,8 +3612,8 @@ fn handle_reward_markers(
 }
 
 fn reset_log_consumers(app: &AppHandle) {
-    if let Ok(service) = app.state::<AppState>().mission_research.lock() {
-        service.invalidate();
+    if let Ok(mut service) = app.state::<AppState>().mission_research.lock() {
+        service.reset_log();
     }
     app.state::<AppState>().inventory_refresh.reset_log();
     if let Ok(mut squad) = app.state::<AppState>().squad.lock() {
@@ -3692,6 +3692,10 @@ fn spawn_reward_log_watcher(app_handle: AppHandle) {
                 continue;
             };
             offset = Some(new_offset);
+            if let Ok(mut service) = app_handle.state::<AppState>().mission_research.lock() {
+                service.feed_log(&chunk);
+                service.set_log_ready(new_offset == file_len);
+            }
             if let Ok(mut squad) = app_handle.state::<AppState>().squad.lock() {
                 squad.feed(&chunk);
                 squad.set_log_ready(new_offset == file_len);
@@ -3713,10 +3717,6 @@ fn spawn_reward_log_watcher(app_handle: AppHandle) {
                     .unwrap_or(usize::MAX)
                     .min(chunk.len());
                 if let Some(live_chunk) = chunk.get(skip..) {
-                    if let Ok(mut service) = app_handle.state::<AppState>().mission_research.lock()
-                    {
-                        service.feed_log(live_chunk);
-                    }
                     app_handle
                         .state::<AppState>()
                         .inventory_refresh

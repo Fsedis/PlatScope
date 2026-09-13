@@ -94,7 +94,7 @@ impl DiscoveryRules {
         };
         self.keys.contains(&key.to_string())
     }
-    fn wants_family(&self, family: &str) -> bool {
+    pub(super) fn wants_family(&self, family: &str) -> bool {
         let kinds: &[&str] = match family {
             "pickup" => &["pickup", "feather"],
             "npc" => &["npc", "hostage"],
