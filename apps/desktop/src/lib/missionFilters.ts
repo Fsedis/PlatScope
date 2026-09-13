@@ -1,4 +1,4 @@
-import { MISSION_FILTERS, objectFilter, type MissionFilter, type MissionObject } from "./missionResearch";
+import { MISSION_FILTERS, objectFilter, objectKindLabel, type MissionFilter, type MissionObject, type MissionObjectKind } from "./missionResearch";
 
 export interface MissionFilterRule { key: string; label: string; nameEn: string }
 export interface CustomMissionFilter { id: string; name: string; color: string; enabled: boolean; rules: MissionFilterRule[] }
@@ -6,11 +6,27 @@ export const MISSION_FILTER_STORAGE = "platscope.mission-filters.v1";
 export const MISSION_HIDDEN_STORAGE = "platscope.mission-hidden-names.v1";
 export interface HiddenMissionName { label: string; nameEn: string }
 const normalizeName = (name: string) => name.trim().toLowerCase().replaceAll("ё", "е").replace(/\s+/g, " ");
+const categoryNames = new Set([
+  ...MISSION_FILTERS.map(filter => filter.label),
+  ...(["feather", "pickup", "avatar", "npc", "hostage", "spawnpoint", "panel", "locker", "decoration", "extraction", "terminal", "lootspot", "cache"] as MissionObjectKind[]).map(objectKindLabel),
+  "Объект", "Деталь окружения", "Варфрейм или оператор", "Warframe / Operator",
+].map(normalizeName));
+/** Одно конкретное имя вместо объединения с общей подписью вроде NPC. */
+export function hiddenMissionNameKey(name: HiddenMissionName): string {
+  const en = normalizeName(name.nameEn), label = normalizeName(name.label);
+  if (en && !categoryNames.has(en)) return `en:${en}`;
+  return label && !categoryNames.has(label) ? `label:${label}` : "";
+}
+export function hiddenMissionNameLabel(name: HiddenMissionName): string {
+  return categoryNames.has(normalizeName(name.label)) ? name.nameEn || name.label : name.label || name.nameEn;
+}
 export function indexHiddenMissionNames(names: HiddenMissionName[]): Set<string> {
-  return new Set(names.flatMap(name => [normalizeName(name.label), normalizeName(name.nameEn)]).filter(Boolean));
+  // Старые записи v1 уже содержат nameEn: применяем уточнённое правило без
+  // перезаписи хранилища. Запись без конкретного имени больше ничего не скрывает.
+  return new Set(names.map(hiddenMissionNameKey).filter(Boolean));
 }
 export function objectIsHidden(object: HiddenMissionName, names: Set<string>): boolean {
-  return names.has(normalizeName(object.label)) || names.has(normalizeName(object.nameEn));
+  return names.has(hiddenMissionNameKey(object));
 }
 export function parseHiddenMissionNames(raw: string | null): HiddenMissionName[] {
   if (!raw) return [];

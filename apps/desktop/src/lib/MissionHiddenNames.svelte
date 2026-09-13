@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { HiddenMissionName } from "./missionFilters";
+  import { hiddenMissionNameLabel, type HiddenMissionName } from "./missionFilters";
   export let names: HiddenMissionName[] = [];
   export let count = 0;
   export let disabled = false;
@@ -13,7 +13,7 @@
     <p>Скрыто на этой карте: {count}. Все экземпляры с этими названиями убраны с карты и из списка.</p>
     <ul>
       {#each names as name}
-        <li><div><strong>{name.label || name.nameEn}</strong>{#if name.nameEn && name.nameEn !== name.label}<small>{name.nameEn}</small>{/if}</div><button {disabled} aria-label={`Вернуть на карту: ${name.label || name.nameEn}`} onclick={() => onrestore(name)}>Вернуть</button></li>
+        <li><div><strong>{hiddenMissionNameLabel(name)}</strong>{#if name.nameEn && name.nameEn !== hiddenMissionNameLabel(name)}<small>{name.nameEn}</small>{/if}</div><button {disabled} aria-label={`Вернуть на карту: ${hiddenMissionNameLabel(name)}`} onclick={() => onrestore(name)}>Вернуть</button></li>
       {/each}
     </ul>
     {#if names.length > 1}<button class="restore-all" {disabled} onclick={onrestoreall}>Вернуть все</button>{/if}

@@ -68,10 +68,17 @@ describe("свои фильтры карты", () => {
     // Скрытие по названию сильнее включённых групп и переживает новую миссию.
     const hidden = indexHiddenMissionNames(parseHiddenMissionNames(serializeHiddenMissionNames([{label:item.label,nameEn:item.nameEn}])));
     expect(objectIsVisible({...item,key:"new-address",variantKey:"different-variant"},standard,[enabled],hidden)).toBe(false);
-    expect(objectIsVisible({...item,label:"  ДЕТАЛЬ   ОКРУЖЕНИЯ  ",nameEn:"Other"},standard,[enabled],hidden)).toBe(false);
+    expect(objectIsVisible({...item,label:"  ДЕТАЛЬ   ОКРУЖЕНИЯ  ",nameEn:"Other"},standard,[enabled],hidden)).toBe(true);
     expect(objectIsVisible({...item,label:"Другое имя"},standard,[enabled],hidden)).toBe(false);
     expect(objectIsVisible({...item,label:"Деталь окружения редкая",nameEn:"Panel rare"},standard,[enabled],hidden)).toBe(true);
     expect(objectIsVisible(item,standard,[enabled],indexHiddenMissionNames([]))).toBe(true);
+    const moa = object({kind:"npc",label:"NPC",nameEn:"SuperMoa_skel.fbx"});
+    // Формат уже сохранённой записи 0.1.85: NPC не должен стать общим правилом.
+    const oldHidden = indexHiddenMissionNames(parseHiddenMissionNames('{"version":1,"names":[{"label":"NPC","nameEn":"SuperMoa_skel.fbx"}]}'));
+    expect(objectIsVisible({...moa,key:"new-moa",nameEn:"  SUPERMOA_skel.fbx "},{...standard,npc:true},[],oldHidden)).toBe(false);
+    expect(objectIsVisible({...moa,nameEn:"CorpusCrewman_skel.fbx"},{...standard,npc:true},[],oldHidden)).toBe(true);
+    expect(objectIsVisible({...moa,nameEn:"SuperMoaRare_skel.fbx"},{...standard,npc:true},[],oldHidden)).toBe(true);
+    expect(objectIsVisible(moa,{...standard,npc:true},[],indexHiddenMissionNames([{label:"NPC",nameEn:""}]))).toBe(true);
   });
   it("сохраняет название, цвет, состояние и состав, включая пустые фильтры", () => {
     const filters = [addFilterObjects(filter({enabled:false}),[object()]), filter({id:"empty",name:"Пустой"})];
