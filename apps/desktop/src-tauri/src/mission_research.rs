@@ -197,6 +197,9 @@ impl Service {
                 if let Some(path) = log_message(&line).and_then(|message| {
                     message.strip_prefix("Game [Info]: FrameworkCmd::OpenLevel - ")
                         .or_else(|| message.strip_prefix("Game [Info]: Level="))
+                        .or_else(|| message.strip_prefix("Sys [Info]: Client finished loading ")
+                            .and_then(|path| path.strip_suffix(". Sending CMSG_LOAD_COMPLETE to server."))
+                            .filter(|path| path.starts_with("/Lotus/Levels/")))
                 }) {
                     let path = path.trim();
                     self.in_orbiter = path == "/Lotus/Levels/Proc/PlayerShip"
@@ -962,6 +965,17 @@ mod tests {
         service.feed_log("100799.023 Game [Info]: FrameworkCmd::OpenLevel - /Lotus/Levels/Proc/Grineer/GrineerOceanExterminateAnywhere\n100799.312 Game [Info]: Level=/Lotus/Levels/Proc/Grineer/GrineerOceanExterminateAnywhere/DREISLKUKJ+7uqqoAA.lp\n100799.352 Sys [Info]: FSM::LoadLevel\n100810.000 Game [Info]: Level loader: LS_POST_CREATE -> LS_COMPLETE\n100811.000 Chat [Info]: Game [Info]: Level=/Lotus/Levels/Proc/PlayerShip/AeAg.lp\n");
         assert!(!service.in_orbiter);
         assert!(service.take_auto_request(Instant::now() + Duration::from_secs(30)));
+        // Подключение к хосту: путь получен в подтверждении клиентской загрузки,
+        // без локальных OpenLevel/Level=. Фон и строки чата не меняют локацию.
+        service.feed_log("12.000 Game [Info]: Level=/Lotus/Levels/Proc/PlayerShip/AeAv.lp\n13.000 Sys [Info]: FSM::LoadLevel\n14.000 Sys [Info]: Client finished loading /Lotus/Levels/Proc/Orokin/OrokinTowerDerelictCapture/example.lp. Sending CMSG_LOAD_COMPLETE to ser");
+        assert!(service.in_orbiter);
+        service.feed_log("ver.\n15.000 Sys [Info]: RegionMgrImpl::SetLevel /Lotus/Levels/Episodes/LisetInFlight.level\n16.000 Game [Info]: Level loader: LS_POST_CREATE -> LS_COMPLETE\n17.000 Chat [Info]: Sys [Info]: Client finished loading /Lotus/Levels/Proc/PlayerShip/AeAv.lp. Sending CMSG_LOAD_COMPLETE to server.\n");
+        assert!(!service.in_orbiter);
+        assert!(service.take_auto_request(Instant::now() + Duration::from_secs(30)));
+        service.feed_log("18.000 Sys [Info]: FSM::LoadLevel\n19.000 Sys [Info]: Client finished loading /Lotus/Levels/Proc/PlayerShip/AeAv.lp. Sending CMSG_LOAD_COMPLETE to server.\n20.000 Game [Info]: Level loader: LS_POST_CREATE -> LS_COMPLETE\n");
+        assert!(service.in_orbiter);
+        assert!(!service.take_auto_request(Instant::now() + Duration::from_secs(30)));
+        service.feed_log("20.500 Game [Info]: Level=/Lotus/Levels/Proc/Orokin/OrokinTowerDerelictCapture/example.lp\n");
         service.stop();
         service.feed_log("10.000 Sys [Info]: FSM::LoadLevel\n11.000 Game [Info]: Level loader: LS_POST_CREATE -> LS_COMPLETE\n");
         assert!(
