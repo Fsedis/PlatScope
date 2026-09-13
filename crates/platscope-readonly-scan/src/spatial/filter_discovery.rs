@@ -101,6 +101,7 @@ impl DiscoveryRules {
             "decoration" | "effect" => &["decoration", "cache", "locker", "panel"],
             "waypoint" => &["lootspot"],
             "terminal" => &["terminal"],
+            "dragon_door" => &["dragon_door"],
             "avatar" => &["avatar"],
             "spawnpoint" => &["spawnpoint"],
             "extraction" => &["extraction"],
@@ -257,7 +258,7 @@ fn discover_inner(
             }
             scene.objects.push(object);
             scene.identities.push(id);
-        } else if state.excluded.len() < 20_000 {
+        } else if family != "dragon_door" && state.excluded.len() < 20_000 {
             state.excluded.insert((vt, id.metadata));
         }
     }

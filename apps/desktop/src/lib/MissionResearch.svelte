@@ -41,7 +41,7 @@
   let groupObjects = true;
   let generation = 0;
   let alive = true;
-  let filters: Record<MissionFilter, boolean> = { feather: true, pickup: true, players: true, npc: false, other: false, goals: true, lootspots: false, caches: true };
+  let filters: Record<MissionFilter, boolean> = { feather: true, pickup: true, players: true, npc: false, other: false, goals: true, lootspots: false, caches: true, dragon_doors: true };
   let customFilters: CustomMissionFilter[] = [];
   let hiddenNames: HiddenMissionName[] = [];
   let hiddenStorageError = "";
@@ -357,6 +357,7 @@
       if (object.key === mine?.key) { const heading = Number.isFinite(state.viewHeading) ? state.viewHeading! : state.camera.angle ?? 0;
         const angle = heading - (state.camera.angle ?? 0), c = Math.cos(angle), s = Math.sin(angle);
         [[0, -9], [7, 7], [0, 3], [-7, 7]].forEach(([dx, dy], i) => { const px = x + c * dx - s * dy, py = y + s * dx + c * dy; if (i) ctx.lineTo(px, py); else ctx.moveTo(px, py); }); ctx.closePath(); ctx.fillStyle = "#b5eaff"; }
+      else if (object.kind === "dragon_door") { ctx.moveTo(x - 5, y + 6); ctx.lineTo(x - 5, y - 6); ctx.lineTo(x + 5, y - 6); ctx.lineTo(x + 5, y + 6); ctx.lineTo(x + 2, y + 6); ctx.lineTo(x + 2, y - 2); ctx.lineTo(x - 2, y - 2); ctx.lineTo(x - 2, y + 6); ctx.closePath(); }
       else if (object.kind === "extraction") { ctx.rect(x - 6, y - 6, 12, 12); }
       else if (object.kind === "feather") { ctx.moveTo(x, y - 7); ctx.lineTo(x + 5, y); ctx.lineTo(x, y + 7); ctx.lineTo(x - 5, y); ctx.closePath(); } else ctx.arc(x, y, chosen ? 5 : 3.5, 0, Math.PI * 2);
       ctx.fill(); ctx.strokeStyle = "#0c1119"; ctx.lineWidth = 1.5; ctx.stroke();

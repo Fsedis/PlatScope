@@ -43,6 +43,7 @@ impl Profile {
             (0x28ecf80, "MultiAvatarTrigger *"),
             (0x28d6f40, "Waypoint *"),
             (0x2960650, "CipherAction *"),
+            (0x28ce8c0, "ContextAction *"),
         ] {
             if q(m, base + meta)? != base + 0x203fc60 {
                 return Err("Не подтверждена структура типов игры".into());
@@ -87,6 +88,7 @@ impl Profile {
             (0x21a6fb0, "extraction"),
             (0x2113b98, "waypoint"),
             (0x22a1638, "terminal"),
+            (0x213cf68, "dragon_door"),
         ]
         .into_iter()
         .map(|(r, n)| (self.base + r, n))

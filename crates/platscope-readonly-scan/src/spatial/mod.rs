@@ -3,6 +3,7 @@ mod analyze;
 mod archive;
 mod cache;
 mod context;
+mod dragon_door;
 mod filter_discovery;
 mod geometry;
 mod profile;
@@ -126,6 +127,7 @@ pub(crate) struct Identity {
     pub handle: u64,
     pub zone: Option<u64>,
     pub item: Option<u64>,
+    pub item_offset: u64,
     pub moving: bool,
     pub missed_reads: u8,
 }

@@ -4,7 +4,7 @@ import type { MissionObject, MissionFilter } from "./missionResearch";
 import { indexHiddenMissionNames, parseHiddenMissionNames, serializeHiddenMissionNames } from "./missionFilters";
 const object = (extra: Partial<MissionObject> = {}): MissionObject => ({ key:"address-old", kind:"decoration", label:"Деталь окружения", nameEn:"Panel", itemPath:null, position:[1,2,3], typeNames:["Decoration"], availability:"unknown", details:[{label:"Ресурс",value:"/Lotus/Levels/Panel"}], ...extra });
 const filter = (extra: Partial<CustomMissionFilter> = {}): CustomMissionFilter => ({id:"custom",name:"Мои панели",color:"#cc55aa",enabled:true,rules:[],...extra});
-const standard: Record<MissionFilter, boolean> = {feather:true,pickup:true,players:true,npc:false,other:true,goals:true,lootspots:false,caches:true};
+const standard: Record<MissionFilter, boolean> = {feather:true,pickup:true,players:true,npc:false,other:true,goals:true,lootspots:false,dragon_doors:true,caches:true};
 
 describe("свои фильтры карты", () => {
   it("сворачивает одинаковые экземпляры, сохраняя разные варианты, состояния и игроков", () => {

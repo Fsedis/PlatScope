@@ -50,6 +50,7 @@ fn identity(m: &mut dyn Memory, a: u64, expected: u64) -> Result<Identity> {
         handle: h,
         zone: None,
         item: None,
+        item_offset: 0x528,
         moving: false,
         missed_reads: 0,
     })
@@ -100,7 +101,45 @@ pub(super) fn object(
     )];
     let mut item_path = None;
     let mut availability = "unknown";
+    let mut variant_key = None;
     let (kind, label, name_en) = match family {
+        "dragon_door" => {
+            if !info.names.iter().any(|n| n == "ContextAction *") {
+                return Err("Не подтверждён тип действия двери".into());
+            }
+            let (_, zone) = handle(m, a + 0x428)?;
+            let zone_meta = q(m, zone + 8)?;
+            if !decoder
+                .chain(m, zone_meta)?
+                .names
+                .iter()
+                .any(|n| n == "Zone *")
+            {
+                return Err("Не подтверждена зона двери".into());
+            }
+            let root = q(m, a + 0x1e0)?;
+            if root == 0 || q(m, zone + 0x1e0)? != root {
+                return Err("Дверь не принадлежит зоне миссии".into());
+            }
+            let (key, item) = super::dragon_door::required_key(m, a, decoder)?;
+            id.zone = Some(zone);
+            id.item = Some(item);
+            id.item_offset = super::dragon_door::REQUIRED_ITEM;
+            variant_key = Some(format!("dragon-door-v1:{}", key.code));
+            details.push(detail(
+                "Требуемый ключ",
+                format!("Ключ Дракона: {} · {}", key.label, key.english),
+            ));
+            details.push(detail(
+                "Состояние двери",
+                "Открытие двери и наличие ключа у игрока не проверены",
+            ));
+            (
+                "dragon_door",
+                format!("Дверь Дракона · {}", key.label),
+                format!("Orokin Vault · {}", key.english),
+            )
+        }
         "pickup" => {
             let (_, zone) = handle(m, a + 0x428)?;
             let zone_meta = q(m, zone + 8)?;
@@ -279,7 +318,7 @@ pub(super) fn object(
             label,
             name_en,
             item_path,
-            variant_key: Some(info.variant_key()),
+            variant_key: Some(variant_key.unwrap_or_else(|| info.variant_key())),
             position,
             position_fresh: true,
             type_names: info.names,
@@ -486,6 +525,31 @@ fn run(
     }
     scene.discovery_ranges = pools.into_values().collect();
     super::context::update(m, &mut scene, profile.base, cancel)?;
+    // При полном обходе в памяти могут оставаться действия прошлой миссии.
+    let root = scene
+        .players
+        .iter()
+        .find(|p| p.local)
+        .and_then(|p| u64::from_str_radix(p.avatar_key.trim_start_matches("0x"), 16).ok())
+        .and_then(|a| q(m, a + 0x1e0).ok())
+        .filter(|root| *root != 0);
+    let mut removed = HashSet::new();
+    scene.objects.retain(|object| {
+        let keep = object.kind != "dragon_door"
+            || root.is_some_and(|root| {
+                u64::from_str_radix(object.key.trim_start_matches("0x"), 16)
+                    .ok()
+                    .and_then(|a| q(m, a + 0x1e0).ok())
+                    == Some(root)
+            });
+        if !keep {
+            removed.insert(object.key.clone());
+        }
+        keep
+    });
+    scene
+        .identities
+        .retain(|id| !removed.contains(&format!("0x{:x}", id.address)));
     scene.stats.object_count = scene.objects.len() as u64;
     scene.stats.mesh_count = scene.meshes.len() as u64;
     scene.captured_at = stamp();
@@ -669,7 +733,7 @@ fn observe(m: &mut dyn Memory, old: &Identity) -> Result<Option<(Identity, Optio
         return Ok(None);
     }
     if let Some(item) = old.item
-        && handle(m, old.address + 0x528)?.1 != item
+        && handle(m, old.address + old.item_offset)?.1 != item
     {
         return Ok(None);
     }
@@ -844,6 +908,7 @@ mod tests {
             handle: 0x800,
             zone: Some(0x1000),
             item: None,
+            item_offset: 0x528,
             moving: true,
             missed_reads: 0,
         });
