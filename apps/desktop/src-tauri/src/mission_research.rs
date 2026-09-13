@@ -33,6 +33,7 @@ pub(crate) struct Status {
     tracking: bool,
     scanned_bytes: u64,
     auto_start: bool,
+    in_orbiter: bool,
 }
 #[derive(Default)]
 struct Inner {
@@ -54,6 +55,7 @@ pub(crate) struct Service {
     log_tail: String,
     log_ready: bool,
     loading_location: bool,
+    in_orbiter: bool,
     last_load: Option<String>,
     auto_after: Option<Instant>,
 }
@@ -67,6 +69,7 @@ impl Service {
         let inner = self.inner.lock().map_err(|e| e.to_string())?;
         let mut status = inner.status.clone();
         status.auto_start = !inner.auto_paused;
+        status.in_orbiter = self.in_orbiter;
         drop(inner);
         status.game_running = find_wf_pid().is_some();
         Ok(status)
@@ -189,6 +192,17 @@ impl Service {
         if let Some(end) = self.log_tail.rfind('\n') {
             let lines: Vec<_> = self.log_tail[..end].lines().map(str::to_owned).collect();
             for line in lines {
+                // Основной уровень объявляется до FSM::LoadLevel. Фоновые сцены
+                // перелёта и обычная загрузка ресурсов не меняют назначение перехода.
+                if let Some(path) = log_message(&line).and_then(|message| {
+                    message.strip_prefix("Game [Info]: FrameworkCmd::OpenLevel - ")
+                        .or_else(|| message.strip_prefix("Game [Info]: Level="))
+                }) {
+                    let path = path.trim();
+                    self.in_orbiter = path == "/Lotus/Levels/Proc/PlayerShip"
+                        || path.starts_with("/Lotus/Levels/Proc/PlayerShip/");
+                    if self.in_orbiter { self.auto_after = None; }
+                }
                 if mission_changed(&line) && self.last_load.as_deref() != Some(line.trim()) {
                     self.last_load = Some(line.trim().to_owned());
                     self.loading_location = true;
@@ -196,7 +210,7 @@ impl Service {
                     self.invalidate();
                 } else if level_loaded(&line) && self.loading_location {
                     self.loading_location = false;
-                    self.auto_after = Some(Instant::now() + Duration::from_secs(3));
+                    self.auto_after = (!self.in_orbiter).then(|| Instant::now() + Duration::from_secs(3));
                 }
             }
             self.log_tail.drain(..=end);
@@ -218,10 +232,11 @@ impl Service {
         self.last_load = None;
         self.log_ready = false;
         self.loading_location = false;
+        self.in_orbiter = false;
         self.auto_after = None;
     }
     fn take_auto_request(&mut self, now: Instant) -> bool {
-        if !self.log_ready || self.loading_location || self.auto_after.is_none_or(|at| at > now) {
+        if !self.log_ready || self.loading_location || self.in_orbiter || self.auto_after.is_none_or(|at| at > now) {
             return false;
         }
         let Ok(inner) = self.inner.lock() else {
@@ -936,6 +951,16 @@ mod tests {
             "Ждём выхода отменённого рабочего потока"
         );
         service.inner.lock().unwrap().status.busy = false;
+        assert!(service.take_auto_request(Instant::now() + Duration::from_secs(30)));
+        // Реальный порядок EE.log: путь Орбитера раньше FSM, фон перелёта позже.
+        service.feed_log("100780.492 Game [Info]: FrameworkCmd::OpenLevel - /Lotus/Levels/Proc/PlayerShip\n100780.742 Game [Info]: Level=/Lotus/Levels/Proc/PlayerShip/AeAg.lp\n100780.766 Sys [Info]: FSM::LoadLevel\n100781.383 Sys [Info]: RegionMgrImpl::SetLevel /Lotus/Levels/Episodes/LisetInFlightAtmosphere.level\n100784.258 Game [Info]: Level loader: LS_POST_CREATE -> LS_COMPLETE\n");
+        service.set_log_ready(false);
+        service.set_log_ready(true);
+        assert!(service.in_orbiter);
+        assert!(service.auto_after.is_none());
+        assert!(!service.take_auto_request(Instant::now() + Duration::from_secs(30)));
+        service.feed_log("100799.023 Game [Info]: FrameworkCmd::OpenLevel - /Lotus/Levels/Proc/Grineer/GrineerOceanExterminateAnywhere\n100799.312 Game [Info]: Level=/Lotus/Levels/Proc/Grineer/GrineerOceanExterminateAnywhere/DREISLKUKJ+7uqqoAA.lp\n100799.352 Sys [Info]: FSM::LoadLevel\n100810.000 Game [Info]: Level loader: LS_POST_CREATE -> LS_COMPLETE\n100811.000 Chat [Info]: Game [Info]: Level=/Lotus/Levels/Proc/PlayerShip/AeAg.lp\n");
+        assert!(!service.in_orbiter);
         assert!(service.take_auto_request(Instant::now() + Duration::from_secs(30)));
         service.stop();
         service.feed_log("10.000 Sys [Info]: FSM::LoadLevel\n11.000 Game [Info]: Level loader: LS_POST_CREATE -> LS_COMPLETE\n");

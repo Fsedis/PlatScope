@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { addFilterObjects, objectRule, objectIsVisible, filterColor, parseMissionFilters, serializeMissionFilters, missionDiscoveryKeys, groupMissionObjects, type CustomMissionFilter } from "./missionFilters";
 import type { MissionObject, MissionFilter } from "./missionResearch";
+import { indexHiddenMissionNames, parseHiddenMissionNames, serializeHiddenMissionNames } from "./missionFilters";
 const object = (extra: Partial<MissionObject> = {}): MissionObject => ({ key:"address-old", kind:"decoration", label:"Деталь окружения", nameEn:"Panel", itemPath:null, position:[1,2,3], typeNames:["Decoration"], availability:"unknown", details:[{label:"Ресурс",value:"/Lotus/Levels/Panel"}], ...extra });
 const filter = (extra: Partial<CustomMissionFilter> = {}): CustomMissionFilter => ({id:"custom",name:"Мои панели",color:"#cc55aa",enabled:true,rules:[],...extra});
 const standard: Record<MissionFilter, boolean> = {feather:true,pickup:true,players:true,npc:false,other:true,goals:true,lootspots:false,caches:true};
@@ -64,6 +65,13 @@ describe("свои фильтры карты", () => {
     expect(filterColor(item,[disabled,enabled])).toBe("#00ff00");
     expect(objectIsVisible(object({itemPath:"/Lotus/Other"}),standard,[disabled])).toBe(true);
     expect(objectIsVisible(item,standard,[])).toBe(true);
+    // Скрытие по названию сильнее включённых групп и переживает новую миссию.
+    const hidden = indexHiddenMissionNames(parseHiddenMissionNames(serializeHiddenMissionNames([{label:item.label,nameEn:item.nameEn}])));
+    expect(objectIsVisible({...item,key:"new-address",variantKey:"different-variant"},standard,[enabled],hidden)).toBe(false);
+    expect(objectIsVisible({...item,label:"  ДЕТАЛЬ   ОКРУЖЕНИЯ  ",nameEn:"Other"},standard,[enabled],hidden)).toBe(false);
+    expect(objectIsVisible({...item,label:"Другое имя"},standard,[enabled],hidden)).toBe(false);
+    expect(objectIsVisible({...item,label:"Деталь окружения редкая",nameEn:"Panel rare"},standard,[enabled],hidden)).toBe(true);
+    expect(objectIsVisible(item,standard,[enabled],indexHiddenMissionNames([]))).toBe(true);
   });
   it("сохраняет название, цвет, состояние и состав, включая пустые фильтры", () => {
     const filters = [addFilterObjects(filter({enabled:false}),[object()]), filter({id:"empty",name:"Пустой"})];

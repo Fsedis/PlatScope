@@ -3,6 +3,31 @@ import { MISSION_FILTERS, objectFilter, type MissionFilter, type MissionObject }
 export interface MissionFilterRule { key: string; label: string; nameEn: string }
 export interface CustomMissionFilter { id: string; name: string; color: string; enabled: boolean; rules: MissionFilterRule[] }
 export const MISSION_FILTER_STORAGE = "platscope.mission-filters.v1";
+export const MISSION_HIDDEN_STORAGE = "platscope.mission-hidden-names.v1";
+export interface HiddenMissionName { label: string; nameEn: string }
+const normalizeName = (name: string) => name.trim().toLowerCase().replaceAll("ё", "е").replace(/\s+/g, " ");
+export function indexHiddenMissionNames(names: HiddenMissionName[]): Set<string> {
+  return new Set(names.flatMap(name => [normalizeName(name.label), normalizeName(name.nameEn)]).filter(Boolean));
+}
+export function objectIsHidden(object: HiddenMissionName, names: Set<string>): boolean {
+  return names.has(normalizeName(object.label)) || names.has(normalizeName(object.nameEn));
+}
+export function parseHiddenMissionNames(raw: string | null): HiddenMissionName[] {
+  if (!raw) return [];
+  if (raw.length > 1_000_000) throw new Error("Список скрытых слишком большой.");
+  const data = JSON.parse(raw);
+  if (data?.version !== 1 || !Array.isArray(data.names) || data.names.length > 500
+    || data.names.some((name: HiddenMissionName) => !name || typeof name.label !== "string" || typeof name.nameEn !== "string"
+      || name.label.length > 1024 || name.nameEn.length > 1024 || !(name.label.trim() || name.nameEn.trim()))) {
+    throw new Error("Не удалось прочитать список скрытых названий.");
+  }
+  return data.names.map((name: HiddenMissionName) => ({ label: name.label, nameEn: name.nameEn }));
+}
+export function serializeHiddenMissionNames(names: HiddenMissionName[]): string {
+  const raw = JSON.stringify({ version: 1, names });
+  parseHiddenMissionNames(raw);
+  return raw;
+}
 export type MissionFilterIndex = Map<string, { visible: boolean; color: string | null; groups: string[] }>;
 export type FilterScope = "variant" | "model";
 const resourceName = (value: string) => value.trim().replace(/^"|"$/g, "").replaceAll("\\", "/").split("/").pop()!.toLowerCase();
@@ -72,7 +97,8 @@ export function addFilterObjects(filter: CustomMissionFilter, objects: MissionOb
   return { ...filter, rules: [...rules.values()] };
 }
 
-export function objectIsVisible(object: MissionObject, standard: Record<MissionFilter, boolean>, custom: CustomMissionFilter[] | MissionFilterIndex): boolean {
+export function objectIsVisible(object: MissionObject, standard: Record<MissionFilter, boolean>, custom: CustomMissionFilter[] | MissionFilterIndex, hidden?: Set<string>): boolean {
+  if (hidden && objectIsHidden(object, hidden)) return false;
   const index = Array.isArray(custom) ? indexMissionFilters(custom) : custom;
   return objectFilterEntry(object, index)?.visible ?? standard[objectFilter(object.kind)];
 }
