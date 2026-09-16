@@ -9,6 +9,7 @@ const gear: SquadEquipment = {
 export function makeSquadMock() {
   const scenario = new URLSearchParams(location.search).get("squadScenario");
   let saved: SavedBuild[] = JSON.parse(localStorage.getItem("platscope.mock.squad.builds") ?? "[]");
+  saved = saved.map(build => ({ ...build, equipment: Array.isArray(build.equipment) ? build.equipment : [build.equipment] }));
   let recording = { active: false, scanning: false, path: null as string | null, startedAt: null as string | null, samples: 0, bytes: 0, changedFields: [] as string[], error: null, stopReason: null as string | null };
   let binary = { active:false, stopping:false, scanning:false, path:null as string | null, samples:0, bytes:0, readBytes:0, holes:0, lastComplete:null as boolean | null, error:null as string | null, stopReason:null as string | null };
   const configurations: SquadEquipment[] = [
@@ -53,9 +54,12 @@ export function makeSquadMock() {
     if (command === "squad_save_build") {
       const fromConfiguration = args.source === "configuration";
       const member = fromConfiguration ? { name: "Владелец не подтверждён", platform:"", capturedAt: view.configurationsAt, equipment:view.configurations } : view.members.find(m => m.name === args.player);
-      const equipment = member?.equipment.find(e => e.key === args.equipmentKey);
-      if (!member || !equipment) throw "Экипировка уже недоступна.";
-      saved.unshift({ id: crypto.randomUUID(), title: equipment.item.name, player: member.name, platform: member.platform, capturedAt: member.capturedAt!, savedAt: new Date().toISOString(), note: "", equipment: structuredClone(equipment) });
+      const equipment = fromConfiguration ? member?.equipment.filter(e => e.key === args.equipmentKey) : member?.equipment;
+      if (!member || !equipment?.length) throw "Экипировка уже недоступна.";
+      if (member.capturedAt !== args.capturedAt) throw "Снимок экипировки изменился. Просмотрите его и сохраните снова.";
+      if (!saved.some(build => build.player === member.name && build.platform === member.platform && build.capturedAt === member.capturedAt && JSON.stringify(build.equipment.map(e => e.key)) === JSON.stringify(equipment.map(e => e.key)))) {
+        saved.unshift({ id: crypto.randomUUID(), title: fromConfiguration ? equipment[0].item.name : `Экипировка ${member.name}`, player: member.name, platform: member.platform, capturedAt: member.capturedAt!, savedAt: new Date().toISOString(), note: "", equipment: structuredClone(equipment) });
+      }
     }
     if (command === "squad_edit_build") { const b = saved.find(b => b.id === args.id); if (b) { b.title = String(args.title); b.note = String(args.note); } }
     if (command === "squad_delete_build") saved = saved.filter(b => b.id !== args.id);

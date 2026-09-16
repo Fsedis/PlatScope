@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import SquadRiven from "./SquadRiven.svelte";
   import { invoke } from "@tauri-apps/api/core";
-  import { buildText, partName, refinementName, shardColor, equipmentMatchesSearch, type SquadView } from "./squad";
+  import { loadoutText, partName, refinementName, shardColor, equipmentMatchesSearch, savedBuildMatchesSearch, type SquadView } from "./squad";
 
   let view: SquadView | null = null;
   let loading = true;
@@ -16,6 +16,7 @@
   let player = "";
   let equipmentKey = "";
   let savedId = "";
+  let savedEquipmentKey = "";
   let query = "";
   let editing = false;
   let editingId = "";
@@ -27,7 +28,7 @@
   let mounted = true;
   let polling = false;
   $: members = view?.members ?? [];
-  $: saved = (view?.saved ?? []).filter(b => equipmentMatchesSearch(b.equipment, query, [b.title, b.player, b.note]));
+  $: saved = (view?.saved ?? []).filter(b => savedBuildMatchesSearch(b, query));
   $: member = members.find(m => m.name === player) ?? members[0] ?? null;
   $: selectedBuild = saved.find(b => b.id === savedId) ?? saved[0] ?? null;
   $: if (editing && selectedBuild?.id !== editingId) editing = false;
@@ -35,7 +36,8 @@
   $: configurationCategories = [...new Set((view?.configurations ?? []).map(e => e.category))];
   $: configurations = (view?.configurations ?? []).filter(e => (!configurationCategory || e.category === configurationCategory) && equipmentMatchesSearch(e, configurationQuery));
   $: configuration = configurations.find(e => e.key === configurationKey) ?? configurations[0] ?? null;
-  $: equipment = mode === "configuration" ? configuration : mode === "saved" ? selectedBuild?.equipment ?? null : member?.equipment.find(e => e.key === equipmentKey) ?? member?.equipment[0] ?? null;
+  $: loadout = mode === "configuration" ? (configuration ? [configuration] : []) : mode === "saved" ? selectedBuild?.equipment ?? [] : member?.equipment ?? [];
+  $: equipment = loadout.find(e => e.key === (mode === "saved" ? savedEquipmentKey : equipmentKey)) ?? loadout[0] ?? null;
   $: sourcePlayer = mode === "configuration" ? "Владелец не подтверждён" : mode === "saved" ? selectedBuild?.player ?? "" : member?.name ?? "";
   $: capturedAt = mode === "configuration" ? view?.configurationsAt : mode === "saved" ? selectedBuild?.capturedAt : member?.capturedAt;
   $: mods = equipment?.upgrades.filter(p => p.kind === "mod") ?? [];
@@ -60,7 +62,8 @@
   function selectMode(next: "squad" | "saved" | "configuration") { mode = next; editing = false; deleting = false; notice = ""; }
   async function save() {
     if (!equipment) return;
-    if (await act("squad_save_build", { player: sourcePlayer, equipmentKey: equipment.key, capturedAt, source: mode === "configuration" ? "configuration" : null })) notice = "Билд сохранён. Он останется в коллекции после выхода игрока.";
+    const fromConfiguration = mode === "configuration";
+    if (await act("squad_save_build", { player: sourcePlayer, equipmentKey: fromConfiguration ? equipment.key : null, capturedAt, source: fromConfiguration ? "configuration" : null })) notice = fromConfiguration ? "Конфигурация сохранена." : "Вся полученная экипировка сопартийца сохранена одним билдом. Она останется в коллекции после выхода игрока.";
   }
   function edit() { if (selectedBuild) { editingId = selectedBuild.id; title = selectedBuild.title; note = selectedBuild.note; editing = true; } }
   async function saveEdit() {
@@ -71,14 +74,17 @@
   }
   async function copy() {
     if (!equipment) return;
-    try { await navigator.clipboard.writeText(buildText(equipment, sourcePlayer, mode === "saved" ? selectedBuild?.title ?? partName(equipment.item) : partName(equipment.item), mode === "saved" ? selectedBuild?.note : "")); notice = "Список скопирован — можно сверяться с ним в Арсенале."; }
+    try { await navigator.clipboard.writeText(exportText()); notice = "Список скопирован — можно сверяться с ним в Арсенале."; }
     catch { error = "Не удалось скопировать. Сохраните список в файл."; }
   }
   async function download() {
     if (!equipment) return;
-    const text = buildText(equipment, sourcePlayer, mode === "saved" ? selectedBuild?.title ?? partName(equipment.item) : partName(equipment.item), mode === "saved" ? selectedBuild?.note : "");
+    const text = exportText();
     try { const path = await invoke<string>("squad_export_text", { text }); notice = `Список сохранён: ${path}`; }
     catch { error = "Не удалось сохранить список. Проверьте свободное место и повторите."; }
+  }
+  function exportText(): string {
+    return loadoutText(loadout, sourcePlayer, mode === "saved" ? selectedBuild?.title ?? "Билд" : mode === "squad" ? `Экипировка ${sourcePlayer}` : partName(equipment!.item), mode === "saved" ? selectedBuild?.note : "");
   }
   const date = (value: string | null | undefined) => value ? new Date(value).toLocaleString("ru-RU") : "";
   onMount(() => { void refresh(); const timer = setInterval(() => void refresh(), 2000); return () => { mounted = false; revision++; clearInterval(timer); }; });
@@ -128,22 +134,26 @@
           {#each configurations as e (e.key)}<button class="row" class:selected={equipment?.key === e.key} onclick={() => { configurationKey = e.key; notice = ""; }}><strong>{partName(e.item)}</strong>{#if e.item.nameEn !== e.item.name}<small>{e.item.nameEn}</small>{/if}<span>{e.category}{e.configuration ? ` · Конфигурация ${e.configuration}` : ""}</span>{#if e.item.fingerprint}<small>{e.item.fingerprint.weaponName || e.item.fingerprint.weaponNameEn || "Оружие не определено"}</small>{/if}</button>{/each}
         {:else}
           <label class="search">Найти билд<input type="search" bind:value={query} placeholder="Предмет, мод, способность или игрок" /></label>
-          {#if !saved.length}<div class="empty"><strong>{query ? "Билды не найдены" : "Коллекция пока пуста"}</strong><p>{query ? "Измените поисковый запрос." : "Откройте предмет сопартийца в текущем отряде и нажмите «Сохранить билд»."}</p></div>{/if}
+          {#if !saved.length}<div class="empty"><strong>{query ? "Билды не найдены" : "Коллекция пока пуста"}</strong><p>{query ? "Измените поисковый запрос." : "Выберите сопартийца в текущем отряде и нажмите «Сохранить экипировку»."}</p></div>{/if}
           {#each saved as b (b.id)}
-            <button class="row" class:selected={selectedBuild?.id === b.id} onclick={() => { savedId = b.id; editing = false; deleting = false; notice = ""; }}><strong>{b.title}</strong><small>{b.player} · {b.equipment.category}</small><span>{date(b.savedAt)}</span></button>
+            <button class="row" class:selected={selectedBuild?.id === b.id} onclick={() => { savedId = b.id; savedEquipmentKey = ""; editing = false; deleting = false; notice = ""; }}><strong>{b.title}</strong><small>{b.player} · Предметов: {b.equipment.length}</small><span>{date(b.savedAt)}</span></button>
           {/each}
         {/if}
       </aside>
       <div class="detail">
         {#if mode === "squad" && member}
-          <h2>{member.name}</h2>
+          <div class="item-heading"><h2>{member.name}</h2><button class="primary" disabled={busy || member.status !== "matched" || !member.equipment.length || !member.capturedAt} onclick={() => void save()}>Сохранить экипировку</button></div>
           {#if member.status === "ambiguous"}<p class="empty">Найдено несколько подходящих вариантов. Принадлежность билда определить нельзя, поэтому он не показывается.</p>
           {:else if !member.equipment.length}<p class="empty">{view.scanning ? "Получаем экипировку…" : "Данных экипировки пока нет. Попробуйте прочитать снова после входа игрока в миссию."}</p>{/if}
           {#if member.equipment.length}<div class="equipment-tabs" role="group" aria-label="Предметы игрока">{#each member.equipment as e (e.key)}<button class:active={equipment?.key === e.key} onclick={() => { equipmentKey = e.key; notice = ""; }}><small>{e.category}</small>{partName(e.item)}</button>{/each}</div>{/if}
         {/if}
+        {#if mode === "saved" && selectedBuild}
+          {#if !equipment || selectedBuild.title !== partName(equipment.item)}<h2>{selectedBuild.title}</h2>{/if}
+          {#if loadout.length > 1}<div class="equipment-tabs" role="group" aria-label="Сохранённая экипировка">{#each loadout as e (e.key)}<button class:active={equipment?.key === e.key} onclick={() => { savedEquipmentKey = e.key; notice = ""; }}><small>{e.category}</small>{partName(e.item)}{#if e.item.nameEn && e.item.nameEn !== e.item.name}<small lang="en">{e.item.nameEn}</small>{/if}</button>{/each}</div>{/if}
+        {/if}
         {#if equipment}
-          <div class="item-heading"><div><p class="eyebrow">{equipment.category}</p><h2>{mode === "saved" ? selectedBuild?.title : partName(equipment.item)}</h2>{#if mode === "saved" && selectedBuild?.title !== partName(equipment.item)}<p>{partName(equipment.item)}</p>{/if}{#if equipment.item.nameEn && equipment.item.nameEn !== equipment.item.name}<p class="english" lang="en">{equipment.item.nameEn}</p>{/if}<p class="hint">Уровень: {equipment.level ?? "неизвестен"} · Форм: {equipment.forma ?? "неизвестно"}</p></div>
-            {#if mode !== "saved"}<button class="primary" disabled={busy} onclick={() => void save()}>Сохранить билд</button>{/if}</div>
+          <div class="item-heading"><div><p class="eyebrow">{equipment.category}</p><h2>{partName(equipment.item)}</h2>{#if equipment.item.nameEn && equipment.item.nameEn !== equipment.item.name}<p class="english" lang="en">{equipment.item.nameEn}</p>{/if}<p class="hint">Уровень: {equipment.level ?? "неизвестен"} · Форм: {equipment.forma ?? "неизвестно"}</p></div>
+            {#if mode === "configuration"}<button class="primary" disabled={busy} onclick={() => void save()}>Сохранить конфигурацию</button>{/if}</div>
           <p class="provenance">{sourcePlayer} · Снимок {date(capturedAt)}. {equipment.source === "memoryConfiguration" ? `${equipment.configuration ? `Конфигурация ${equipment.configuration}.` : "Запись инвентаря."} Владелец, активный вариант и актуальность не подтверждены. Несколько вариантов могут относиться к старым состояниям одного предмета.` : "Принадлежность сопоставлена по размеру данных; проверьте её перед использованием."}</p>
           {#if equipment.context?.focus || equipment.context?.relic}<div class="loadout-context">{#if equipment.context.focus}<p><strong>Фокус:</strong> {partName(equipment.context.focus)}{#if equipment.context.focus.nameEn !== equipment.context.focus.name}<small>{equipment.context.focus.nameEn}</small>{/if}</p>{/if}{#if equipment.context.relic}<p><strong>Реликвия:</strong> {partName(equipment.context.relic)} · {refinementName(equipment.context.refinement)}</p>{/if}</div>{/if}
           {#if equipment.category === "Варфрейм"}

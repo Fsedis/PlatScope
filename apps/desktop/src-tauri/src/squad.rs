@@ -163,7 +163,25 @@ pub(crate) struct SavedBuild {
     captured_at: String,
     saved_at: String,
     note: String,
-    equipment: Equipment,
+    #[serde(deserialize_with = "deserialize_saved_equipment")]
+    equipment: Vec<Equipment>,
+}
+
+// Старые записи содержат один предмет; при чтении сохраняем его как отдельный билд.
+fn deserialize_saved_equipment<'de, D>(deserializer: D) -> Result<Vec<Equipment>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum StoredEquipment {
+        Loadout(Vec<Equipment>),
+        Item(Box<Equipment>),
+    }
+    Ok(match StoredEquipment::deserialize(deserializer)? {
+        StoredEquipment::Loadout(items) => items,
+        StoredEquipment::Item(item) => vec![*item],
+    })
 }
 
 #[derive(Serialize)]
@@ -946,7 +964,9 @@ fn view(state: &AppState) -> Result<View, String> {
         names.localize_equipment(equipment);
     }
     for build in &mut result.saved {
-        names.localize_equipment(&mut build.equipment);
+        for equipment in &mut build.equipment {
+            names.localize_equipment(equipment);
+        }
     }
     Ok(result)
 }
@@ -1020,73 +1040,83 @@ pub(crate) fn squad_refresh(state: State<'_, AppState>) -> Result<View, String> 
     view(&state)
 }
 
+fn snapshot_build(
+    service: &Service,
+    player: &str,
+    equipment_key: Option<&str>,
+    captured_at: &str,
+    source: Option<&str>,
+) -> Result<SavedBuild, String> {
+    let (equipment, platform, snapshot, player, title) = if source == Some("configuration") {
+        if service.configurations_at.as_deref() != Some(captured_at) {
+            return Err("Конфигурации изменились. Просмотрите их и сохраните снова.".into());
+        }
+        let item = service
+            .configurations
+            .iter()
+            .find(|e| Some(e.key.as_str()) == equipment_key)
+            .ok_or("Конфигурация уже недоступна.")?
+            .clone();
+        let title = if item.item.name.is_empty() {
+            item.category.clone()
+        } else {
+            item.item.name.clone()
+        };
+        (
+            vec![item],
+            String::new(),
+            captured_at.to_owned(),
+            "Владелец не подтверждён".to_owned(),
+            title,
+        )
+    } else {
+        let member = service
+            .members
+            .iter()
+            .find(|m| m.name == player && m.status == "matched")
+            .ok_or("Экипировка уже недоступна. Обновите отряд.")?;
+        if member.captured_at.as_deref() != Some(captured_at) {
+            return Err("Снимок экипировки изменился. Просмотрите его и сохраните снова.".into());
+        }
+        if member.equipment.is_empty() {
+            return Err("Экипировка уже недоступна. Обновите отряд.".into());
+        }
+        (
+            member.equipment.clone(),
+            member.platform.clone(),
+            member.captured_at.clone().unwrap_or_default(),
+            player.to_owned(),
+            format!("Экипировка {player}"),
+        )
+    };
+    Ok(SavedBuild {
+        id: String::new(),
+        title,
+        player,
+        platform,
+        captured_at: snapshot,
+        saved_at: Utc::now().to_rfc3339(),
+        note: String::new(),
+        equipment,
+    })
+}
+
 #[tauri::command(async)]
 #[allow(clippy::needless_pass_by_value)]
 pub(crate) fn squad_save_build(
     player: String,
-    equipment_key: String,
+    equipment_key: Option<String>,
     captured_at: String,
     source: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<View, String> {
-    let mut build = {
-        let service = state.squad.lock().map_err(|e| e.to_string())?;
-        let (equipment, platform, snapshot, player) = if source.as_deref() == Some("configuration")
-        {
-            if service.configurations_at.as_deref() != Some(captured_at.as_str()) {
-                return Err("Конфигурации изменились. Просмотрите их и сохраните снова.".into());
-            }
-            let item = service
-                .configurations
-                .iter()
-                .find(|e| e.key == equipment_key)
-                .ok_or("Конфигурация уже недоступна.")?
-                .clone();
-            (
-                item,
-                String::new(),
-                captured_at,
-                "Владелец не подтверждён".to_owned(),
-            )
-        } else {
-            let member = service
-                .members
-                .iter()
-                .find(|m| m.name == player && m.status == "matched")
-                .ok_or("Экипировка уже недоступна. Обновите отряд.")?;
-            if member.captured_at.as_deref() != Some(captured_at.as_str()) {
-                return Err(
-                    "Снимок экипировки изменился. Просмотрите его и сохраните снова.".into(),
-                );
-            }
-            let equipment = member
-                .equipment
-                .iter()
-                .find(|e| e.key == equipment_key)
-                .ok_or("Предмет уже недоступен.")?
-                .clone();
-            (
-                equipment,
-                member.platform.clone(),
-                member.captured_at.clone().unwrap_or_default(),
-                player,
-            )
-        };
-        SavedBuild {
-            id: String::new(),
-            title: if equipment.item.name.is_empty() {
-                equipment.category.clone()
-            } else {
-                equipment.item.name.clone()
-            },
-            player,
-            platform,
-            captured_at: snapshot,
-            saved_at: Utc::now().to_rfc3339(),
-            note: String::new(),
-            equipment,
-        }
-    };
+    let mut build = snapshot_build(
+        &*state.squad.lock().map_err(|e| e.to_string())?,
+        &player,
+        equipment_key.as_deref(),
+        &captured_at,
+        source.as_deref(),
+    )?;
     {
         let db = state.database.lock().map_err(|e| e.to_string())?;
         let mut saved = db
@@ -1096,7 +1126,11 @@ pub(crate) fn squad_save_build(
         let exists = saved.iter().any(|b| {
             b.player == build.player
                 && b.captured_at == build.captured_at
-                && b.equipment.key == build.equipment.key
+                && b.platform == build.platform
+                && b.equipment
+                    .iter()
+                    .map(|e| &e.key)
+                    .eq(build.equipment.iter().map(|e| &e.key))
         });
         if !exists {
             if saved.len() >= MAX_SAVED {
@@ -1290,7 +1324,7 @@ mod tests {
             captured_at: "2026-09-12T00:00:00Z".into(),
             saved_at: "2026-09-12T00:00:00Z".into(),
             note: String::new(),
-            equipment,
+            equipment: vec![equipment],
         };
         db.set_setting(SAVED_KEY, &vec![saved]).unwrap();
         let stored = db
@@ -1298,8 +1332,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(
-            stored[0]
-                .equipment
+            stored[0].equipment[0]
                 .item
                 .fingerprint
                 .as_ref()
@@ -1464,23 +1497,55 @@ mod tests {
     #[test]
     fn saved_build_is_independent_of_roster_and_preserves_unknown_fields_in_storage() {
         let db = platscope_storage::Database::open_in_memory().unwrap();
-        let value =
-            json!({"NORMAL":[{"ItemType":"/Lotus/Test","WeaponUpgrades":["/Lotus/Unknown"]}]});
-        let equipment = equipment(&value, &Names::default()).remove(0);
-        let build = SavedBuild {
-            id: "test".into(),
-            title: "Идея".into(),
-            player: "Guest".into(),
-            platform: "PC".into(),
-            captured_at: "time".into(),
-            saved_at: "time".into(),
-            note: "Уточнить ранги".into(),
-            equipment,
-        };
-        db.set_setting(SAVED_KEY, &vec![build]).unwrap();
+        let value = json!({"NORMAL":[
+            {"ItemType":"/Lotus/Test","WeaponUpgrades":["/Lotus/Unknown"]},
+            {"ItemType":"/Lotus/Weapon","WeaponUpgrades":["/Lotus/WeaponMod"]},
+            {"ItemType":"/Lotus/Companion","WeaponUpgrades":["/Lotus/CompanionMod"]}
+        ]});
+        let mut service = Service::default();
+        service.feed("1 Net [Info]: AddSquadMember: Guest, mm=abc, squadCount=2\n");
+        service.members[0].status = "matched".into();
+        service.members[0].captured_at = Some("time".into());
+        service.members[0].equipment = equipment(&value, &Names::default());
+        let original = serde_json::to_value(&service.members[0].equipment).unwrap();
+        assert_eq!(original.as_array().unwrap().len(), 3);
+        let key = service.members[0].equipment[1].key.clone();
+        // Даже старый клиент, передавший выбранное оружие, сохраняет весь снимок.
+        let mut build = snapshot_build(&service, "Guest", Some(&key), "time", None).unwrap();
+        build.id = "test".into();
+        build.note = "Уточнить ранги".into();
+        assert_eq!(serde_json::to_value(&build.equipment).unwrap(), original);
+        assert!(snapshot_build(&service, "Guest", None, "old", None).is_err());
+        assert!(snapshot_build(&service, "Other", None, "time", None).is_err());
+
+        service.configurations = service.members[0].equipment.clone();
+        service.configurations_at = Some("time".into());
+        let configuration =
+            snapshot_build(&service, "Guest", Some(&key), "time", Some("configuration")).unwrap();
+        assert_eq!(configuration.equipment.len(), 1);
+        assert_eq!(configuration.equipment[0].key, key);
+        assert_eq!(configuration.player, "Владелец не подтверждён");
+
+        // Смешанная коллекция: старый одиночный предмет и новый полный снимок.
+        let mut legacy = serde_json::to_value(&build).unwrap();
+        legacy["id"] = json!("legacy");
+        legacy["title"] = json!("Старый билд");
+        legacy["equipment"] = original[0].clone();
+        db.set_setting(SAVED_KEY, &json!([legacy, build])).unwrap();
+        service.members.clear();
         let saved: Vec<SavedBuild> = db.get_setting(SAVED_KEY).unwrap().unwrap();
+        assert_eq!(saved[0].id, "legacy");
+        assert_eq!(saved[0].title, "Старый билд");
         assert_eq!(saved[0].note, "Уточнить ранги");
-        assert_eq!(saved[0].equipment.upgrades[0].path, "/Lotus/Unknown");
-        assert!(saved[0].equipment.upgrades[0].rank.is_none());
+        assert_eq!(saved[0].equipment.len(), 1);
+        assert_eq!(saved[0].equipment[0].upgrades[0].path, "/Lotus/Unknown");
+        assert!(saved[0].equipment[0].upgrades[0].rank.is_none());
+        assert_eq!(serde_json::to_value(&saved[1].equipment).unwrap(), original);
+        db.set_setting(SAVED_KEY, &saved).unwrap();
+        let restored: Vec<SavedBuild> = db.get_setting(SAVED_KEY).unwrap().unwrap();
+        assert_eq!(
+            serde_json::to_value(restored).unwrap(),
+            serde_json::to_value(saved).unwrap()
+        );
     }
 }
