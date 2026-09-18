@@ -55,6 +55,8 @@ pub(crate) struct Part {
     name: String,
     name_en: String,
     kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    image_url: Option<String>,
     // Только явно переданный ранг. Номер элемента WeaponUpgrades не является слотом мода.
     rank: Option<u64>,
     #[serde(default)]
@@ -310,6 +312,9 @@ impl Service {
 struct Names(Arc<GameNames>);
 impl Names {
     fn localize_part(&self, part: &mut Part) {
+        // Картинки добавляются к представлению: сохранённый снимок от них не зависит.
+        part.image_url = self.0.lookup_image(&part.path).map(str::to_owned);
+        crate::localize_component_image_url(&mut part.image_url);
         let translated = self.part(&part.path);
         if !translated.name.is_empty()
             && (translated.name != translated.name_en
@@ -395,6 +400,7 @@ impl Names {
             name,
             name_en: en,
             kind,
+            image_url: None,
             rank: None,
             slot_index: None,
             fingerprint: None,

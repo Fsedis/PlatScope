@@ -5,7 +5,7 @@ export interface RivenFingerprint {
   masteryRank: number | null; rerolls: number | null; polarity: string | null;
   buffs: { tag: string; value: number | null }[]; curses: { tag: string; value: number | null }[];
 }
-export interface SquadPart { path: string; name: string; nameEn: string; kind: string; rank: number | null; slotIndex?: number | null; fingerprint?: RivenFingerprint | null }
+export interface SquadPart { path: string; name: string; nameEn: string; kind: string; rank: number | null; imageUrl?: string | null; slotIndex?: number | null; fingerprint?: RivenFingerprint | null }
 export interface SquadEquipment {
   key: string; category: string; item: SquadPart; level: number | null; forma: number | null;
   upgrades: SquadPart[]; modularParts: SquadPart[]; unreadableUpgrades: number;

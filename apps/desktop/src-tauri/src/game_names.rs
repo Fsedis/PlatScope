@@ -1,4 +1,4 @@
-//! Общий справочник имён для карты и билдов. Читает только локальную БД,
+//! Общий справочник имён и изображений для карты и билдов. Читает только локальную БД,
 //! не обращается к памяти игры и не влияет на обновление координат.
 use crate::AppState;
 use platscope_domain::{GameMetadataSnapshot, ItemCatalog};
@@ -9,11 +9,14 @@ use std::{
 };
 
 #[derive(Default)]
-pub(crate) struct GameNames(HashMap<String, (String, String, String)>);
+pub(crate) struct GameNames {
+    names: HashMap<String, (String, String, String)>,
+    images: HashMap<String, String>,
+}
 
 impl GameNames {
     fn merge(&mut self, path: &str, ru: Option<&str>, en: &str, kind: &str) {
-        let entry = self.0.entry(normalize_path(path)).or_default();
+        let entry = self.names.entry(normalize_path(path)).or_default();
         if let Some(ru) = ru.map(str::trim).filter(|s| !s.is_empty()) {
             entry.0 = ru.into();
         }
@@ -41,6 +44,16 @@ impl GameNames {
                     &item.display_name_en,
                     "equipment",
                 );
+                if let Some(image) = item
+                    .image_url
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                {
+                    names
+                        .images
+                        .insert(normalize_path(&item.game_ref), image.into());
+                }
             }
             for item in &metadata.syndicate_offers {
                 names.merge(
@@ -67,6 +80,24 @@ impl GameNames {
                         &item.display_name_en,
                         kind,
                     );
+                    let thumb = item
+                        .thumb_ru
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .or_else(|| {
+                            item.thumb
+                                .as_deref()
+                                .map(str::trim)
+                                .filter(|s| !s.is_empty())
+                        });
+                    if let Some(thumb) = thumb {
+                        // Изображение экипировки из метаданных имеет приоритет.
+                        names
+                            .images
+                            .entry(normalize_path(path))
+                            .or_insert_with(|| crate::reward_market_image_url(thumb));
+                    }
                 }
             }
         }
@@ -80,7 +111,11 @@ impl GameNames {
     }
 
     pub(crate) fn lookup(&self, path: &str) -> Option<&(String, String, String)> {
-        self.0.get(&normalize_path(path))
+        self.names.get(&normalize_path(path))
+    }
+
+    pub(crate) fn lookup_image(&self, path: &str) -> Option<&str> {
+        self.images.get(&normalize_path(path)).map(String::as_str)
     }
 }
 
