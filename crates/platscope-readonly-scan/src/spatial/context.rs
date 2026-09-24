@@ -1,4 +1,5 @@
 //! Адресные связи игрока и родной мини-карты. Никаких глобальных обходов.
+use super::profile::Profile;
 use super::source::{q, u32_at, u64_at};
 use super::{Memory, Result, Scene, ScenePlayer, SceneZone, cancelled};
 use std::{collections::BTreeMap, sync::atomic::AtomicBool};
@@ -23,7 +24,12 @@ fn linked(m: &mut dyn Memory, address: u64, offset: u64) -> Result<u64> {
     }
     Ok(object)
 }
-pub(super) fn has_type(m: &mut dyn Memory, address: u64, base: u64, expected: u64) -> Result<()> {
+pub(super) fn has_type(
+    m: &mut dyn Memory,
+    address: u64,
+    profile: &Profile,
+    expected: u64,
+) -> Result<()> {
     let handle = q(m, checked(address, 16)?)?;
     if q(m, checked(handle, 0)?)? != address {
         return Err("Обратная ссылка объекта не совпадает".into());
@@ -32,33 +38,42 @@ pub(super) fn has_type(m: &mut dyn Memory, address: u64, base: u64, expected: u6
     for _ in 0..24 {
         let head = m.read(checked(meta, 0)?, 32)?;
         let vt = u64_at(&head, 0)?;
-        if ![0x203fb50, 0x203fba8, 0x203fc60, 0x203fc00]
-            .iter()
-            .any(|r| base + r == vt)
+        if ![
+            profile.address(0x203fb50)?,
+            profile.address(0x203fba8)?,
+            profile.address(0x203fc60)?,
+            profile.address(0x203fc00)?,
+        ]
+        .contains(&vt)
         {
             return Err("Тип связи не подтверждён".into());
         }
-        if meta == base + expected && vt == base + 0x203fc60 {
+        if meta == profile.address(expected)? && vt == profile.address(0x203fc60)? {
             return Ok(());
         }
         meta = u64_at(&head, 24)?;
     }
     Err("Не найден ожидаемый тип связи".into())
 }
-pub(super) fn owner(m: &mut dyn Memory, avatar: u64, base: u64) -> Result<u64> {
+pub(super) fn owner(m: &mut dyn Memory, avatar: u64, profile: &Profile) -> Result<u64> {
     let player = linked(m, avatar, 0x520)?;
-    has_type(m, player, base, PLAYER)?;
+    has_type(m, player, profile, PLAYER)?;
     if linked(m, player, 0x118)? != avatar {
         return Err("Игрок не управляет этим персонажем".into());
     }
     Ok(player)
 }
-pub(super) fn local_map(m: &mut dyn Memory, player: u64, avatar: u64, base: u64) -> Result<u64> {
+pub(super) fn local_map(
+    m: &mut dyn Memory,
+    player: u64,
+    avatar: u64,
+    profile: &Profile,
+) -> Result<u64> {
     let camera = linked(m, player, 0x30)?;
-    has_type(m, camera, base, 0x28cc310)?;
-    let map = linked(m, player, 0xd098)?;
-    has_type(m, map, base, MINIMAP)?;
-    if linked(m, map, 0xe0)? != avatar || owner(m, avatar, base)? != player {
+    has_type(m, camera, profile, 0x28cc310)?;
+    let map = linked(m, player, profile.minimap_link_offset())?;
+    has_type(m, map, profile, MINIMAP)?;
+    if linked(m, map, 0xe0)? != avatar || owner(m, avatar, profile)? != player {
         return Err("Мини-карта связана с другим персонажем".into());
     }
     Ok(map)
@@ -68,7 +83,7 @@ fn zone_array(
     map: u64,
     offset: u64,
     stride: usize,
-    base: u64,
+    profile: &Profile,
 ) -> Result<BTreeMap<String, SceneZone>> {
     let header_at = checked(map, offset)?;
     let header = m.read(header_at, 16)?;
@@ -87,7 +102,7 @@ fn zone_array(
     let mut zones = BTreeMap::new();
     for record in bytes.chunks_exact(stride) {
         let zone = u64_at(record, 0x58)?;
-        has_type(m, zone, base, ZONE)?;
+        has_type(m, zone, profile, ZONE)?;
         let vector = |start| -> [f32; 3] {
             std::array::from_fn(|i| {
                 f32::from_le_bytes(
@@ -126,9 +141,9 @@ fn zone_array(
     }
     Ok(zones)
 }
-fn read_zones(m: &mut dyn Memory, map: u64, base: u64) -> Result<Vec<SceneZone>> {
-    let first = zone_array(m, map, 0xe8, 128, base)?;
-    let second = zone_array(m, map, 0x608, 96, base)?;
+fn read_zones(m: &mut dyn Memory, map: u64, profile: &Profile) -> Result<Vec<SceneZone>> {
+    let first = zone_array(m, map, 0xe8, 128, profile)?;
+    let second = zone_array(m, map, profile.second_zone_array_offset(), 96, profile)?;
     if first != second {
         return Err("Два списка зон мини-карты не согласованы".into());
     }
@@ -137,7 +152,7 @@ fn read_zones(m: &mut dyn Memory, map: u64, base: u64) -> Result<Vec<SceneZone>>
 pub(super) fn update(
     m: &mut dyn Memory,
     scene: &mut Scene,
-    base: u64,
+    profile: &Profile,
     cancel: &AtomicBool,
 ) -> Result<()> {
     let mut players = Vec::new();
@@ -150,14 +165,14 @@ pub(super) fn update(
         let Ok(avatar) = u64::from_str_radix(object.key.trim_start_matches("0x"), 16) else {
             continue;
         };
-        let Ok(player) = owner(m, avatar, base) else {
+        let Ok(player) = owner(m, avatar, profile) else {
             continue;
         };
         let operator_key = linked(m, player, 0xd188)
             .ok()
-            .filter(|p| has_type(m, *p, base, 0x29cb220).is_ok())
+            .filter(|p| has_type(m, *p, profile, 0x29cb220).is_ok())
             .map(|p| format!("0x{p:x}"));
-        let map = local_map(m, player, avatar, base).ok();
+        let map = local_map(m, player, avatar, profile).ok();
         if let Some(map) = map {
             maps.push((player, avatar, map));
         }
@@ -177,12 +192,12 @@ pub(super) fn update(
     scene.players = players;
     scene.camera_heading = None;
     if let [(player, avatar, _)] = maps.as_slice() {
-        scene.camera_heading = camera_heading(m, *player, *avatar, base).ok();
+        scene.camera_heading = camera_heading(m, *player, *avatar, profile).ok();
     }
     scene.zones_fresh = false;
     if let [(player, avatar, map)] = maps.as_slice()
-        && let Ok(zones) = read_zones(m, *map, base)
-        && local_map(m, *player, *avatar, base).ok() == Some(*map)
+        && let Ok(zones) = read_zones(m, *map, profile)
+        && local_map(m, *player, *avatar, profile).ok() == Some(*map)
     {
         scene.zones = zones;
         scene.zones_fresh = true;
@@ -194,16 +209,16 @@ pub(super) fn camera_heading(
     m: &mut dyn Memory,
     player: u64,
     avatar: u64,
-    base: u64,
+    profile: &Profile,
 ) -> Result<f32> {
     let camera = linked(m, player, 0x30)?;
-    has_type(m, camera, base, 0x28cc310)?;
+    has_type(m, camera, profile, 0x28cc310)?;
     let matrix = super::geometry::matrix(m, camera)?;
     let [x, _, z, _] = matrix[2];
     // Почти вертикальный взгляд не даёт устойчивого горизонтального направления.
     if x * x + z * z < 0.01
         || linked(m, player, 0x30)? != camera
-        || owner(m, avatar, base)? != player
+        || owner(m, avatar, profile)? != player
     {
         return Err("Направление камеры временно не подтверждено".into());
     }
@@ -309,15 +324,16 @@ mod tests {
         let bytes: Vec<u8> = matrix.iter().flat_map(|v| v.to_le_bytes()).collect();
         m.put(0x8000 + 0xa0, &bytes);
         assert!(
-            (camera_heading(&mut m, 0x3000, 0x1000, BASE).unwrap() - std::f32::consts::FRAC_PI_2)
+            (camera_heading(&mut m, 0x3000, 0x1000, &Profile::legacy(BASE)).unwrap()
+                - std::f32::consts::FRAC_PI_2)
                 .abs()
                 < 0.001
         );
         m.q(0x3000 + 0x118, 0);
-        assert!(camera_heading(&mut m, 0x3000, 0x1000, BASE).is_err());
+        assert!(camera_heading(&mut m, 0x3000, 0x1000, &Profile::legacy(BASE)).is_err());
         m.link(0x3000, 0x118, 0x1000);
         m.put(0x8000 + 0xc0, &f32::NAN.to_le_bytes());
-        assert!(camera_heading(&mut m, 0x3000, 0x1000, BASE).is_err());
+        assert!(camera_heading(&mut m, 0x3000, 0x1000, &Profile::legacy(BASE)).is_err());
         let vertical = [
             1.0f32, 0., 0., 0., 0., 0., -1., 0., 0., 1., 0., 0., 5., 6., 7., 1.,
         ];
@@ -328,21 +344,33 @@ mod tests {
                 .flat_map(|v| v.to_le_bytes())
                 .collect::<Vec<_>>(),
         );
-        assert!(camera_heading(&mut m, 0x3000, 0x1000, BASE).is_err());
+        assert!(camera_heading(&mut m, 0x3000, 0x1000, &Profile::legacy(BASE)).is_err());
     }
 
     #[test]
     fn validates_local_player_and_both_bounded_zone_arrays() {
         let (mut m, mut scene) = fixture();
-        update(&mut m, &mut scene, BASE, &AtomicBool::new(false)).unwrap();
+        update(
+            &mut m,
+            &mut scene,
+            &Profile::legacy(BASE),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
         assert_eq!(scene.players.len(), 1);
         assert!(scene.players[0].local);
         assert!(scene.zones_fresh);
         assert_eq!(scene.zones[0].min, [1.0, 2.0, 3.0]);
         // Согласованность камеры, мини-карты и обратной ссылки обязательна.
         m.q(0x3000 + 0x118, 0);
-        assert!(owner(&mut m, 0x1000, BASE).is_err());
-        update(&mut m, &mut scene, BASE, &AtomicBool::new(false)).unwrap();
+        assert!(owner(&mut m, 0x1000, &Profile::legacy(BASE)).is_err());
+        update(
+            &mut m,
+            &mut scene,
+            &Profile::legacy(BASE),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
         assert!(scene.players.is_empty());
         assert!(!scene.zones_fresh);
         assert_eq!(scene.zones.len(), 1);
@@ -350,26 +378,44 @@ mod tests {
     #[test]
     fn inconsistent_zone_frame_retains_last_good_map() {
         let (mut m, mut scene) = fixture();
-        update(&mut m, &mut scene, BASE, &AtomicBool::new(false)).unwrap();
+        update(
+            &mut m,
+            &mut scene,
+            &Profile::legacy(BASE),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
         let old = scene.zones.clone();
         m.put(0x21000, &9.0f32.to_le_bytes());
-        update(&mut m, &mut scene, BASE, &AtomicBool::new(false)).unwrap();
+        update(
+            &mut m,
+            &mut scene,
+            &Profile::legacy(BASE),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
         assert!(!scene.zones_fresh);
         assert_eq!(scene.zones, old);
         m.put(0x21000, &1.0f32.to_le_bytes());
         m.put(0x20000, &f32::NAN.to_le_bytes());
-        assert!(read_zones(&mut m, 0x6000, BASE).is_err());
+        assert!(read_zones(&mut m, 0x6000, &Profile::legacy(BASE)).is_err());
     }
     #[test]
     fn rejects_oversized_buffers_wrong_type_and_duplicate_local_candidates() {
         let (mut m, _) = fixture();
         m.put(0x6000 + 0xe8 + 8, &100_000u32.to_le_bytes());
-        assert!(read_zones(&mut m, 0x6000, BASE).is_err());
+        assert!(read_zones(&mut m, 0x6000, &Profile::legacy(BASE)).is_err());
         m.q(0x3000 + 8, BASE + ZONE);
-        assert!(owner(&mut m, 0x1000, BASE).is_err());
+        assert!(owner(&mut m, 0x1000, &Profile::legacy(BASE)).is_err());
         let (mut m, mut scene) = fixture();
         scene.objects.push(scene.objects[0].clone());
-        update(&mut m, &mut scene, BASE, &AtomicBool::new(false)).unwrap();
+        update(
+            &mut m,
+            &mut scene,
+            &Profile::legacy(BASE),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
         assert!(scene.players.iter().all(|p| !p.local));
         assert!(!scene.zones_fresh);
     }

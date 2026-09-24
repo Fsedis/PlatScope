@@ -1,6 +1,7 @@
 //! Тайники миссии: назначение из типа, состояние из малой группы живых объектов.
 use super::{
     Memory, Result,
+    profile::Profile,
     source::{q, u32_at, u64_at},
     types::{Decoder, TypeInfo},
 };
@@ -33,7 +34,7 @@ pub(super) fn state(
     m: &mut dyn Memory,
     address: u64,
     decoder: &mut Decoder,
-    base: u64,
+    profile: &Profile,
 ) -> Result<&'static str> {
     let header = m.read(address + 0x3b0, 16)?;
     let pointer = u64_at(&header, 0)?;
@@ -51,7 +52,7 @@ pub(super) fn state(
             continue;
         }
         let object = m.read(native, 24)?;
-        if u64_at(&object, 0)? != base + 0x213cf68 {
+        if u64_at(&object, 0)? != profile.address(0x213cf68)? {
             continue;
         }
         if u64_at(&object, 16)? != handle {
@@ -80,7 +81,7 @@ pub(super) fn state(
     }
     // Проверяем конкретный AnimScene, не пытаясь декодировать не относящийся
     // к задаче базовый класс ресурса с другой структурой метаданных.
-    super::context::has_type(m, native, base, 0x28ac110)?;
+    super::context::has_type(m, native, profile, 0x28ac110)?;
     if q(m, address + 0x1e8)? != active || m.read(address + 0x3b0, 16)? != header {
         return Ok("unknown");
     }
@@ -117,7 +118,7 @@ mod tests {
                 let key = info.variant_key();
                 assert_eq!(variant.get_or_insert_with(|| key.clone()), &key);
                 assert_eq!(
-                    state(&mut memory, address, &mut decoder, profile.base).unwrap(),
+                    state(&mut memory, address, &mut decoder, &profile).unwrap(),
                     expected
                 );
             }

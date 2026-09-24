@@ -86,7 +86,7 @@ pub(super) fn object(
     family: &str,
     vt: u64,
     decoder: &mut Decoder,
-    base: u64,
+    profile: &Profile,
 ) -> Result<(SceneObject, Identity)> {
     let mut id = identity(m, a, vt)?;
     let info = decoder.chain(m, id.metadata)?;
@@ -191,7 +191,7 @@ pub(super) fn object(
             (if feather { "feather" } else { "pickup" }, label, en)
         }
         "avatar" => {
-            super::context::owner(m, a, base)?;
+            super::context::owner(m, a, profile)?;
             (
                 "avatar",
                 "Варфрейм или оператор".into(),
@@ -256,7 +256,7 @@ pub(super) fn object(
             }
             id.zone = Some(zone);
             let (kind, label) = if family == "decoration" && super::cache::is_grineer_cache(&info) {
-                availability = super::cache::state(m, a, decoder, base).unwrap_or("unknown");
+                availability = super::cache::state(m, a, decoder, profile).unwrap_or("unknown");
                 ("cache", "Тайник Гринир")
             } else if mesh.contains("LootLockerIcon") {
                 ("locker", "Обозначение шкафчика")
@@ -391,7 +391,7 @@ fn run(
     });
     let profile = Profile::validate(m)?;
     let mut decoder = Decoder::new(profile.clone())?;
-    let targets = profile.targets();
+    let targets = profile.targets()?;
     let ranges = m.ranges();
     let total_bytes = ranges.iter().map(|r| r.length as u64).sum();
     let started = Instant::now();
@@ -448,7 +448,7 @@ fn run(
             last_report = Instant::now();
         }
     }
-    let mut scene=Scene{format:1,source:source.into(),started_at,captured_at:stamp(),complete,profile:"warframe-2026-09-12-validated".into(),objects:Vec::new(),meshes:Default::default(),camera_heading:None,players:Vec::new(),zones:Vec::new(),zones_fresh:false,warnings:vec!["Снимок не атомарен: объекты прочитаны в разные моменты времени.".into(),"Геометрия исследовательская: принадлежность текущему региону и переходы между частями не гарантированы.".into(),"По координатам нельзя установить, доступен ли предмет и был ли он подобран.".into()],stats:SceneStats{scanned_bytes:scanned,..Default::default()},identities:Vec::new(),process:None,discovery_profile:Some(profile.clone()),discovery_ranges:Vec::new(),discovery_cursor:0,filter_discovery:Default::default(),registry_discovery:Default::default()};
+    let mut scene=Scene{format:1,source:source.into(),started_at,captured_at:stamp(),complete,profile:profile.id().into(),objects:Vec::new(),meshes:Default::default(),camera_heading:None,players:Vec::new(),zones:Vec::new(),zones_fresh:false,warnings:vec!["Снимок не атомарен: объекты прочитаны в разные моменты времени.".into(),"Геометрия исследовательская: принадлежность текущему региону и переходы между частями не гарантированы.".into(),"По координатам нельзя установить, доступен ли предмет и был ли он подобран.".into()],stats:SceneStats{scanned_bytes:scanned,..Default::default()},identities:Vec::new(),process:None,discovery_profile:Some(profile.clone()),discovery_ranges:Vec::new(),discovery_cursor:0,filter_discovery:Default::default(),registry_discovery:Default::default()};
     if failed_chunks > 0 {
         scene.complete = false;
         scene.warnings.push(format!(
@@ -485,7 +485,7 @@ fn run(
                 }
             }
         } else {
-            match object(m, a, family, vt, &mut decoder, profile.base) {
+            match object(m, a, family, vt, &mut decoder, &profile) {
                 Ok((obj, id)) => {
                     scene.objects.push(obj);
                     scene.identities.push(id)
@@ -524,7 +524,7 @@ fn run(
         }
     }
     scene.discovery_ranges = pools.into_values().collect();
-    super::context::update(m, &mut scene, profile.base, cancel)?;
+    super::context::update(m, &mut scene, &profile, cancel)?;
     // При полном обходе в памяти могут оставаться действия прошлой миссии.
     let root = scene
         .players
@@ -597,7 +597,7 @@ pub fn analyze_live(
 pub struct LocalPoseReader {
     pid: u32,
     created: String,
-    base: u64,
+    profile: Profile,
     player: u64,
     identity: Identity,
 }
@@ -629,19 +629,20 @@ impl LocalPoseReader {
         Some(Self {
             pid: *pid,
             created: created.clone(),
-            base: scene.discovery_profile.as_ref()?.base,
+            profile: scene.discovery_profile.clone()?,
             player,
             identity,
         })
     }
     fn sample(&self, m: &mut dyn Memory) -> Result<LocalPose> {
         let avatar = self.identity.address;
-        super::context::local_map(m, self.player, avatar, self.base)?;
+        super::context::local_map(m, self.player, avatar, &self.profile)?;
         let Some((_, position)) = observe(m, &self.identity)? else {
             return Err("Объект персонажа изменился".into());
         };
-        let camera_heading = super::context::camera_heading(m, self.player, avatar, self.base).ok();
-        super::context::local_map(m, self.player, avatar, self.base)?;
+        let camera_heading =
+            super::context::camera_heading(m, self.player, avatar, &self.profile).ok();
+        super::context::local_map(m, self.player, avatar, &self.profile)?;
         Ok(LocalPose {
             avatar_key: format!("0x{avatar:x}"),
             position,
@@ -695,7 +696,7 @@ pub fn refresh_live_filtered(
     };
     let mut result = refresh_objects(&mut m, scene, cancel)?;
     if let Some(profile) = &scene.discovery_profile {
-        super::context::update(&mut m, &mut result, profile.base, cancel)?;
+        super::context::update(&mut m, &mut result, profile, cancel)?;
     }
     if !super::registry_discovery::discover(&mut m, &mut result, rules, cancel)? {
         super::filter_discovery::discover(&mut m, &mut result, rules, cancel)?;
@@ -786,7 +787,7 @@ fn refresh_objects(m: &mut dyn Memory, scene: &Scene, cancel: &AtomicBool) -> Re
                 .iter()
                 .find(|id| format!("0x{:x}", id.address) == object.key);
             object.availability = if let Some(id) = id.filter(|id| id.missed_reads == 0) {
-                super::cache::state(m, id.address, &mut decoder, profile.base).unwrap_or("unknown")
+                super::cache::state(m, id.address, &mut decoder, profile).unwrap_or("unknown")
             } else {
                 "unknown"
             }
@@ -806,7 +807,7 @@ fn discover(m: &mut dyn Memory, scene: &mut Scene, cancel: &AtomicBool) -> Resul
         return Ok(());
     }
     let mut decoder = Decoder::new(profile.clone())?;
-    let targets = profile.targets();
+    let targets = profile.targets()?;
     let known: HashSet<u64> = scene.identities.iter().map(|i| i.address).collect();
     let started = Instant::now();
     let mut found = BTreeMap::new();
@@ -835,7 +836,7 @@ fn discover(m: &mut dyn Memory, scene: &mut Scene, cancel: &AtomicBool) -> Resul
         if started.elapsed() > Duration::from_millis(80) || scene.objects.len() >= MAX_OBJECTS {
             break;
         }
-        if let Ok((object, id)) = object(m, a, family, vt, &mut decoder, profile.base) {
+        if let Ok((object, id)) = object(m, a, family, vt, &mut decoder, &profile) {
             scene.objects.push(object);
             scene.identities.push(id);
         }
@@ -943,7 +944,7 @@ mod tests {
         let reader = LocalPoseReader {
             pid: 1,
             created: String::new(),
-            base: 0,
+            profile: Profile::legacy(0),
             player: 0x3000,
             identity: scene.identities[0].clone(),
         };

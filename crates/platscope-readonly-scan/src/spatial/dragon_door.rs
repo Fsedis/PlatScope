@@ -108,9 +108,9 @@ mod tests {
                 &mut m,
                 0x2620c5ae9f0,
                 "dragon_door",
-                profile.base + 0x213cf68,
+                profile.address(0x213cf68).unwrap(),
                 &mut decoder,
-                profile.base,
+                &profile,
             )
             .unwrap();
             assert_eq!(object.kind, "dragon_door");
@@ -122,9 +122,9 @@ mod tests {
                     &mut m,
                     0x2619a3eada0,
                     "dragon_door",
-                    profile.base + 0x213cf68,
+                    profile.address(0x213cf68).unwrap(),
                     &mut decoder,
-                    profile.base
+                    &profile
                 )
                 .is_err()
             );

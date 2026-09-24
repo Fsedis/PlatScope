@@ -60,7 +60,7 @@ pub(super) fn position(m: &mut dyn Memory, a: u64, moving: bool) -> Result<[f32;
 pub(super) fn mesh(m: &mut dyn Memory, p: u64, profile: &Profile) -> Result<SceneMesh> {
     let handle = q(m, p + 0x4d8)?;
     let geo = q(m, handle)?;
-    if q(m, geo)? != profile.base + 0x21277b0 || q(m, geo + 0x10)? != handle {
+    if q(m, geo)? != profile.address(0x21277b0)? || q(m, geo + 0x10)? != handle {
         return Err("Не подтверждён ресурс геометрии".into());
     }
     let mut arrays = Vec::new();
@@ -246,10 +246,7 @@ mod tests {
     }
     #[test]
     fn reconstructs_closed_polygon_and_rejects_invalid_index() {
-        let profile = Profile {
-            base: 0,
-            dictionary: vec![],
-        };
+        let profile = Profile::legacy(0);
         let mut m = fixture();
         let scene = mesh(&mut m, 0x100, &profile).unwrap();
         assert_eq!(scene.vertices.len(), 3);
@@ -259,10 +256,7 @@ mod tests {
     }
     #[test]
     fn rejects_changed_matrix() {
-        let profile = Profile {
-            base: 0,
-            dictionary: vec![],
-        };
+        let profile = Profile::legacy(0);
         let mut m = fixture();
         put(&mut m, 0x100 + 0xa0, &2f32.to_le_bytes());
         assert!(mesh(&mut m, 0x100, &profile).is_err());

@@ -116,11 +116,16 @@ impl Decoder {
             }
             let head = m.read(p, 32)?;
             let vt = u64_at(&head, 0)?;
-            let base = self.profile.base;
-            if ![base + 0x203fb50, base + 0x203fba8, base + 0x203fc60].contains(&vt) {
+            if ![
+                self.profile.address(0x203fb50)?,
+                self.profile.address(0x203fba8)?,
+                self.profile.address(0x203fc60)?,
+            ]
+            .contains(&vt)
+            {
                 return Err("Неизвестная структура метаданных".into());
             }
-            if vt == base + 0x203fc60 {
+            if vt == self.profile.address(0x203fc60)? {
                 let binding = q(m, p + 0x60)?;
                 if binding != 0 {
                     let nameptr = q(m, binding + 8)?;
@@ -130,7 +135,7 @@ impl Decoder {
                     }
                 }
             }
-            if vt != base + 0x203fb50 {
+            if vt != self.profile.address(0x203fb50)? {
                 let data = m.read(p + 0x48, 16)?;
                 let at = u64_at(&data, 0)?;
                 let n = u32_at(&data, 8)? as usize;

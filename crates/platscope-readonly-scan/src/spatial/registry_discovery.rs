@@ -1,6 +1,7 @@
 //! Новые объекты из реестра текущего региона, без поиска по блокам памяти.
 use super::{
     DiscoveryRules, Memory, MemoryModule, MemoryRange, Result, Scene, cancelled, context,
+    profile::Profile,
     source::{q, u32_at, u64_at},
     types::Decoder,
 };
@@ -65,9 +66,12 @@ impl Memory for Bounded<'_> {
     }
 }
 
-fn region(m: &mut dyn Memory, avatar: u64, base: u64) -> Result<Region> {
+fn region(m: &mut dyn Memory, avatar: u64, profile: &Profile) -> Result<Region> {
     let root = q(m, avatar + 0x1e0)?;
-    if root == 0 || q(m, root)? != base + 0x21cecc0 || q(m, root + 8)? != base + 0x28f21b0 {
+    if root == 0
+        || q(m, root)? != profile.address(0x21cecc0)?
+        || q(m, root + 8)? != profile.address(0x28f21b0)?
+    {
         return Err("Контекст сцены не подтверждён".into());
     }
     let root_handle = q(m, root + 16)?;
@@ -76,18 +80,18 @@ fn region(m: &mut dyn Memory, avatar: u64, base: u64) -> Result<Region> {
     }
     let manager_handle = q(m, root + 0x90)?;
     let manager = q(m, manager_handle)?;
-    context::has_type(m, manager, base, 0x28f3470)?;
+    context::has_type(m, manager, profile, 0x28f3470)?;
     if q(m, manager + 16)? != manager_handle
         || q(m, manager + 0x28)? != root_handle
-        || q(m, manager)? != base + 0x21d29d8
+        || q(m, manager)? != profile.address(0x21d29d8)?
     {
         return Err("Реестр принадлежит другому контексту".into());
     }
     // Два независимых метода подтверждают размер в байтах и границы массива.
-    let count_method = q(m, base + 0x21d29d8 + 74 * 8)?;
-    let range_method = q(m, base + 0x21d29d8 + 76 * 8)?;
-    if count_method != base + 0xe03440
-        || range_method != base + 0xc66420
+    let count_method = q(m, profile.address(0x21d29d8)? + 74 * 8)?;
+    let range_method = q(m, profile.address(0x21d29d8)? + 76 * 8)?;
+    if count_method != profile.address(0xe03440)?
+        || range_method != profile.address(0xc66420)?
         || m.read(count_method, 11)? != [0x8b, 0x81, 0x08, 0x02, 0, 0, 0x48, 0xc1, 0xe8, 3, 0xc3]
         || m.read(range_method, 31)?
             != [
@@ -157,7 +161,7 @@ pub(super) fn discover(
     rules: &DiscoveryRules,
     cancel: &AtomicBool,
 ) -> Result<bool> {
-    let Some(base) = scene.discovery_profile.as_ref().map(|p| p.base) else {
+    let Some(profile) = scene.discovery_profile.clone() else {
         return Ok(false);
     };
     let locals: Vec<_> = scene.players.iter().filter(|p| p.local).collect();
@@ -181,10 +185,10 @@ pub(super) fn discover(
     // Не выбираем регион по большинству объектов старого сканирования.
     let result = (|| {
         cancelled(cancel)?;
-        let Ok(owner) = context::owner(&mut bounded, avatar, base) else {
+        let Ok(owner) = context::owner(&mut bounded, avatar, &profile) else {
             return Ok(false);
         };
-        if context::local_map(&mut bounded, owner, avatar, base).is_err() {
+        if context::local_map(&mut bounded, owner, avatar, &profile).is_err() {
             return Ok(false);
         }
         run(&mut bounded, scene, rules, avatar, cancel)
@@ -204,7 +208,7 @@ fn run(
     cancel: &AtomicBool,
 ) -> Result<bool> {
     let profile = scene.discovery_profile.clone().ok_or("Нет профиля")?;
-    let Ok(current) = region(m, avatar, profile.base) else {
+    let Ok(current) = region(m, avatar, &profile) else {
         return Ok(false);
     };
     let Ok(list) = handles(m, current) else {
@@ -277,7 +281,7 @@ fn advance(
         .discovery_profile
         .as_ref()
         .unwrap()
-        .targets()
+        .targets()?
         .into_iter()
         .filter(|(_, family)| *family != "level")
         .collect();
@@ -370,7 +374,7 @@ fn advance(
             c.family,
             c.vtable,
             &mut decoder,
-            scene.discovery_profile.as_ref().unwrap().base,
+            scene.discovery_profile.as_ref().unwrap(),
         );
         if m.exhausted {
             if rules.wants_family(c.family) {
@@ -510,10 +514,7 @@ mod tests {
             ],
         );
         let mut scene: Scene = serde_json::from_value(serde_json::json!({"format":1,"source":"live","startedAt":"test","capturedAt":"test","complete":true,"profile":"test","objects":[],"meshes":[],"warnings":[],"stats":{"scannedBytes":0,"objectCount":0,"meshCount":0,"vertexCount":0,"faceCount":0}})).unwrap();
-        scene.discovery_profile = Some(super::super::profile::Profile {
-            base: 0,
-            dictionary: vec![],
-        });
+        scene.discovery_profile = Some(super::super::profile::Profile::legacy(0));
         (m, scene)
     }
     fn tick(m: &mut Mock, scene: &mut Scene) -> bool {
@@ -607,7 +608,7 @@ mod tests {
             .map(|o| o.key.clone())
             .collect();
         let profile = Profile::validate(&mut m).unwrap();
-        let targets = profile.targets();
+        let targets = profile.targets().unwrap();
         let avatar_vt = targets.iter().find(|(_, f)| *f == "avatar").unwrap().0;
         let mut decoder = Decoder::new(profile.clone()).unwrap();
         let mut avatars = Vec::new();
@@ -619,7 +620,7 @@ mod tests {
                 "avatar",
                 avatar_vt,
                 &mut decoder,
-                profile.base,
+                &profile,
             ) {
                 avatars.push((object, id));
             }
@@ -631,7 +632,7 @@ mod tests {
             scene.objects.push(object);
             scene.identities.push(id);
         }
-        context::update(&mut m, &mut scene, profile.base, &cancel).unwrap();
+        context::update(&mut m, &mut scene, &profile, &cancel).unwrap();
         let local = scene
             .players
             .iter()

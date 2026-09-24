@@ -161,7 +161,7 @@ fn discover_inner(
         return Ok(());
     };
     let targets: Vec<_> = profile
-        .targets()
+        .targets()?
         .into_iter()
         .filter(|(_, family)| state.rules.wants_family(family))
         .collect();
@@ -248,7 +248,7 @@ fn discover_inner(
             continue;
         }
         let Ok((object, id)) =
-            super::analyze::object(m, address, family, vt, &mut decoder, profile.base)
+            super::analyze::object(m, address, family, vt, &mut decoder, &profile)
         else {
             continue;
         };
@@ -308,10 +308,7 @@ mod tests {
     }
     fn empty_scene() -> Scene {
         let mut scene: Scene = serde_json::from_value(json!({"format":1,"source":"live","startedAt":"test","capturedAt":"test","complete":true,"profile":"test","objects":[],"meshes":[],"warnings":[],"stats":{"scannedBytes":0,"objectCount":0,"meshCount":0,"vertexCount":0,"faceCount":0}})).unwrap();
-        scene.discovery_profile = Some(super::super::profile::Profile {
-            base: 0,
-            dictionary: vec![],
-        });
+        scene.discovery_profile = Some(super::super::profile::Profile::legacy(0));
         scene.discovery_ranges = vec![
             MemoryRange {
                 address: 0,
@@ -380,7 +377,7 @@ mod tests {
             "spawnpoint",
             0x2208c58,
             &mut decoder,
-            0,
+            &super::super::profile::Profile::legacy(0),
         )
         .unwrap();
         object.kind = "decoration".into();
