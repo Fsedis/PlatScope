@@ -14,7 +14,7 @@ use std::{
 };
 
 const MAX_PACK_BYTES: usize = 256 * 1024;
-const CURRENT_URL: &str = "https://raw.githubusercontent.com/Fsedis/PlatScope/main/crates/platscope-readonly-scan/src/spatial/profiles/current.signed.json";
+const CURRENT_URL: &str = "https://raw.githubusercontent.com/Fsedis/PlatScope/main/crates/platscope-readonly-scan/src/spatial/profiles/current-v2.signed.json";
 const EXPECTED_RVAS: [u64; 38] = [
     0x27c2a0, 0xabc2e0, 0x203fb50, 0x203fba8, 0x203fc00, 0x203fc60, 0x28ed2a0, 0x297bf70,
     0x29c9600, 0x29e7ea0, 0x28ecf80, 0x28d6f40, 0x2960650, 0x28ce8c0, 0x28a4888, 0x21a96f8,
@@ -22,6 +22,8 @@ const EXPECTED_RVAS: [u64; 38] = [
     0x2113b98, 0x21277b0, 0x22a1638, 0x213cf68, 0x28dd4e0, 0x28cc310, 0x29cb220, 0x28ac110,
     0x28f3470, 0x21cecc0, 0x28f21b0, 0x21d29d8, 0xe03440, 0xc66420,
 ];
+const DECREE_FRAGMENT_RVA: u64 = 0x2317cc8;
+const DECREE_FRAGMENT_PROFILE_ID: &str = "warframe-2026-09-26-validated";
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -242,7 +244,8 @@ impl ProfilePack {
                     return Err("Некорректная таблица адресов игры".into());
                 }
             }
-            if map.len() != EXPECTED_RVAS.len()
+            let has_decree_fragment = map.contains_key(&DECREE_FRAGMENT_RVA);
+            if map.len() != EXPECTED_RVAS.len() + usize::from(has_decree_fragment)
                 || EXPECTED_RVAS.iter().any(|rva| !map.contains_key(rva))
             {
                 return Err("В профиле указаны не все адреса игры".into());
@@ -272,7 +275,25 @@ impl ProfilePack {
 
     fn validate_extension_of(&self, previous: &Self) -> Result<()> {
         for old in &previous.profiles {
-            if !self.profiles.iter().any(|new| new == old) {
+            let unchanged = self.profiles.iter().any(|new| {
+                if new == old {
+                    return true;
+                }
+                if old.id != DECREE_FRAGMENT_PROFILE_ID
+                    || old
+                        .rvas
+                        .iter()
+                        .any(|entry| entry.key == DECREE_FRAGMENT_RVA)
+                {
+                    return false;
+                }
+                let mut without_decree_fragment = new.clone();
+                without_decree_fragment
+                    .rvas
+                    .retain(|entry| entry.key != DECREE_FRAGMENT_RVA);
+                without_decree_fragment == *old && new.rvas.len() == old.rvas.len() + 1
+            });
+            if !unchanged {
                 return Err(format!(
                     "Новый пакет изменяет или удаляет проверенный профиль {}",
                     old.id
@@ -565,7 +586,7 @@ impl Profile {
     }
 
     pub fn targets(&self) -> Result<Vec<(u64, &'static str)>> {
-        [
+        let mut targets: Vec<_> = [
             (0x21a96f8, "pickup"),
             (0x23fb1e0, "pickup"),
             (0x2326098, "avatar"),
@@ -581,7 +602,16 @@ impl Profile {
         ]
         .into_iter()
         .map(|(r, n)| Ok((self.address(r)?, n)))
-        .collect()
+        .collect::<Result<_>>()?;
+        if self
+            .spec
+            .rvas
+            .iter()
+            .any(|entry| entry.key == DECREE_FRAGMENT_RVA)
+        {
+            targets.push((self.address(DECREE_FRAGMENT_RVA)?, "decree_fragment"));
+        }
+        Ok(targets)
     }
 }
 
@@ -592,7 +622,7 @@ mod tests {
     #[test]
     fn bundled_pack_is_signed_complete_and_keeps_old_profiles() {
         let pack = ProfilePack::bundled().unwrap();
-        assert_eq!(pack.revision, 1);
+        assert_eq!(pack.revision, 3);
         assert_eq!(pack.profiles.len(), 3);
         let old = Profile::legacy(0x1000);
         assert_eq!(old.address(0x28a4888).unwrap(), 0x1000 + 0x28a4888);
@@ -615,18 +645,18 @@ mod tests {
     fn only_signed_newer_complete_pack_is_cached() {
         let directory = tempfile::tempdir().unwrap();
         let bundled = ProfilePack::latest_cached(directory.path()).unwrap();
-        assert_eq!(bundled.revision, 1);
-        let current = include_bytes!("profiles/current.json");
-        let signature = include_bytes!("profiles/current.json.sig");
+        assert_eq!(bundled.revision, 3);
+        let current = include_bytes!("profiles/current-v2.json");
+        let signature = include_bytes!("profiles/current-v2.json.sig");
         let installed = ProfilePack::install_signed(directory.path(), current, signature)
             .unwrap()
             .unwrap();
-        assert_eq!(installed.revision, 2);
+        assert_eq!(installed.revision, 4);
         assert_eq!(
             ProfilePack::latest_cached(directory.path())
                 .unwrap()
                 .revision,
-            2
+            4
         );
         assert!(
             ProfilePack::install_signed(directory.path(), current, signature)
@@ -640,7 +670,7 @@ mod tests {
             ProfilePack::latest_cached(directory.path())
                 .unwrap()
                 .revision,
-            2
+            4
         );
     }
 
@@ -653,7 +683,83 @@ mod tests {
     }
 
     #[test]
+    fn decree_fragment_address_is_supported_for_future_profiles_and_additive() {
+        let new: ProfilePack =
+            serde_json::from_slice(include_bytes!("profiles/bundled.json")).unwrap();
+        new.validate_shape().unwrap();
+        let latest = new
+            .profiles
+            .iter()
+            .find(|spec| spec.id == DECREE_FRAGMENT_PROFILE_ID)
+            .unwrap();
+        let profile = Profile {
+            base: 0x1000,
+            dictionary: Vec::new(),
+            spec: Arc::new(latest.clone()),
+        };
+        assert!(
+            profile
+                .targets()
+                .unwrap()
+                .contains(&(0x1000 + DECREE_FRAGMENT_RVA, "decree_fragment"))
+        );
+        assert!(
+            new.profiles[..2]
+                .iter()
+                .all(|spec| spec.rvas.len() == EXPECTED_RVAS.len())
+        );
+
+        let mut previous = new.clone();
+        previous.revision = 2;
+        previous.profiles[2]
+            .rvas
+            .retain(|entry| entry.key != DECREE_FRAGMENT_RVA);
+        previous.validate_shape().unwrap();
+        new.validate_extension_of(&previous).unwrap();
+
+        let mut changed = new.clone();
+        changed.profiles[2].rvas[0].current += 1;
+        assert!(changed.validate_extension_of(&previous).is_err());
+        let mut removed = new.clone();
+        removed.profiles[2].rvas.remove(0);
+        assert!(removed.validate_extension_of(&previous).is_err());
+        let mut future = new.clone();
+        future.revision += 1;
+        let mut future_profile = latest.clone();
+        future_profile.id = "warframe-2026-09-27-validated".into();
+        future_profile.module_size += 4096;
+        future.profiles.push(future_profile);
+        future.validate_shape().unwrap();
+        future.validate_extension_of(&new).unwrap();
+
+        let mut changed_old = new.clone();
+        changed_old.profiles[0].rvas.push(RvaEntry {
+            key: DECREE_FRAGMENT_RVA,
+            current: DECREE_FRAGMENT_RVA,
+        });
+        changed_old.validate_shape().unwrap();
+        assert!(changed_old.validate_extension_of(&new).is_err());
+    }
+
+    #[test]
     fn published_envelope_contains_the_verified_hotfix() {
+        let envelope: CacheEnvelope =
+            serde_json::from_slice(include_bytes!("profiles/current-v2.signed.json")).unwrap();
+        let payload = STANDARD.decode(envelope.payload).unwrap();
+        assert_eq!(payload, include_bytes!("profiles/current-v2.json"));
+        assert_eq!(
+            envelope.signature,
+            std::str::from_utf8(include_bytes!("profiles/current-v2.json.sig"))
+                .unwrap()
+                .trim()
+        );
+        let pack = ProfilePack::from_signed(&payload, envelope.signature.as_bytes()).unwrap();
+        assert_eq!(pack.revision, 4);
+        assert_eq!(pack.profiles.len(), 3);
+    }
+
+    #[test]
+    fn previous_update_channel_remains_signed_and_compatible() {
         let envelope: CacheEnvelope =
             serde_json::from_slice(include_bytes!("profiles/current.signed.json")).unwrap();
         let payload = STANDARD.decode(envelope.payload).unwrap();
@@ -666,15 +772,19 @@ mod tests {
         );
         let pack = ProfilePack::from_signed(&payload, envelope.signature.as_bytes()).unwrap();
         assert_eq!(pack.revision, 2);
-        assert_eq!(pack.profiles.len(), 3);
+        assert!(
+            pack.profiles
+                .iter()
+                .all(|profile| profile.rvas.len() == EXPECTED_RVAS.len())
+        );
     }
 
     #[test]
     fn newer_pack_cannot_replace_an_existing_profile() {
         let old = ProfilePack::bundled().unwrap();
         let mut new = ProfilePack::from_signed(
-            include_bytes!("profiles/current.json"),
-            include_bytes!("profiles/current.json.sig"),
+            include_bytes!("profiles/current-v2.json"),
+            include_bytes!("profiles/current-v2.json.sig"),
         )
         .unwrap();
         assert!(new.validate_extension_of(&old).is_ok());

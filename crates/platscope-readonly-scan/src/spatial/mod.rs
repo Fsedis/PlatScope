@@ -132,8 +132,10 @@ pub(crate) struct Identity {
     pub handle: u64,
     pub zone: Option<u64>,
     pub item: Option<u64>,
+    pub action: Option<u64>,
     pub item_offset: u64,
     pub moving: bool,
+    pub decree_fragment: bool,
     pub missed_reads: u8,
 }
 fn fresh_position() -> bool {

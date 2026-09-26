@@ -57,6 +57,25 @@ pub(super) fn position(m: &mut dyn Memory, a: u64, moving: bool) -> Result<[f32;
     }
     Ok(p)
 }
+/// У фрагмента декрета игровой transform поднят над опорной координатой предмета.
+/// Проверяем обе координаты и возвращаем точку действия, не меняя общий допуск предметов.
+pub(super) fn decree_fragment_position(m: &mut dyn Memory, a: u64) -> Result<[f32; 3]> {
+    let b = m.read(a + 0x70, 12)?;
+    let base = [float(&b, 0)?, float(&b, 4)?, float(&b, 8)?];
+    if !base.iter().copied().all(finite) {
+        return Err("Некорректные координаты фрагмента".into());
+    }
+    let matrix = matrix_impl(m, a, true)?;
+    let marker = [matrix[3][0], matrix[3][1], matrix[3][2]];
+    let height = marker[1] - base[1];
+    if (base[0] - marker[0]).abs() > 0.02
+        || (base[2] - marker[2]).abs() > 0.02
+        || !(0.0..=4.0).contains(&height)
+    {
+        return Err("Смещение фрагмента не подтверждено".into());
+    }
+    Ok(marker)
+}
 pub(super) fn mesh(m: &mut dyn Memory, p: u64, profile: &Profile) -> Result<SceneMesh> {
     let handle = q(m, p + 0x4d8)?;
     let geo = q(m, handle)?;

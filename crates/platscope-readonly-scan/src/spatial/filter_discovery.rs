@@ -1,6 +1,8 @@
 //! Приоритетный поиск новых экземпляров сохранённых пользовательских типов.
 use super::{
-    Memory, MemoryRange, Result, Scene, SceneObject, cancelled, source::u64_at, types::Decoder,
+    Memory, MemoryRange, Result, Scene, SceneObject, cancelled,
+    source::{q, u64_at},
+    types::Decoder,
 };
 use serde_json::{Value, json};
 use std::{
@@ -97,6 +99,7 @@ impl DiscoveryRules {
     pub(super) fn wants_family(&self, family: &str) -> bool {
         let kinds: &[&str] = match family {
             "pickup" => &["pickup", "feather"],
+            "decree_fragment" => &["decree_fragment"],
             "npc" => &["npc", "hostage"],
             "decoration" | "effect" => &["decoration", "cache", "locker", "panel"],
             "waypoint" => &["lootspot"],
@@ -247,11 +250,23 @@ fn discover_inner(
         if known.contains(&address) {
             continue;
         }
+        if family == "decree_fragment"
+            && !super::analyze::local_mission_root(m, scene)
+                .is_some_and(|root| q(m, address + 0x1e0).ok() == Some(root))
+        {
+            continue;
+        }
         let Ok((object, id)) =
             super::analyze::object(m, address, family, vt, &mut decoder, &profile)
         else {
             continue;
         };
+        if family == "decree_fragment"
+            && !super::analyze::local_mission_root(m, scene)
+                .is_some_and(|root| q(m, address + 0x1e0).ok() == Some(root))
+        {
+            continue;
+        }
         if state.rules.matches(&object) {
             if let Some(index) = range_index(&scene.discovery_ranges, address) {
                 state.focus.insert(index);

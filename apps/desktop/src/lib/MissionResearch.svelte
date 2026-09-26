@@ -41,7 +41,7 @@
   let groupObjects = true;
   let generation = 0;
   let alive = true;
-  let filters: Record<MissionFilter, boolean> = { feather: true, pickup: true, players: true, npc: false, other: false, goals: true, lootspots: false, caches: true, dragon_doors: true };
+  let filters: Record<MissionFilter, boolean> = { feather: true, pickup: true, decree_fragments: true, players: true, npc: false, other: false, goals: true, lootspots: false, caches: true, dragon_doors: true };
   let customFilters: CustomMissionFilter[] = [];
   let hiddenNames: HiddenMissionName[] = [];
   let hiddenStorageError = "";

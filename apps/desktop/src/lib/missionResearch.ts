@@ -4,7 +4,7 @@ export function objectMatchesSearch(object: MissionObject, query: string): boole
     object.kind === "feather" ? "перо перья" : object.kind === "npc" ? "неигровой персонаж" : ""]);
 }
 export type Position3 = [number, number, number];
-export type MissionObjectKind = "feather" | "pickup" | "avatar" | "npc" | "hostage" | "spawnpoint" | "panel" | "locker" | "decoration" | "extraction" | "terminal" | "lootspot" | "cache" | "dragon_door";
+export type MissionObjectKind = "feather" | "pickup" | "decree_fragment" | "avatar" | "npc" | "hostage" | "spawnpoint" | "panel" | "locker" | "decoration" | "extraction" | "terminal" | "lootspot" | "cache" | "dragon_door";
 export interface MissionObject {
   key: string; kind: MissionObjectKind; label: string; nameEn: string; itemPath: string | null;
   position: Position3; positionFresh?: boolean; variantKey?: string | null; typeNames: string[]; availability: "unknown" | "available" | "opened"; details: { label: string; value: string }[];
@@ -20,16 +20,17 @@ export interface MissionScene {
 }
 export interface MissionResearchStatus { busy: boolean; cancelling: boolean; phase: string; error: string | null; revision: number; gameRunning: boolean; tracking: boolean; scannedBytes: number; autoStart?: boolean; inOrbiter?: boolean }
 export interface MissionArchive { id: string; label: string; createdAt: string; sizeBytes: number; snapshots: { sequence: number; startedAt: string; endedAt: string; complete: boolean; bytes: number; holes: number }[] }
-export type MissionFilter = "feather" | "pickup" | "players" | "npc" | "other" | "goals" | "lootspots" | "caches" | "dragon_doors";
+export type MissionFilter = "feather" | "pickup" | "decree_fragments" | "players" | "npc" | "other" | "goals" | "lootspots" | "caches" | "dragon_doors";
 export const MISSION_FILTERS: { key: MissionFilter; label: string; color: string }[] = [
   { key: "dragon_doors", label: "Двери Дракона", color: "#e7b8ff" },
   { key: "caches", label: "Тайники", color: "#ffd66b" },
+  { key: "decree_fragments", label: "Фрагменты декретов", color: "#dfadfa" },
   { key: "feather", label: "Перья", color: "#f4c97e" }, { key: "pickup", label: "Предметы", color: "#78d6b0" },
   { key: "players", label: "Игроки", color: "#83cfff" }, { key: "npc", label: "NPC", color: "#e49baa" }, { key: "other", label: "Прочее", color: "#9eb9e9" },
   { key: "goals", label: "Эвакуация и терминалы", color: "#8de4bb" }, { key: "lootspots", label: "Возможные места лута", color: "#c5a6ee" },
 ];
-export function objectFilter(kind: MissionObjectKind): MissionFilter { return kind === "dragon_door" ? "dragon_doors" : kind === "cache" ? "caches" : kind === "feather" ? "feather" : kind === "pickup" ? "pickup" : kind === "avatar" ? "players" : kind === "extraction" || kind === "terminal" ? "goals" : kind === "lootspot" ? "lootspots" : kind === "npc" || kind === "hostage" || kind === "spawnpoint" ? "npc" : "other"; }
-export function objectKindLabel(kind: MissionObjectKind): string { return ({ dragon_door: "Дверь Дракона", cache: "Тайник", feather: "Перо", pickup: "Предмет", avatar: "Игрок", npc: "NPC", hostage: "Заложник", spawnpoint: "Точка появления", panel: "Панель", locker: "Шкафчик", decoration: "Объект окружения", extraction: "Эвакуация", terminal: "Терминал", lootspot: "Возможное место появления" })[kind] ?? "Объект"; }
+export function objectFilter(kind: MissionObjectKind): MissionFilter { return kind === "dragon_door" ? "dragon_doors" : kind === "cache" ? "caches" : kind === "decree_fragment" ? "decree_fragments" : kind === "feather" ? "feather" : kind === "pickup" ? "pickup" : kind === "avatar" ? "players" : kind === "extraction" || kind === "terminal" ? "goals" : kind === "lootspot" ? "lootspots" : kind === "npc" || kind === "hostage" || kind === "spawnpoint" ? "npc" : "other"; }
+export function objectKindLabel(kind: MissionObjectKind): string { return ({ dragon_door: "Дверь Дракона", cache: "Тайник", decree_fragment: "Фрагмент декрета", feather: "Перо", pickup: "Предмет", avatar: "Игрок", npc: "NPC", hostage: "Заложник", spawnpoint: "Точка появления", panel: "Панель", locker: "Шкафчик", decoration: "Объект окружения", extraction: "Эвакуация", terminal: "Терминал", lootspot: "Возможное место появления" })[kind] ?? "Объект"; }
 export function localAvatar(scene: Pick<MissionScene, "players" | "objects">): MissionObject | null {
   const players = scene.players?.filter(p => p.local) ?? [];
   if (players.length !== 1) return null;

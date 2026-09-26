@@ -1,5 +1,5 @@
 param(
-    [string]$ProfilePath = 'crates/platscope-readonly-scan/src/spatial/profiles/current.json'
+    [string]$ProfilePath = 'crates/platscope-readonly-scan/src/spatial/profiles/current-v2.json'
 )
 
 $ErrorActionPreference = 'Stop'

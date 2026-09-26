@@ -50,8 +50,10 @@ fn identity(m: &mut dyn Memory, a: u64, expected: u64) -> Result<Identity> {
         handle: h,
         zone: None,
         item: None,
+        action: None,
         item_offset: 0x528,
         moving: false,
+        decree_fragment: false,
         missed_reads: 0,
     })
 }
@@ -80,6 +82,33 @@ fn character_kind(family: &str, tag: Option<&str>, loc_tag: Option<&str>) -> &'s
         "npc"
     }
 }
+pub(super) fn local_mission_root(m: &mut dyn Memory, scene: &Scene) -> Option<u64> {
+    let locals: Vec<_> = scene.players.iter().filter(|p| p.local).collect();
+    let [local] = locals.as_slice() else {
+        return None;
+    };
+    let avatar = u64::from_str_radix(local.avatar_key.trim_start_matches("0x"), 16).ok()?;
+    q(m, avatar + 0x1e0).ok().filter(|root| *root != 0)
+}
+fn decree_fragment_anchor(m: &mut dyn Memory, address: u64, action: u64) -> Result<[f32; 3]> {
+    if handle(m, address + 0x488)?.1 != action {
+        return Err("Действие фрагмента изменилось".into());
+    }
+    let root = q(m, address + 0x1e0)?;
+    if root == 0 || q(m, action + 0x1e0)? != root {
+        return Err("Действие фрагмента в другом контексте".into());
+    }
+    let marker = geometry::decree_fragment_position(m, address)?;
+    let action_position = geometry::position(m, action, false)?;
+    if marker
+        .iter()
+        .zip(action_position)
+        .any(|(a, b)| (a - b).abs() > 0.02)
+    {
+        return Err("Действие фрагмента не совпадает с его положением".into());
+    }
+    Ok(marker)
+}
 pub(super) fn object(
     m: &mut dyn Memory,
     a: u64,
@@ -91,7 +120,13 @@ pub(super) fn object(
     let mut id = identity(m, a, vt)?;
     let info = decoder.chain(m, id.metadata)?;
     id.moving = matches!(family, "avatar" | "npc");
-    let position = geometry::position(m, a, id.moving)?;
+    id.decree_fragment = family == "decree_fragment";
+    let (fragment_action, position) = if id.decree_fragment {
+        let (_, action) = handle(m, a + 0x488)?;
+        (Some(action), decree_fragment_anchor(m, a, action)?)
+    } else {
+        (None, geometry::position(m, a, id.moving)?)
+    };
     if position.iter().all(|v| v.abs() < 0.00001) {
         return Err("Нулевой шаблон".into());
     }
@@ -140,55 +175,109 @@ pub(super) fn object(
                 format!("Orokin Vault · {}", key.english),
             )
         }
-        "pickup" => {
+        "pickup" | "decree_fragment" => {
+            let decree_fragment = family == "decree_fragment";
+            if decree_fragment
+                && (!info.names.iter().any(|n| n == "PickUp *")
+                    || info.field("Tag").as_deref() != Some("DuviriEndlessPickUp")
+                    || info.field("PickUpItemType").as_deref() != Some("DuviriArenaBoonItem")
+                    || info.field("PickUpActionType").as_deref()
+                        != Some("DuviriArenaBoonFragmentAutoPickUp")
+                    || info.field("Mesh").as_deref()
+                        != Some("/Lotus/Fx/Gameplay/HoverBoard/DuviriArenaBoonPickup.fbx")
+                    || info.field("Script").as_deref()
+                        != Some("/Lotus/Scripts/Duviri/Gameplay/DuviriEndless.lua"))
+            {
+                return Err("Не подтверждён фрагмент декрета".into());
+            }
             let (_, zone) = handle(m, a + 0x428)?;
             let zone_meta = q(m, zone + 8)?;
             let zi = decoder.chain(m, zone_meta)?;
             if !zi.names.iter().any(|n| n == "Zone *") {
                 return Err("Не подтверждена зона предмета".into());
             }
+            let root = if decree_fragment {
+                let root = q(m, a + 0x1e0)?;
+                if root == 0 || q(m, zone + 0x1e0)? != root {
+                    return Err("Фрагмент не принадлежит зоне миссии".into());
+                }
+                Some(root)
+            } else {
+                None
+            };
             let (_, item) = handle(m, a + 0x528)?;
             let item_meta = q(m, item + 8)?;
             let it = decoder.chain(m, item_meta)?;
             if !it.names.iter().any(|n| n == "Item *") {
                 return Err("Не подтверждён экземпляр предмета".into());
             }
+            if decree_fragment && !it.names.iter().any(|n| n == "LotusPickUpItem *") {
+                return Err("Не подтверждён предмет фрагмента".into());
+            }
             id.zone = Some(zone);
             id.item = Some(item);
             let path = info.field("PickUpItemType").ok_or("Нет типа предмета")?;
-            let feather = short_resource(&path).starts_with("ZarimanDogTag");
-            if feather {
-                let loc = it.field("LocalizeTag").ok_or("Нет имени пера")?;
-                if !loc.ends_with(&format!("{}Name", short_resource(&path))) {
-                    return Err("Тип пера не совпадает с экземпляром предмета".into());
+            if decree_fragment {
+                let action = fragment_action.unwrap();
+                let action_meta = q(m, action + 8)?;
+                let action_info = decoder.chain(m, action_meta)?;
+                if !action_info.names.iter().any(|n| n == "PickUpAction *")
+                    || action_info.field("ActionSound").as_deref()
+                        != Some("/Lotus/Sounds/UI/Pickups/DuviriBoonFragmentPickup")
+                    || q(m, action + 0x1e0)? != root.unwrap()
+                {
+                    return Err("Не подтверждено действие фрагмента".into());
                 }
-            }
-            match handle(m, a + 0x488) {
-                Ok((_, action)) => {
-                    let action_meta = q(m, action + 8)?;
-                    match decoder.chain(m, action_meta) {
-                        Ok(t) if t.names.iter().any(|n| n == "PickUpAction *") => {
-                            details.push(detail(
-                                "Действие подбора",
-                                "Найдено; возможность подобрать ещё не подтверждена",
-                            ))
-                        }
-                        _ => details.push(detail(
-                            "Действие подбора",
-                            "Ссылка изменилась или не подтверждена",
-                        )),
+                details.push(detail("Зона", format!("0x{zone:x}")));
+                details.push(detail("Тип предмета", path.clone()));
+                details.push(detail("Ресурс", info.field("Mesh").unwrap()));
+                details.push(detail(
+                    "Действие подбора",
+                    "Найдено; возможность подобрать ещё не подтверждена",
+                ));
+                id.action = Some(action);
+                item_path = Some(path);
+                variant_key = Some("decree-fragment-v1".into());
+                (
+                    "decree_fragment",
+                    "Фрагмент декрета".into(),
+                    "Decree Fragment".into(),
+                )
+            } else {
+                let feather = short_resource(&path).starts_with("ZarimanDogTag");
+                if feather {
+                    let loc = it.field("LocalizeTag").ok_or("Нет имени пера")?;
+                    if !loc.ends_with(&format!("{}Name", short_resource(&path))) {
+                        return Err("Тип пера не совпадает с экземпляром предмета".into());
                     }
                 }
-                Err(_) => details.push(detail(
-                    "Действие подбора",
-                    "Не подтверждено; это не означает, что предмет уже подобран",
-                )),
+                match handle(m, a + 0x488) {
+                    Ok((_, action)) => {
+                        let action_meta = q(m, action + 8)?;
+                        match decoder.chain(m, action_meta) {
+                            Ok(t) if t.names.iter().any(|n| n == "PickUpAction *") => {
+                                details.push(detail(
+                                    "Действие подбора",
+                                    "Найдено; возможность подобрать ещё не подтверждена",
+                                ))
+                            }
+                            _ => details.push(detail(
+                                "Действие подбора",
+                                "Ссылка изменилась или не подтверждена",
+                            )),
+                        }
+                    }
+                    Err(_) => details.push(detail(
+                        "Действие подбора",
+                        "Не подтверждено; это не означает, что предмет уже подобран",
+                    )),
+                }
+                details.push(detail("Зона", format!("0x{zone:x}")));
+                details.push(detail("Тип предмета", path.clone()));
+                let (label, en) = pickup_label(&path);
+                item_path = Some(path);
+                (if feather { "feather" } else { "pickup" }, label, en)
             }
-            details.push(detail("Зона", format!("0x{zone:x}")));
-            details.push(detail("Тип предмета", path.clone()));
-            let (label, en) = pickup_label(&path);
-            item_path = Some(path);
-            (if feather { "feather" } else { "pickup" }, label, en)
         }
         "avatar" => {
             super::context::owner(m, a, profile)?;
@@ -278,7 +367,10 @@ pub(super) fn object(
         }
         _ => return Err("Неизвестное семейство".into()),
     };
-    if !matches!(family, "pickup" | "decoration" | "effect") {
+    if !matches!(
+        family,
+        "pickup" | "decree_fragment" | "decoration" | "effect"
+    ) {
         if let Ok((_, zone)) = handle(m, a + 0x428) {
             id.zone = Some(zone);
         }
@@ -560,16 +652,10 @@ fn run(
     scene.discovery_ranges = pools.into_values().collect();
     super::context::update(m, &mut scene, &profile, cancel)?;
     // При полном обходе в памяти могут оставаться действия прошлой миссии.
-    let root = scene
-        .players
-        .iter()
-        .find(|p| p.local)
-        .and_then(|p| u64::from_str_radix(p.avatar_key.trim_start_matches("0x"), 16).ok())
-        .and_then(|a| q(m, a + 0x1e0).ok())
-        .filter(|root| *root != 0);
+    let root = local_mission_root(m, &scene);
     let mut removed = HashSet::new();
     scene.objects.retain(|object| {
-        let keep = object.kind != "dragon_door"
+        let keep = !matches!(object.kind.as_str(), "dragon_door" | "decree_fragment")
             || root.is_some_and(|root| {
                 u64::from_str_radix(object.key.trim_start_matches("0x"), 16)
                     .ok()
@@ -782,6 +868,24 @@ pub fn refresh_live_filtered(
     if let Some(profile) = &scene.discovery_profile {
         super::context::update(&mut m, &mut result, profile, cancel)?;
     }
+    let root = local_mission_root(&mut m, &result);
+    let mut removed = HashSet::new();
+    result.objects.retain(|object| {
+        let keep = object.kind != "decree_fragment"
+            || root.is_some_and(|root| {
+                u64::from_str_radix(object.key.trim_start_matches("0x"), 16)
+                    .ok()
+                    .and_then(|a| q(&mut m, a + 0x1e0).ok())
+                    == Some(root)
+            });
+        if !keep {
+            removed.insert(object.key.clone());
+        }
+        keep
+    });
+    result
+        .identities
+        .retain(|id| !removed.contains(&format!("0x{:x}", id.address)));
     if !super::registry_discovery::discover(&mut m, &mut result, rules, cancel)? {
         super::filter_discovery::discover(&mut m, &mut result, rules, cancel)?;
         discover(&mut m, &mut result, cancel)?;
@@ -822,7 +926,17 @@ fn observe(m: &mut dyn Memory, old: &Identity) -> Result<Option<(Identity, Optio
     {
         return Ok(None);
     }
-    let position = geometry::position(m, old.address, old.moving).ok();
+    if let Some(action) = old.action
+        && handle(m, old.address + 0x488)?.1 != action
+    {
+        return Ok(None);
+    }
+    let position = if old.decree_fragment {
+        let action = old.action.ok_or("Нет действия фрагмента")?;
+        Some(decree_fragment_anchor(m, old.address, action)?)
+    } else {
+        geometry::position(m, old.address, old.moving).ok()
+    };
     Ok(Some((now, position)))
 }
 fn refresh_objects(m: &mut dyn Memory, scene: &Scene, cancel: &AtomicBool) -> Result<Scene> {
@@ -920,7 +1034,18 @@ fn discover(m: &mut dyn Memory, scene: &mut Scene, cancel: &AtomicBool) -> Resul
         if started.elapsed() > Duration::from_millis(80) || scene.objects.len() >= MAX_OBJECTS {
             break;
         }
+        if family == "decree_fragment"
+            && !local_mission_root(m, scene).is_some_and(|root| q(m, a + 0x1e0).ok() == Some(root))
+        {
+            continue;
+        }
         if let Ok((object, id)) = object(m, a, family, vt, &mut decoder, &profile) {
+            if family == "decree_fragment"
+                && !local_mission_root(m, scene)
+                    .is_some_and(|root| q(m, a + 0x1e0).ok() == Some(root))
+            {
+                continue;
+            }
             scene.objects.push(object);
             scene.identities.push(id);
         }
@@ -1029,8 +1154,10 @@ mod tests {
             handle: 0x800,
             zone: Some(0x1000),
             item: None,
+            action: None,
             item_offset: 0x528,
             moving: true,
+            decree_fragment: false,
             missed_reads: 0,
         });
         (m, scene)
@@ -1151,5 +1278,39 @@ mod tests {
                 .objects
                 .is_empty()
         );
+    }
+    #[test]
+    #[ignore = "Ручная проверка на локальном архиве: PLATSCOPE_DECREE_ARCHIVE"]
+    fn archived_duviri_decree_fragments_have_confirmed_links() {
+        let archive = std::env::var("PLATSCOPE_DECREE_ARCHIVE").unwrap();
+        let mut memory =
+            ArchiveMemory::open(Path::new(&archive), 2, &AtomicBool::new(false)).unwrap();
+        let profile = Profile::validate(&mut memory).unwrap();
+        let vt = profile
+            .targets()
+            .unwrap()
+            .into_iter()
+            .find(|(_, family)| *family == "decree_fragment")
+            .unwrap()
+            .0;
+        let mut decoder = Decoder::new(profile.clone()).unwrap();
+        for address in [0x1d73c0f0500, 0x1d783f4be80] {
+            let (fragment, id) = object(
+                &mut memory,
+                address,
+                "decree_fragment",
+                vt,
+                &mut decoder,
+                &profile,
+            )
+            .unwrap();
+            assert_eq!(fragment.kind, "decree_fragment");
+            assert_eq!(fragment.item_path.as_deref(), Some("DuviriArenaBoonItem"));
+            assert!(id.zone.is_some() && id.item.is_some());
+            assert_eq!(
+                observe(&mut memory, &id).unwrap().unwrap().1,
+                Some(fragment.position)
+            );
+        }
     }
 }

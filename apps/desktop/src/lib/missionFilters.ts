@@ -8,7 +8,7 @@ export interface HiddenMissionName { label: string; nameEn: string }
 const normalizeName = (name: string) => name.trim().toLowerCase().replaceAll("ё", "е").replace(/\s+/g, " ");
 const categoryNames = new Set([
   ...MISSION_FILTERS.map(filter => filter.label),
-  ...(["feather", "pickup", "avatar", "npc", "hostage", "spawnpoint", "panel", "locker", "decoration", "extraction", "terminal", "lootspot", "cache", "dragon_door"] as MissionObjectKind[]).map(objectKindLabel),
+  ...(["feather", "pickup", "decree_fragment", "avatar", "npc", "hostage", "spawnpoint", "panel", "locker", "decoration", "extraction", "terminal", "lootspot", "cache", "dragon_door"] as MissionObjectKind[]).map(objectKindLabel),
   "Объект", "Деталь окружения", "Варфрейм или оператор", "Warframe / Operator",
 ].map(normalizeName));
 /** Одно конкретное имя вместо объединения с общей подписью вроде NPC. */
