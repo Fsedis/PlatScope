@@ -1,7 +1,7 @@
 use super::*;
 use super::{
     geometry,
-    profile::Profile,
+    profile::{Profile, ProfilePack},
     source::{LiveMemory, q, u64_at},
     types::Decoder,
 };
@@ -376,20 +376,54 @@ fn interaction(
         _ => Err("Назначение действия не подтверждено".into()),
     }
 }
+#[derive(Debug)]
+pub enum AnalysisFailure {
+    UnsupportedBuild(String),
+    Other(String),
+}
+
+impl From<String> for AnalysisFailure {
+    fn from(message: String) -> Self {
+        Self::Other(message)
+    }
+}
+
+impl From<&str> for AnalysisFailure {
+    fn from(message: &str) -> Self {
+        Self::Other(message.to_owned())
+    }
+}
+
+impl std::fmt::Display for AnalysisFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnsupportedBuild(message) | Self::Other(message) => f.write_str(message),
+        }
+    }
+}
+
 fn run(
     m: &mut dyn Memory,
+    pack: &ProfilePack,
     source: &str,
     started_at: String,
     input_complete: bool,
     cancel: &AtomicBool,
     progress: &impl Fn(AnalysisProgress),
-) -> Result<Scene> {
+) -> std::result::Result<Scene, AnalysisFailure> {
     cancelled(cancel)?;
     progress(AnalysisProgress {
         stage: "Проверка версии игры".into(),
         ..Default::default()
     });
-    let profile = Profile::validate(m)?;
+    let profile = Profile::validate_with_pack(m, pack).map_err(|error| {
+        if error == "В источнике нет Warframe.x64.exe" || error == "Некорректная граница модуля"
+        {
+            AnalysisFailure::Other(error)
+        } else {
+            AnalysisFailure::UnsupportedBuild(error)
+        }
+    })?;
     let mut decoder = Decoder::new(profile.clone())?;
     let targets = profile.targets()?;
     let ranges = m.ranges();
@@ -410,7 +444,7 @@ fn run(
         }
         let raw = match m.read(r.address, r.length) {
             Ok(b) => b,
-            Err(e) if m.strict_errors() => return Err(e),
+            Err(e) if m.strict_errors() => return Err(e.into()),
             Err(_) => {
                 failed_chunks += 1;
                 tail.clear();
@@ -567,11 +601,41 @@ pub fn analyze_archive(
     cancel: &AtomicBool,
     progress: impl Fn(AnalysisProgress),
 ) -> Result<Scene> {
+    let pack = ProfilePack::bundled()?;
+    analyze_archive_with_profiles(path, sequence, &pack, cancel, progress)
+}
+
+pub fn analyze_archive_with_profiles(
+    path: &Path,
+    sequence: u64,
+    pack: &ProfilePack,
+    cancel: &AtomicBool,
+    progress: impl Fn(AnalysisProgress),
+) -> Result<Scene> {
+    analyze_archive_with_profiles_detailed(path, sequence, pack, cancel, progress)
+        .map_err(|error| error.to_string())
+}
+
+pub fn analyze_archive_with_profiles_detailed(
+    path: &Path,
+    sequence: u64,
+    pack: &ProfilePack,
+    cancel: &AtomicBool,
+    progress: impl Fn(AnalysisProgress),
+) -> std::result::Result<Scene, AnalysisFailure> {
     let mut memory = ArchiveMemory::open(path, sequence, cancel)?;
     let started = memory.started_at.clone();
     let complete = memory.complete;
     let captured = memory.ended_at.clone();
-    let mut scene = run(&mut memory, "archive", started, complete, cancel, &progress)?;
+    let mut scene = run(
+        &mut memory,
+        pack,
+        "archive",
+        started,
+        complete,
+        cancel,
+        &progress,
+    )?;
     scene.captured_at = captured;
     Ok(scene)
 }
@@ -580,12 +644,32 @@ pub fn analyze_live(
     cancel: &AtomicBool,
     progress: impl Fn(AnalysisProgress),
 ) -> Result<Scene> {
+    let pack = ProfilePack::bundled()?;
+    analyze_live_with_profiles(pid, &pack, cancel, progress)
+}
+
+pub fn analyze_live_with_profiles(
+    pid: u32,
+    pack: &ProfilePack,
+    cancel: &AtomicBool,
+    progress: impl Fn(AnalysisProgress),
+) -> Result<Scene> {
+    analyze_live_with_profiles_detailed(pid, pack, cancel, progress)
+        .map_err(|error| error.to_string())
+}
+
+pub fn analyze_live_with_profiles_detailed(
+    pid: u32,
+    pack: &ProfilePack,
+    cancel: &AtomicBool,
+    progress: impl Fn(AnalysisProgress),
+) -> std::result::Result<Scene, AnalysisFailure> {
     let _lock = crate::squad::SCAN_LOCK
         .try_lock()
         .map_err(|_| "Другое чтение памяти ещё выполняется")?;
     let mut m = LiveMemory::open(pid, cancel)?;
     let created = m.process.created.clone();
-    let mut scene = run(&mut m, "live", stamp(), true, cancel, &progress)?;
+    let mut scene = run(&mut m, pack, "live", stamp(), true, cancel, &progress)?;
     if !m.process.alive() {
         return Err("Игра завершилась во время исследования".into());
     }
@@ -847,6 +931,42 @@ fn discover(m: &mut dyn Memory, scene: &mut Scene, cancel: &AtomicBool) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+    struct BrokenProfileMemory;
+    impl Memory for BrokenProfileMemory {
+        fn read(&mut self, _: u64, _: usize) -> Result<Vec<u8>> {
+            Err("Нет страницы по старому RVA".into())
+        }
+        fn ranges(&self) -> Vec<MemoryRange> {
+            vec![]
+        }
+        fn modules(&self) -> Vec<MemoryModule> {
+            vec![MemoryModule {
+                name: "Warframe.x64.exe".into(),
+                base: 0x1000,
+                size: 47_116_288,
+            }]
+        }
+    }
+
+    #[test]
+    fn unreadable_old_profile_triggers_profile_update() {
+        let pack = ProfilePack::bundled().unwrap();
+        let cancel = AtomicBool::new(false);
+        let result = run(
+            &mut BrokenProfileMemory,
+            &pack,
+            "archive",
+            "test".into(),
+            true,
+            &cancel,
+            &|_| {},
+        );
+        assert!(matches!(
+            result,
+            Err(AnalysisFailure::UnsupportedBuild(message)) if message == "Нет страницы по старому RVA"
+        ));
+    }
+
     struct Mock {
         bytes: Vec<u8>,
         fail: bool,

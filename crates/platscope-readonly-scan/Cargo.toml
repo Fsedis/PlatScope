@@ -8,7 +8,10 @@ description = "Windows read-only Warframe session scanner and bounded inventory 
 
 [dependencies]
 anyhow = "1"
+base64 = "0.22"
 flate2 = "1"
+hex.workspace = true
+minisign-verify = "0.2"
 sha2.workspace = true
 chrono.workspace = true
 platscope-domain = { path = "../platscope-domain" }
@@ -32,6 +35,7 @@ windows = { version = "0.58", features = [
 
 [dev-dependencies]
 platscope-inventory = { path = "../platscope-inventory" }
+tempfile = "3"
 
 # This Windows boundary is the sole workspace exception to `unsafe_code = forbid`:
 # Windows process-memory APIs require FFI calls. The rest of PlatScope remains safe Rust.

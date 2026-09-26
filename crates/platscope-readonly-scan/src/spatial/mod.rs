@@ -12,9 +12,14 @@ mod source;
 mod types;
 
 pub use analyze::refresh_live_filtered;
-pub use analyze::{LocalPose, LocalPoseReader, analyze_archive, analyze_live, refresh_live};
+pub use analyze::{
+    AnalysisFailure, LocalPose, LocalPoseReader, analyze_archive, analyze_archive_with_profiles,
+    analyze_archive_with_profiles_detailed, analyze_live, analyze_live_with_profiles,
+    analyze_live_with_profiles_detailed, refresh_live,
+};
 pub use archive::ArchiveMemory;
 pub use filter_discovery::DiscoveryRules;
+pub use profile::ProfilePack;
 use serde::{Deserialize, Serialize};
 pub use source::{Memory, MemoryModule, MemoryRange};
 use std::{path::Path, sync::atomic::AtomicBool};

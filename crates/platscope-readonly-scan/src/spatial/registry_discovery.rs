@@ -88,19 +88,7 @@ fn region(m: &mut dyn Memory, avatar: u64, profile: &Profile) -> Result<Region> 
         return Err("Реестр принадлежит другому контексту".into());
     }
     // Два независимых метода подтверждают размер в байтах и границы массива.
-    let count_method = q(m, profile.address(0x21d29d8)? + 74 * 8)?;
-    let range_method = q(m, profile.address(0x21d29d8)? + 76 * 8)?;
-    if count_method != profile.address(0xe03440)?
-        || range_method != profile.address(0xc66420)?
-        || m.read(count_method, 11)? != [0x8b, 0x81, 0x08, 0x02, 0, 0, 0x48, 0xc1, 0xe8, 3, 0xc3]
-        || m.read(range_method, 31)?
-            != [
-                0x48, 0x8b, 0x81, 0, 2, 0, 0, 0x48, 0x89, 2, 0x8b, 0x81, 8, 2, 0, 0, 0x48, 3, 0x81,
-                0, 2, 0, 0, 0x48, 0x89, 0x42, 8, 0x48, 0x8b, 0xc2, 0xc3,
-            ]
-    {
-        return Err("Структура реестра отличается от исследованной".into());
-    }
+    profile.validate_registry_methods(m)?;
     Ok(Region {
         root,
         root_handle,

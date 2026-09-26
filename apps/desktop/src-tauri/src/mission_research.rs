@@ -74,7 +74,7 @@ impl Service {
         status.game_running = find_wf_pid().is_some();
         Ok(status)
     }
-    fn start(&mut self, source: Source) -> Result<Status, String> {
+    fn start(&mut self, source: Source, profile_dir: PathBuf) -> Result<Status, String> {
         let generation = {
             let mut inner = self.inner.lock().map_err(|e| e.to_string())?;
             if inner.status.busy {
@@ -110,12 +110,36 @@ impl Service {
                     Source::Live(pid) => Some(*pid),
                     Source::Archive(..) => None,
                 };
-                let result = match source {
-                    Source::Live(pid) => spatial::analyze_live(pid, &cancel, report),
+                let analyze = |pack: &spatial::ProfilePack| match &source {
+                    Source::Live(pid) => {
+                        spatial::analyze_live_with_profiles_detailed(*pid, pack, &cancel, &report)
+                    }
                     Source::Archive(path, sequence) => {
-                        spatial::analyze_archive(&path, sequence, &cancel, report)
+                        spatial::analyze_archive_with_profiles_detailed(
+                            path, *sequence, pack, &cancel, &report,
+                        )
                     }
                 };
+                let mut result = spatial::ProfilePack::latest_cached(&profile_dir)
+                    .map_err(spatial::AnalysisFailure::Other)
+                    .and_then(|pack| analyze(&pack));
+                if let Err(spatial::AnalysisFailure::UnsupportedBuild(error)) = &result
+                    && !cancel.load(Ordering::Relaxed)
+                {
+                    report(AnalysisProgress {
+                        stage: "Проверка обновления профиля карты".into(),
+                        ..Default::default()
+                    });
+                    match spatial::ProfilePack::download_newer(&profile_dir) {
+                        Ok(Some(pack)) => result = analyze(&pack),
+                        Ok(None) => {}
+                        Err(update_error) => {
+                            result = Err(spatial::AnalysisFailure::Other(format!(
+                                "{error}. Обновление профиля недоступно: {update_error}"
+                            )));
+                        }
+                    }
+                }
                 if let Ok(mut inner) = shared.lock()
                     && inner.generation == generation
                 {
@@ -139,7 +163,7 @@ impl Service {
                             }
                             Err(error) => {
                                 inner.desired_live = false;
-                                inner.status.error = Some(error);
+                                inner.status.error = Some(error.to_string());
                                 inner.status.phase = "Не удалось прочитать сцену".into();
                             }
                         }
@@ -195,16 +219,24 @@ impl Service {
                 // Основной уровень объявляется до FSM::LoadLevel. Фоновые сцены
                 // перелёта и обычная загрузка ресурсов не меняют назначение перехода.
                 if let Some(path) = log_message(&line).and_then(|message| {
-                    message.strip_prefix("Game [Info]: FrameworkCmd::OpenLevel - ")
+                    message
+                        .strip_prefix("Game [Info]: FrameworkCmd::OpenLevel - ")
                         .or_else(|| message.strip_prefix("Game [Info]: Level="))
-                        .or_else(|| message.strip_prefix("Sys [Info]: Client finished loading ")
-                            .and_then(|path| path.strip_suffix(". Sending CMSG_LOAD_COMPLETE to server."))
-                            .filter(|path| path.starts_with("/Lotus/Levels/")))
+                        .or_else(|| {
+                            message
+                                .strip_prefix("Sys [Info]: Client finished loading ")
+                                .and_then(|path| {
+                                    path.strip_suffix(". Sending CMSG_LOAD_COMPLETE to server.")
+                                })
+                                .filter(|path| path.starts_with("/Lotus/Levels/"))
+                        })
                 }) {
                     let path = path.trim();
                     self.in_orbiter = path == "/Lotus/Levels/Proc/PlayerShip"
                         || path.starts_with("/Lotus/Levels/Proc/PlayerShip/");
-                    if self.in_orbiter { self.auto_after = None; }
+                    if self.in_orbiter {
+                        self.auto_after = None;
+                    }
                 }
                 if mission_changed(&line) && self.last_load.as_deref() != Some(line.trim()) {
                     self.last_load = Some(line.trim().to_owned());
@@ -213,7 +245,8 @@ impl Service {
                     self.invalidate();
                 } else if level_loaded(&line) && self.loading_location {
                     self.loading_location = false;
-                    self.auto_after = (!self.in_orbiter).then(|| Instant::now() + Duration::from_secs(3));
+                    self.auto_after =
+                        (!self.in_orbiter).then(|| Instant::now() + Duration::from_secs(3));
                 }
             }
             self.log_tail.drain(..=end);
@@ -239,7 +272,11 @@ impl Service {
         self.auto_after = None;
     }
     fn take_auto_request(&mut self, now: Instant) -> bool {
-        if !self.log_ready || self.loading_location || self.in_orbiter || self.auto_after.is_none_or(|at| at > now) {
+        if !self.log_ready
+            || self.loading_location
+            || self.in_orbiter
+            || self.auto_after.is_none_or(|at| at > now)
+        {
             return false;
         }
         let Ok(inner) = self.inner.lock() else {
@@ -386,7 +423,7 @@ pub(crate) fn spawn(app: AppHandle) {
             };
             if service.take_auto_request(Instant::now()) {
                 // Одна попытка на локацию. Ошибка не запускает цикл тяжёлых повторов.
-                let _ = service.start(Source::Live(pid));
+                let _ = service.start(Source::Live(pid), profile_root(&state));
             }
             let ready = service.inner.lock().ok().and_then(|inner| {
                 (inner.desired_live && !inner.status.busy && !inner.status.tracking)
@@ -404,6 +441,9 @@ fn archive_root(state: &AppState) -> PathBuf {
         .data_directory
         .join("diagnostics")
         .join("binary-memory")
+}
+fn profile_root(state: &AppState) -> PathBuf {
+    state.data_directory.join("spatial-profiles")
 }
 fn archive_path(root: &Path, id: &str) -> Result<PathBuf, String> {
     if !id.starts_with("warframe-binary-")
@@ -634,7 +674,7 @@ pub(crate) fn mission_research_scan_live(state: State<'_, AppState>) -> Result<S
         .mission_research
         .lock()
         .map_err(|e| e.to_string())?
-        .start(Source::Live(pid))
+        .start(Source::Live(pid), profile_root(&state))
 }
 #[tauri::command]
 pub(crate) fn mission_research_analyze_archive(
@@ -647,7 +687,7 @@ pub(crate) fn mission_research_analyze_archive(
         .mission_research
         .lock()
         .map_err(|e| e.to_string())?
-        .start(Source::Archive(path, sequence))
+        .start(Source::Archive(path, sequence), profile_root(&state))
 }
 #[tauri::command]
 pub(crate) fn mission_research_cancel(state: State<'_, AppState>) -> Result<Status, String> {
