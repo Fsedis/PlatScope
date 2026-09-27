@@ -513,7 +513,6 @@ mod tests {
         .expect("fixture catalog")
     }
 
-
     #[test]
     fn accepts_wfm_v2_data_envelope() {
         let body = br#"{

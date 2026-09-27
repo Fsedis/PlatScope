@@ -2144,11 +2144,15 @@ fn build_reward_ocr_catalog(
         .chain(metadata.prime_parts.iter().map(|part| part.slug.as_str()))
         .collect();
     let mut result = Vec::new();
-    for item in market_catalog
-        .items
-        .into_iter()
-        .filter(|item| reward_slugs.contains(item.slug.as_str()))
-    {
+    for item in market_catalog.items.into_iter().filter(|item| {
+        reward_slugs.contains(item.slug.as_str())
+            || (item.tags.iter().any(|tag| tag == "prime")
+                && item
+                    .tags
+                    .iter()
+                    .any(|tag| tag == "component" || tag == "blueprint")
+                && !item.tags.iter().any(|tag| tag == "set"))
+    }) {
         if let Some(name) = russian_reward_ocr_name(item.display_name_ru) {
             result.push(RewardOcrCatalogItem {
                 item_id: item.item_id,
@@ -3889,8 +3893,7 @@ fn handle_reward_trigger_event(app_handle: &AppHandle, event: RewardTriggerEvent
 }
 
 fn reward_log_contains_reward_screen(log: &str) -> bool {
-    log.contains("Got rewards")
-        || log.contains("ProjectionRewardChoice.lua: Missing icon data!")
+    log.contains("Got rewards") || log.contains("ProjectionRewardChoice.lua: Missing icon data!")
 }
 
 fn reward_log_projection_paths(log: &str) -> HashSet<String> {
@@ -4699,7 +4702,6 @@ mod tests {
         assert!(validate_market_slugs(Vec::new()).is_err());
     }
 
-
     #[test]
     fn component_images_use_a_validated_local_protocol() {
         let remote = "https://cdn.warframestat.us/img/GenericGunPrimeBarrel.png";
@@ -4718,7 +4720,6 @@ mod tests {
         ]));
         assert!(!valid_component_png(b"not a png"));
     }
-
 
     #[test]
     fn reward_log_markers_match_current_warframe_messages() {
@@ -4750,7 +4751,6 @@ mod tests {
         assert!(paths.contains("/Lotus/Types/Game/Projections/T1VoidProjectionLavosPrimeABronze"));
     }
 
-
     #[test]
     fn reward_ocr_catalog_accepts_only_non_empty_russian_names() {
         assert_eq!(
@@ -4780,7 +4780,7 @@ mod tests {
             ),
             ("lohk", "Лок"),
         ];
-        let items: Vec<_> = missing_rewards
+        let mut items: Vec<_> = missing_rewards
             .iter()
             .copied()
             .chain([
@@ -4795,6 +4795,20 @@ mod tests {
                 })
             })
             .collect();
+        for (slug, name) in [
+            (
+                "citrine_prime_systems_blueprint",
+                "Цитрина Прайм: Система (Чертеж)",
+            ),
+            ("steflos_prime_barrel", "Стефлос Прайм: Ствол"),
+            ("corufell_prime_handle", "Коруфелл Прайм: Рукоять"),
+        ] {
+            items.push(serde_json::json!({
+                "item_id": slug, "slug": slug, "display_name_en": slug,
+                "display_name_ru": name, "subtypes": [],
+                "tags": ["prime", "component"]
+            }));
+        }
         let catalog: platscope_domain::ItemCatalog = serde_json::from_value(serde_json::json!({
             "metadata": {
                 "provider": "relics_run", "fetched_at": Utc::now(), "schema_version": 1,
@@ -4844,6 +4858,13 @@ mod tests {
                 let reward = result.iter().find(|item| item.slug == slug).unwrap();
                 assert_eq!(reward.item_id, slug);
                 assert_eq!(reward.name, name);
+            }
+            for slug in [
+                "citrine_prime_systems_blueprint",
+                "steflos_prime_barrel",
+                "corufell_prime_handle",
+            ] {
+                assert!(result.iter().any(|item| item.slug == slug), "{slug}");
             }
             assert!(
                 result

@@ -68,7 +68,7 @@ const HISTORY_FETCH_ATTEMPTS: u8 = 3;
 pub const DEFAULT_KEEP_COPIES: u32 = 1;
 pub const DEFAULT_REWARD_OVERLAY_SCALE_PERCENT: u16 = 100;
 pub const DEFAULT_REWARD_OVERLAY_OFFSET_PERCENT: i16 = 0;
-const CURRENT_GAME_METADATA_SCHEMA_VERSION: u32 = 9;
+const CURRENT_GAME_METADATA_SCHEMA_VERSION: u32 = 10;
 const CURRENT_CATALOG_SCHEMA_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -6825,7 +6825,6 @@ mod tests {
         drop(database);
         std::fs::remove_file(path).unwrap();
     }
-
 
     #[test]
     fn set_stock_uses_tradeable_base_parts_independently_of_keep_copies() {

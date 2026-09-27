@@ -51,7 +51,18 @@ impl BoundedHttpClient {
         allow_text_plain: bool,
         max_response_bytes: usize,
     ) -> Result<Vec<u8>, ProviderError> {
-        self.get_with_limit(url, allow_text_plain, false, max_response_bytes)
+        self.get_with_limit(url, allow_text_plain, false, false, max_response_bytes)
+            .await
+    }
+
+    /// WFCD публикует русский JSON локализации как `application/octet-stream`.
+    /// Вызывающий код проверяет структуру JSON после загрузки.
+    pub(crate) async fn get_wfcd_localization(
+        &self,
+        url: &str,
+        max_response_bytes: usize,
+    ) -> Result<Vec<u8>, ProviderError> {
+        self.get_with_limit(url, true, false, true, max_response_bytes)
             .await
     }
 
@@ -62,6 +73,7 @@ impl BoundedHttpClient {
             "https://api.warframe.com/cdn/worldState.php",
             false,
             true,
+            false,
             4 * 1024 * 1024,
         )
         .await
@@ -72,6 +84,7 @@ impl BoundedHttpClient {
         url: &str,
         allow_text_plain: bool,
         allow_game_html: bool,
+        allow_octet_stream: bool,
         max_response_bytes: usize,
     ) -> Result<Vec<u8>, ProviderError> {
         if max_response_bytes == 0 {
@@ -129,7 +142,8 @@ impl BoundedHttpClient {
         let valid_type = content_type.contains("application/json")
             || content_type.contains("+json")
             || (allow_text_plain && content_type.contains("text/plain"))
-            || (allow_game_html && content_type.contains("text/html"));
+            || (allow_game_html && content_type.contains("text/html"))
+            || (allow_octet_stream && content_type.contains("application/octet-stream"));
         if !valid_type {
             return Err(ProviderError::schema_changed(format!(
                 "unexpected content type: {content_type}"

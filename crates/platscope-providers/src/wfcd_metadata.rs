@@ -21,8 +21,9 @@ use crate::{
 
 const DEFAULT_BASE_URL: &str =
     "https://raw.githubusercontent.com/WFCD/warframe-items/master/data/json";
-const WFCD_DOCUMENT_NAMES: [&str; 14] = [
+const WFCD_DOCUMENT_NAMES: [&str; 15] = [
     "Relics.json",
+    "Components.json",
     "Warframes.json",
     "Primary.json",
     "Secondary.json",
@@ -35,7 +36,7 @@ const WFCD_DOCUMENT_NAMES: [&str; 14] = [
     "Pets.json",
     "Misc.json",
     "Mods.json",
-    "i18n.json",
+    "i18n/ru.json",
 ];
 const ARCANE_DISSOLUTION_URL: &str = "https://raw.githubusercontent.com/calamity-inc/warframe-public-export-plus/senpai/ExportArcanes.json";
 const ARCANE_PACKS_URL: &str = "https://raw.githubusercontent.com/calamity-inc/warframe-public-export-plus/senpai/ExportBoosterPacks.json";
@@ -93,10 +94,16 @@ impl GameMetadataProvider for WfcdMetadataProvider {
 
         let results = stream::iter(sources.into_iter().enumerate())
             .map(|(index, (name, url))| async move {
-                self.client
-                    .get_json_with_limit(&url, true, MAX_METADATA_DOCUMENT_BYTES)
-                    .await
-                    .map(|body| (index, RawGameMetadataDocument { name, body }))
+                let body = if name == "i18n/ru.json" {
+                    self.client
+                        .get_wfcd_localization(&url, MAX_METADATA_DOCUMENT_BYTES)
+                        .await?
+                } else {
+                    self.client
+                        .get_json_with_limit(&url, true, MAX_METADATA_DOCUMENT_BYTES)
+                        .await?
+                };
+                Ok((index, RawGameMetadataDocument { name, body }))
             })
             .buffer_unordered(MAX_CONCURRENT_DOWNLOADS)
             .collect::<Vec<_>>()
@@ -213,6 +220,7 @@ struct WfcdMarketInfo {
 #[derive(Debug, Deserialize)]
 struct WfcdTranslations {
     ru: Option<WfcdRussianTranslation>,
+    name: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -348,6 +356,13 @@ fn normalize_wfcd_metadata(
         .iter()
         .filter_map(|item| item.game_ref.as_deref().map(|game_ref| (game_ref, item)))
         .collect();
+    let component_catalog = dump
+        .documents
+        .iter()
+        .find(|document| document.name.eq_ignore_ascii_case("Components.json"))
+        .map(|document| parse_component_catalog(&document.body))
+        .transpose()?
+        .unwrap_or_default();
     let mut sets = BTreeMap::new();
     let mut relics = BTreeMap::new();
     let mut parts = BTreeMap::new();
@@ -362,8 +377,12 @@ fn normalize_wfcd_metadata(
     for document in &dump.documents {
         if document.name.eq_ignore_ascii_case("Relics.json") {
             parse_relics(&document.body, &by_game_ref, &mut relics)?;
-        } else if document.name.eq_ignore_ascii_case("i18n.json") {
+        } else if document.name.eq_ignore_ascii_case("i18n.json")
+            || document.name.eq_ignore_ascii_case("i18n/ru.json")
+        {
             parse_item_localizations(&document.body, &mut item_localizations)?;
+        } else if document.name.eq_ignore_ascii_case("Components.json") {
+            // Компоненты уже разобраны отдельно для рецептов наборов.
         } else if document.name.eq_ignore_ascii_case("Mods.json") {
             parse_syndicate_offers(&document.body, &catalog_by_game_ref, &mut syndicate_offers)?;
         } else if document.name.eq_ignore_ascii_case("ArcaneDissolution.json") {
@@ -378,7 +397,13 @@ fn normalize_wfcd_metadata(
             parse_nightwave_offers(&document.body, &catalog_by_game_ref, &mut nightwave_offers)?;
         } else {
             parse_item_definitions(&document.body, &by_game_ref, &mut item_definitions)?;
-            parse_sets(&document.body, &by_game_ref, &mut sets, &mut parts)?;
+            parse_sets(
+                &document.body,
+                &by_game_ref,
+                &component_catalog,
+                &mut sets,
+                &mut parts,
+            )?;
             if let Some(category) = riven_category(&document.name) {
                 has_riven_document = true;
                 parse_riven_dispositions(&document.body, category, &mut riven_dispositions)?;
@@ -413,7 +438,7 @@ fn normalize_wfcd_metadata(
         metadata: GameMetadataSnapshotMetadata {
             source: GameMetadataSource::WfcdWarframeItems,
             fetched_at: dump.fetched_at,
-            schema_version: 9,
+            schema_version: 10,
             set_count: u64::try_from(prime_sets.len()).unwrap_or(u64::MAX),
             relic_count: u64::try_from(relics.len()).unwrap_or(u64::MAX),
             prime_part_count: u64::try_from(prime_parts.len()).unwrap_or(u64::MAX),
@@ -937,6 +962,7 @@ fn parse_item_localizations(
         let Some(display_name_ru) = translations
             .ru
             .and_then(|translation| translation.name)
+            .or(translations.name)
             .map(|name| name.trim().to_owned())
             .filter(|name| !name.is_empty() && name.len() <= 256)
         else {
@@ -1034,9 +1060,20 @@ fn riven_category(document_name: &str) -> Option<RivenWeaponCategory> {
     }
 }
 
+fn parse_component_catalog(body: &[u8]) -> Result<HashMap<String, WfcdComponent>, ProviderError> {
+    let components: Vec<WfcdComponent> = serde_json::from_slice(body).map_err(|error| {
+        ProviderError::schema_changed(format!("invalid WFCD component JSON: {error}"))
+    })?;
+    Ok(components
+        .into_iter()
+        .map(|component| (component.unique_name.clone(), component))
+        .collect())
+}
+
 fn parse_sets(
     body: &[u8],
     by_game_ref: &HashMap<&str, (&str, &[String])>,
+    component_catalog: &HashMap<String, WfcdComponent>,
     sets: &mut BTreeMap<String, PrimeSetDefinition>,
     parts: &mut BTreeMap<String, PrimePartMetadata>,
 ) -> Result<(), ProviderError> {
@@ -1049,20 +1086,31 @@ fn parse_sets(
         let vault_status = vault_status(item.vaulted);
         let mut components = Vec::new();
         let mut recipe_is_complete = true;
-        let tradable_components = item
-            .components
-            .into_iter()
-            .filter(|component| component.tradable && component.item_count > 0)
-            .collect::<Vec<_>>();
-        for component in tradable_components {
+        for component in item.components {
+            let details = component_catalog.get(&component.unique_name);
+            if component.item_count == 0
+                || !(component.tradable || details.is_some_and(|details| details.tradable))
+            {
+                continue;
+            }
             let Some((slug, _)) = resolve_component(&component.unique_name, by_game_ref) else {
                 // Неполный рецепт нельзя публиковать как сет. Но остальные
                 // распознанные детали всё ещё являются наградами и стоят дукатов.
                 recipe_is_complete = false;
                 continue;
             };
-            let ducats = component.ducats.or(component.prime_selling_price);
-            let image_url = wfcd_component_image_url(component.image_name.as_deref());
+            let ducats = component
+                .ducats
+                .or(component.prime_selling_price)
+                .or_else(|| {
+                    details.and_then(|details| details.ducats.or(details.prime_selling_price))
+                });
+            let image_url = wfcd_component_image_url(
+                component
+                    .image_name
+                    .as_deref()
+                    .or_else(|| details.and_then(|details| details.image_name.as_deref())),
+            );
             components.push(PrimeSetComponentDefinition {
                 slug: slug.into(),
                 game_ref: component.unique_name.clone(),
@@ -1212,6 +1260,22 @@ mod tests {
     use super::*;
     use crate::{MetadataProvider, RelicsRunCatalogProvider};
 
+    #[test]
+    fn parses_current_russian_localization_document() {
+        let mut localizations = BTreeMap::new();
+        parse_item_localizations(
+            br#"{"/Lotus/Test/CitrinePrime":{"name":"\u0426\u0438\u0442\u0440\u0438\u043d\u0430 \u041f\u0440\u0430\u0439\u043c"}}"#,
+            &mut localizations,
+        )
+        .expect("current per-language WFCD format");
+        assert_eq!(
+            localizations
+                .get("/Lotus/Test/CitrinePrime")
+                .map(|item| item.display_name_ru.as_str()),
+            Some("Цитрина Прайм")
+        );
+    }
+
     #[tokio::test]
     #[ignore = "сетевой smoke-тест production-источников игровых данных"]
     async fn production_documents_fit_declared_limits() {
@@ -1233,7 +1297,7 @@ mod tests {
         validate_metadata_dump(&dump).expect("production metadata stays within aggregate limit");
         let snapshot = normalize_wfcd_metadata(&dump, &catalog)
             .expect("production metadata normalizes against the current catalog");
-        assert_eq!(snapshot.metadata.schema_version, 9);
+        assert_eq!(snapshot.metadata.schema_version, 10);
         assert!(snapshot.mastery_items.len() > 500);
         assert!(
             snapshot
@@ -1258,6 +1322,23 @@ mod tests {
                 part.map(|part| part.ducats),
                 Some(expected_ducats),
                 "{slug}"
+            );
+        }
+        for slug in [
+            "citrine_prime_systems_blueprint",
+            "steflos_prime_barrel",
+            "corufell_prime_handle",
+        ] {
+            assert!(
+                snapshot.prime_parts.iter().any(|part| part.slug == slug),
+                "new Prime reward missing: {slug}"
+            );
+            assert!(
+                snapshot.relics.iter().any(|relic| relic
+                    .rewards
+                    .iter()
+                    .any(|reward| { reward.reward_slug.as_deref() == Some(slug) })),
+                "new relic reward missing: {slug}"
             );
         }
     }
@@ -1778,6 +1859,7 @@ mod tests {
                 ]
             }]"#,
             &by_game_ref,
+            &HashMap::new(),
             &mut sets,
             &mut parts,
         )
@@ -1785,6 +1867,44 @@ mod tests {
 
         assert!(sets.is_empty());
         assert_eq!(parts.len(), 2);
+        assert_eq!(parts["nyx_prime_blueprint"].ducats, 15);
+        assert_eq!(parts["nyx_prime_chassis_blueprint"].ducats, 45);
+    }
+
+    #[test]
+    fn detached_prime_component_details_restore_ducats_and_set() {
+        let item_catalog = catalog();
+        let by_game_ref = item_catalog
+            .items
+            .iter()
+            .filter_map(|item| {
+                item.game_ref
+                    .as_deref()
+                    .map(|game_ref| (game_ref, (item.slug.as_str(), item.tags.as_slice())))
+            })
+            .collect();
+        let details = parse_component_catalog(
+            br#"[
+                {"uniqueName":"/Lotus/Types/Recipes/WarframeRecipes/NyxPrimeBlueprint","tradable":true,"ducats":15},
+                {"uniqueName":"/Lotus/Types/Recipes/WarframeRecipes/NyxPrimeChassisBlueprint","tradable":true,"primeSellingPrice":45}
+            ]"#,
+        )
+        .unwrap();
+        let mut sets = BTreeMap::new();
+        let mut parts = BTreeMap::new();
+        parse_sets(
+            br#"[{"uniqueName":"/Lotus/Powersuits/Jade/NyxPrime","name":"Nyx Prime","isPrime":true,
+                "components":[
+                    {"uniqueName":"/Lotus/Types/Recipes/WarframeRecipes/NyxPrimeBlueprint","itemCount":1},
+                    {"uniqueName":"/Lotus/Types/Recipes/WarframeRecipes/NyxPrimeChassisBlueprint","itemCount":1}
+                ]}]"#,
+            &by_game_ref,
+            &details,
+            &mut sets,
+            &mut parts,
+        )
+        .unwrap();
+        assert_eq!(sets["nyx_prime_set"].components.len(), 2);
         assert_eq!(parts["nyx_prime_blueprint"].ducats, 15);
         assert_eq!(parts["nyx_prime_chassis_blueprint"].ducats, 45);
     }
@@ -1807,6 +1927,7 @@ mod tests {
         parse_sets(
             include_bytes!("../../../fixtures/metadata/wfcd_sets.json"),
             &by_game_ref,
+            &HashMap::new(),
             &mut sets,
             &mut parts,
         )
@@ -1838,6 +1959,7 @@ mod tests {
         parse_sets(
             &serde_json::to_vec(&items).unwrap(),
             &by_game_ref,
+            &HashMap::new(),
             &mut sets,
             &mut parts,
         )
