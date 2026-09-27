@@ -65,6 +65,7 @@ function choice(price: PriceRecommendation): RelicRewardChoice {
     },
     ducats: 45,
     ownedQuantity: 2,
+    vaultStatus: "available",
     set: null,
     completesSet: null,
     choiceValue: null,

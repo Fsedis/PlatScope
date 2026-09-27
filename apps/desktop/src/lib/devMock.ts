@@ -722,6 +722,7 @@ export async function installMarketBrowserMock(): Promise<void> {
           market: localizeMarketRow(reward.row),
           ducats: reward.ducats,
           ownedQuantity: reward.ownedQuantity,
+          vaultStatus: reward.rawText.startsWith("Акси ") ? ("unknown" as const) : ("vaulted" as const),
           set: reward.rawText.startsWith("Акси ") ? null : {
             setName: "Никс Прайм: Комплект",
             setPrice: 87,

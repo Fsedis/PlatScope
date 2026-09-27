@@ -89,7 +89,14 @@
             </div>
             <div class="reward-copy">
               <h2>{reward.displayName ?? "Не распознано"}</h2>
-              <strong class="reward-price">{price === null ? "—" : formatPlatinum(price, "ru")}</strong>
+              <div class="reward-value">
+                <strong class="reward-price">{price === null ? "—" : formatPlatinum(price, "ru")}</strong>
+                {#if reward.itemId}
+                  <span class="reward-vault" class:vaulted={reward.vaultStatus === "vaulted"} class:available={reward.vaultStatus === "available"}>
+                    {reward.vaultStatus === "vaulted" ? "В хранилище" : reward.vaultStatus === "available" ? "Не в хранилище" : "Статус неизвестен"}
+                  </span>
+                {/if}
+              </div>
             </div>
           </div>
 
@@ -306,6 +313,36 @@
     letter-spacing: -0.04em;
     line-height: 0.95;
     font-variant-numeric: tabular-nums;
+  }
+
+  .reward-value {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 0.24rem 0.42rem;
+    min-width: 0;
+  }
+
+  .reward-vault {
+    border-radius: 999px;
+    padding: 0.18rem 0.4rem;
+    background: oklch(0.89 0.014 75);
+    color: var(--text-muted);
+    font-size: 0.7rem;
+    font-weight: 760;
+    line-height: 1.1;
+    max-width: 100%;
+    text-wrap: balance;
+  }
+
+  .reward-vault.vaulted {
+    background: oklch(0.86 0.055 48);
+    color: oklch(0.35 0.07 37);
+  }
+
+  .reward-vault.available {
+    background: oklch(0.87 0.05 145);
+    color: oklch(0.34 0.065 149);
   }
 
   .reward-facts {

@@ -1,4 +1,5 @@
 import type { MarketSearchRow } from "./market";
+import type { VaultStatus } from "./inventory";
 
 export interface RewardSetCompletion {
   setName: string;
@@ -32,6 +33,7 @@ export interface RelicRewardChoice {
   market: MarketSearchRow | null;
   ducats: number | null;
   ownedQuantity: number | null;
+  vaultStatus: VaultStatus;
   set: RewardSetOverview | null;
   completesSet: RewardSetCompletion | null;
   choiceValue: number | null;

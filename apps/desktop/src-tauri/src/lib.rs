@@ -38,7 +38,7 @@ use platscope_core::{
 };
 use platscope_domain::{
     GameMetadataSnapshot, InventoryResolution, MarketItemKind, MarketVariantKey, PriceConfidence,
-    PrimeSetDefinition,
+    PrimeSetDefinition, VaultStatus,
 };
 use platscope_readonly_scan::inventory::{
     InventoryScanner as ReadOnlyInventoryScanner, ReadOnlyScanResult,
@@ -232,6 +232,7 @@ struct RelicRewardChoice {
     market: Option<MarketSearchRow>,
     ducats: Option<u32>,
     owned_quantity: Option<u32>,
+    vault_status: VaultStatus,
     set: Option<RewardSetOverview>,
     completes_set: Option<RewardSetCompletion>,
     choice_value: Option<f64>,
@@ -2395,6 +2396,9 @@ fn build_reward_choice(
         .slug
         .as_deref()
         .and_then(|slug| reward_owned_quantity(inventory, slug));
+    let vault_status = reward.slug.as_deref().map_or(VaultStatus::Unknown, |slug| {
+        reward_vault_status(metadata, slug)
+    });
     let set = reward
         .slug
         .as_deref()
@@ -2431,6 +2435,7 @@ fn build_reward_choice(
         market,
         ducats,
         owned_quantity,
+        vault_status,
         set,
         completes_set,
         choice_value,
@@ -2587,6 +2592,35 @@ fn reward_ducats(metadata: Option<&GameMetadataSnapshot>, reward_slug: &str) -> 
         .iter()
         .find(|part| part.slug == reward_slug)
         .map(|part| part.ducats)
+}
+
+fn reward_vault_status(metadata: Option<&GameMetadataSnapshot>, reward_slug: &str) -> VaultStatus {
+    let Some(metadata) = metadata else {
+        return VaultStatus::Unknown;
+    };
+    let set_statuses = metadata
+        .prime_sets
+        .iter()
+        .filter(|set| {
+            set.components
+                .iter()
+                .any(|component| component.slug == reward_slug)
+        })
+        .map(|set| set.vault_status);
+    let part_statuses = metadata
+        .prime_parts
+        .iter()
+        .filter(|part| part.slug == reward_slug)
+        .map(|part| part.vault_status);
+    let mut status = None;
+    for candidate in set_statuses.chain(part_statuses) {
+        match status {
+            Some(current) if current != candidate => return VaultStatus::Unknown,
+            None => status = Some(candidate),
+            _ => {}
+        }
+    }
+    status.unwrap_or(VaultStatus::Unknown)
 }
 
 fn reward_component_image(
@@ -4846,6 +4880,32 @@ mod tests {
             }]
         }))
         .unwrap();
+        assert_eq!(
+            reward_vault_status(Some(&metadata), "bronco_prime_blueprint"),
+            VaultStatus::Available
+        );
+        assert_eq!(
+            reward_vault_status(Some(&metadata), "akbronco_prime_blueprint"),
+            VaultStatus::Unknown
+        );
+        let mut conflicting_metadata = metadata.clone();
+        conflicting_metadata.prime_sets.push(PrimeSetDefinition {
+            set_slug: "bronco_prime_set".into(),
+            set_game_ref: "/Lotus/Test/BroncoSet".into(),
+            display_name_en: "Bronco Prime Set".into(),
+            vault_status: VaultStatus::Vaulted,
+            components: vec![platscope_domain::PrimeSetComponentDefinition {
+                slug: "bronco_prime_blueprint".into(),
+                game_ref: "/Lotus/Test/Bronco".into(),
+                required_quantity: 1,
+                ducats: Some(15),
+                image_url: None,
+            }],
+        });
+        assert_eq!(
+            reward_vault_status(Some(&conflicting_metadata), "bronco_prime_blueprint"),
+            VaultStatus::Unknown
+        );
         let mut database = Database::open_in_memory().unwrap();
         database.promote_catalog(&catalog).unwrap();
         database.promote_game_metadata(&metadata).unwrap();
@@ -4902,6 +4962,7 @@ mod tests {
             market: None,
             ducats,
             owned_quantity: Some(0),
+            vault_status: VaultStatus::Unknown,
             set: None,
             completes_set: None,
             choice_value,
