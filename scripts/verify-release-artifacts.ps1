@@ -120,10 +120,17 @@ function Test-ChecksumManifest {
 $desktopExe = Join-Path $resolvedWorkspace "target/release/platscope.exe"
 $nsisDirectory = Join-Path $resolvedWorkspace "target/release/bundle/nsis"
 $nsisChecksums = Join-Path $nsisDirectory "SHA256SUMS.txt"
+$tauriConfig = Join-Path $resolvedWorkspace "apps/desktop/src-tauri/tauri.conf.json"
+$appVersion = if (Test-Path -LiteralPath $tauriConfig -PathType Leaf) {
+    (Get-Content -LiteralPath $tauriConfig -Raw | ConvertFrom-Json).version
+} else { "" }
+if ($appVersion -notmatch '^\d+\.\d+\.\d+$') {
+    throw "Не удалось прочитать версию приложения из $tauriConfig"
+}
 
 $null = Test-RequiredFile -Check "desktop_executable" -Path $desktopExe
 $installerCandidates = @(if (Test-Path -LiteralPath $nsisDirectory -PathType Container) {
-    Get-ChildItem -LiteralPath $nsisDirectory -Filter "PlatScope_*_x64-setup.exe" -File
+    Get-ChildItem -LiteralPath $nsisDirectory -Filter "PlatScope_${appVersion}_x64-setup.exe" -File
 })
 $installerExists = $false
 if ($installerCandidates.Count -eq 1) {
@@ -134,7 +141,7 @@ elseif ($installerCandidates.Count -eq 0) {
     Add-PreflightResult -Check "windows_installer" -Status "FAIL" -Evidence "NSIS installer отсутствует"
 }
 else {
-    Add-PreflightResult -Check "windows_installer" -Status "FAIL" -Evidence "Ожидался один NSIS installer, найдено $($installerCandidates.Count)"
+    Add-PreflightResult -Check "windows_installer" -Status "FAIL" -Evidence "Ожидался один NSIS installer версии $appVersion, найдено $($installerCandidates.Count)"
 }
 if ($installerExists) {
     $null = Test-ChecksumManifest -Check "windows_checksums" -Directory $nsisDirectory -ManifestPath $nsisChecksums

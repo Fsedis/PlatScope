@@ -2,6 +2,10 @@
 export interface ActivityPeriod { activation: string; expiry: string }
 export interface ActivityCycle extends ActivityPeriod { key: CycleKey; state: string }
 export interface ActivityTrader extends ActivityPeriod { location: string; inventoryIncomplete: boolean }
+export interface WorldFissure extends ActivityPeriod {
+  id: string; node: string; missionType: string; missionTypeKey: string; tier: string; tierNum: number;
+  isStorm: boolean; isHard: boolean;
+}
 export interface ActivityOffer {
   gameRef: string; displayName: string; displayNameEn: string;
   kind: "equipment" | "relic" | "other"; ducats: number | null; credits: number | null;
@@ -15,7 +19,48 @@ export interface WorldActivityView {
   baroOffers: ActivityOffer[]; resurgenceOffers: ActivityOffer[];
   steelPath: (ActivityPeriod & { reward: string; cost: number }) | null;
   sortie: ActivityPeriod | null; events: (ActivityPeriod & { id: string; name: string })[];
+  fissures: WorldFissure[];
   unavailableSections: string[];
+}
+export const FISSURE_TIERS = [
+  { key: "Lith", name: "Лит" }, { key: "Meso", name: "Мезо" },
+  { key: "Neo", name: "Нео" }, { key: "Axi", name: "Акси" },
+  { key: "Requiem", name: "Реквием" }, { key: "Omnia", name: "Омния" },
+] as const;
+export const FISSURE_MISSION_TYPES = [
+  { key: "Alchemy", name: "Алхимия" },
+  { key: "Assault", name: "Штурм" },
+  { key: "Capture", name: "Захват" },
+  { key: "Defense", name: "Оборона" },
+  { key: "Defection", name: "Перебежчики" },
+  { key: "Disruption", name: "Сбой" },
+  { key: "Excavation", name: "Раскопки" },
+  { key: "Extermination", name: "Зачистка" },
+  { key: "Hijack", name: "Угон" },
+  { key: "Infested Salvage", name: "Заражённый сбор" },
+  { key: "Interception", name: "Перехват" },
+  { key: "Mobile Defense", name: "Мобильная оборона" },
+  { key: "Rescue", name: "Спасение" },
+  { key: "Sabotage", name: "Диверсия" },
+  { key: "Skirmish", name: "Стычка" },
+  { key: "Spy", name: "Шпионаж" },
+  { key: "Survival", name: "Выживание" },
+  { key: "Void Cascade", name: "Каскад Бездны" },
+  { key: "Void Flood", name: "Поток Бездны" },
+  { key: "Void Armageddon", name: "Армагеддон Бездны" },
+] as const;
+export const fissureMissionName = (key: string): string => FISSURE_MISSION_TYPES.find(type => type.key === key)?.name ?? key;
+export const fissureTierName = (key: string): string => FISSURE_TIERS.find(tier => tier.key === key)?.name ?? key;
+export type FissureFilterMode = "any" | "normal" | "steel" | "storm";
+/** Строки объединяются как «или»; внутри строки все три условия действуют вместе. */
+export interface FissureFilterRule { id: string; tier: string; missionType: string; mode: FissureFilterMode }
+export const DEFAULT_FISSURE_RULE: FissureFilterRule = { id: "default", tier: "any", missionType: "any", mode: "any" };
+export function fissureFilterSummary(rules: readonly FissureFilterRule[]): string {
+  if (!rules.length) return "Все разломы скрыты";
+  if (rules.length > 1) return `Условий показа: ${rules.length}`;
+  const rule = rules[0];
+  const mode = ({ any: "любой режим", normal: "обычные", steel: "Стальной путь", storm: "Бури Бездны" } as const)[rule.mode];
+  return `${rule.tier === "any" ? "все эры" : fissureTierName(rule.tier)} · ${rule.missionType === "any" ? "все миссии" : fissureMissionName(rule.missionType)} · ${mode}`;
 }
 export const CYCLES = {
   cetus: { name: "Равнины Эйдолона", states: ["day", "night"], region: "cetus" },
@@ -75,7 +120,7 @@ export function nextWorldRefresh(view: WorldActivityView, now: number): number {
   if (!view.catalogAvailable) return now + 15_000;
   if ((periodState(view.baro, now) === "active" && (!view.baroOffers.length || view.baro?.inventoryIncomplete))
     || (periodState(view.resurgence, now) === "active" && (!view.resurgenceOffers.length || view.resurgence?.inventoryIncomplete))) return now + 45_000;
-  const periods = [...view.cycles, view.baro, view.resurgence, view.steelPath, view.sortie];
+  const periods = [...view.cycles, view.baro, view.resurgence, view.steelPath, view.sortie, ...(view.fissures ?? [])];
   const boundaries = periods.flatMap(period => {
     if (!period) return [];
     return [Date.parse(period.activation), Date.parse(period.expiry)].filter(time => Number.isFinite(time) && time > now);
@@ -108,7 +153,7 @@ export interface WorldAlertRule {
   id: string; key: AlertKey; state: string; leadMinutes: 0 | 5;
   repeat: boolean; enabled: boolean; createdAt: number;
 }
-export interface WorldPreferences { startHere: boolean; rules: WorldAlertRule[]; sent: string[] }
+export interface WorldPreferences { startHere: boolean; rules: WorldAlertRule[]; sent: string[]; fissureRules: FissureFilterRule[] }
 export const WORLD_PREFERENCES_KEY = "platscope.world-activity.v1";
 export function alertStates(key: AlertKey): string[] {
   if (key in CYCLES) return ["any", ...CYCLES[key as CycleKey].states];
@@ -116,7 +161,7 @@ export function alertStates(key: AlertKey): string[] {
   return ["any"];
 }
 export function parseWorldPreferences(raw: string | null): WorldPreferences {
-  const empty = { startHere: false, rules: [], sent: [] };
+  const empty = { startHere: false, rules: [], sent: [], fissureRules: [{ ...DEFAULT_FISSURE_RULE }] };
   try {
     const value = JSON.parse(raw ?? "null");
     if (!value || typeof value !== "object") return empty;
@@ -124,9 +169,16 @@ export function parseWorldPreferences(raw: string | null): WorldPreferences {
       && typeof rule.id === "string" && rule.id.length <= 100 && Object.hasOwn(ALERT_NAMES, rule.key)
       && alertStates(rule.key).includes(rule.state) && [0, 5].includes(rule.leadMinutes)
       && typeof rule.repeat === "boolean" && typeof rule.enabled === "boolean" && Number.isFinite(rule.createdAt)).slice(0, 30) : [];
+    const fissureRules: FissureFilterRule[] = value.fissureRules === undefined ? [{ ...DEFAULT_FISSURE_RULE }]
+      : Array.isArray(value.fissureRules) ? value.fissureRules.filter((rule: FissureFilterRule) => rule
+        && typeof rule.id === "string" && rule.id.length > 0 && rule.id.length <= 100
+        && typeof rule.tier === "string" && rule.tier.trim().length > 0 && rule.tier.length <= 50
+        && typeof rule.missionType === "string" && rule.missionType.trim().length > 0 && rule.missionType.length <= 100
+        && ["any", "normal", "steel", "storm"].includes(rule.mode)).slice(0, 30) : [{ ...DEFAULT_FISSURE_RULE }];
     return { startHere: value.startHere === true,
       rules: rules.filter((rule, index) => rules.findIndex(other => other.id === rule.id || (other.key === rule.key && other.state === rule.state)) === index),
-      sent: Array.isArray(value.sent) ? value.sent.filter((id: unknown) => typeof id === "string" && id.length < 250).slice(-256) : [] };
+      sent: Array.isArray(value.sent) ? value.sent.filter((id: unknown) => typeof id === "string" && id.length < 250).slice(-256) : [],
+      fissureRules: fissureRules.filter((rule, index) => fissureRules.findIndex(other => other.id === rule.id) === index) };
   } catch { return empty; }
 }
 

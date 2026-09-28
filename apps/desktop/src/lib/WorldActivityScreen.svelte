@@ -1,9 +1,14 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
+  import { invoke } from "@tauri-apps/api/core";
+  import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import MasteryBadge from "./MasteryBadge.svelte";
   import PrimeResurgence from "./PrimeResurgence.svelte";
+  import WorldFissures from "./WorldFissures.svelte";
   import WorldActivityIcon from "./WorldActivityIcon.svelte";
   import WorldActivityArtwork from "./WorldActivityArtwork.svelte";
+  import type { InsightsView } from "./insights";
+  import { PERSONAL_GOALS_VIEW_EVENT, type PersonalGoalsView } from "./personalGoals";
   import { ALERT_NAMES, CYCLES, alertStates, countdown, nextReset, nextState, offerCost, periodState,
     sectionStale, stateName, steelReward, traderLocation,
     type ActivityCycle, type AlertKey, type CycleKey, type WorldAlertRule } from "./worldActivity";
@@ -13,6 +18,7 @@
 
   export let onOpenBounties: (region: string) => void;
   export let onOpenInsights: (mode: InsightsViewMode) => void;
+  export let onOpenRelic: (slug: string) => void;
   export let onOpenSettings: () => void;
 
   const cycleKeys = Object.keys(CYCLES) as CycleKey[];
@@ -31,6 +37,11 @@
   let preferenceMessage = "";
   let baroQuery = "";
   let baroSearch: HTMLInputElement;
+  let personalInsights: InsightsView | null = null;
+  let personalGoals: PersonalGoalsView | null = null;
+  let personalLoading = true;
+  let personalError = false;
+  let personalRequest = 0;
   $: view = $worldActivityStore.view;
   $: now = $worldNow;
   $: activeRules = $worldPreferences.rules.filter(rule => rule.enabled);
@@ -135,7 +146,33 @@
     preferenceMessage = saved ? "" : "Не удалось сохранить стартовый экран.";
     return saved;
   }
-  onMount(retainWorldActivityScreen);
+  async function loadPersonal(): Promise<void> {
+    const current = ++personalRequest;
+    personalLoading = true;
+    const [insightsResult, goalsResult] = await Promise.allSettled([
+      invoke<InsightsView | null>("insights"), invoke<PersonalGoalsView>("personal_goals"),
+    ]);
+    if (current !== personalRequest) return;
+    personalInsights = insightsResult.status === "fulfilled" ? insightsResult.value : null;
+    personalGoals = goalsResult.status === "fulfilled" ? goalsResult.value : null;
+    personalError = insightsResult.status === "rejected" || goalsResult.status === "rejected";
+    personalLoading = false;
+  }
+  onMount(() => {
+    const release = retainWorldActivityScreen();
+    const cleanups: UnlistenFn[] = [];
+    let disposed = false;
+    void loadPersonal();
+    for (const event of ["inventory-updated", "game-metadata-updated", "market-data-updated"]) {
+      void listen(event, () => void loadPersonal()).then(cleanup => {
+        if (disposed) cleanup(); else cleanups.push(cleanup);
+      }).catch(() => undefined);
+    }
+    const published = (event: Event) => { personalGoals = (event as CustomEvent<PersonalGoalsView>).detail; };
+    window.addEventListener(PERSONAL_GOALS_VIEW_EVENT, published);
+    return () => { disposed = true; ++personalRequest; release(); cleanups.forEach(cleanup => cleanup());
+      window.removeEventListener(PERSONAL_GOALS_VIEW_EVENT, published); };
+  });
 </script>
 <svelte:window onkeydown={event => { if (event.key === "Escape" && showNotifications) void closeNotifications(); }} />
 
@@ -225,6 +262,10 @@
         </article>
       {/each}</div>
     </section>
+
+    <WorldFissures {view} insights={personalInsights} goals={personalGoals}
+      loadingPersonal={personalLoading} personalError={personalError} {now} {onOpenRelic} {onOpenSettings}
+      onRetryPersonal={() => void loadPersonal()} />
 
     <div class="world-columns">
       <article class="world-panel resurgence-panel">

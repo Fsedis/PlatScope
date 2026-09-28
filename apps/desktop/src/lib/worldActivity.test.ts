@@ -1,15 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
 import { get } from "svelte/store";
 import { alertStates, countdown, markWorldAlertsDelivered, nextReset, nextState, nextWorldRefresh, offerCost,
-  parseWorldPreferences, periodState, worldAlertCandidates, type WorldAlertRule, type WorldPreferences } from "./worldActivity";
+  parseWorldPreferences, periodState, worldAlertCandidates, DEFAULT_FISSURE_RULE, type WorldAlertRule, type WorldFissure, type WorldPreferences } from "./worldActivity";
 import { makeWorldActivityMock } from "./worldActivityMock";
 import { createWorldActivityStore } from "./worldActivityStore";
+import { selectFissureMatches } from "./worldFissures";
+import type { InsightsView, RelicInsightRow } from "./insights";
+import type { PersonalGoalsView } from "./personalGoals";
+import type { PriceRecommendation } from "./market";
 
 const now = Date.parse("2026-09-05T09:45:00Z");
 const fixture = () => makeWorldActivityMock(null, now);
 const rule = (extra: Partial<WorldAlertRule> = {}): WorldAlertRule => ({ id: "night", key: "cetus", state: "night", leadMinutes: 0,
   repeat: true, enabled: true, createdAt: now - 600_000, ...extra });
-const preferences = (rules = [rule()]): WorldPreferences => ({ startHere: false, rules, sent: [] });
+const preferences = (rules = [rule()]): WorldPreferences => ({ startHere: false, rules, sent: [], fissureRules: [{ ...DEFAULT_FISSURE_RULE }] });
 
 describe("события и расписание игры", () => {
   it("считает таймер по абсолютному времени, не показывает отрицательные часы", () => {
@@ -52,7 +56,7 @@ describe("события и расписание игры", () => {
 
 describe("напоминания без повторов и лишних уведомлений", () => {
   it("все выключены по умолчанию; повреждённые настройки не мешают запуску", () => {
-    expect(parseWorldPreferences(null)).toEqual({ startHere: false, rules: [], sent: [] });
+    expect(parseWorldPreferences(null)).toEqual({ startHere: false, rules: [], sent: [], fissureRules: [DEFAULT_FISSURE_RULE] });
     expect(parseWorldPreferences("{").rules).toEqual([]);
     expect(alertStates("baro")).toEqual(["arrival", "departure"]);
   });
@@ -158,5 +162,96 @@ describe("общий запрос экрана и уведомлений", () =>
     time += 16_000;
     expect(get(store).nextRefreshAt).toBeGreaterThan(time);
     await store.refresh(true); expect(get(store).error).toBe(false);
+  });
+});
+
+function fissure(id: string, tier: string, missionTypeKey: string, mode: "normal" | "steel" | "storm" = "normal"): WorldFissure {
+  return { id, tier, missionType: "Локализованный тип", missionTypeKey, node: "Тестовый узел", tierNum: 4,
+    isHard: mode === "steel", isStorm: mode === "storm",
+    activation: new Date(now - 60_000).toISOString(), expiry: new Date(now + 30 * 60_000).toISOString() };
+}
+
+function reliablePrice(slug: string, fairPrice: number): PriceRecommendation {
+  return { key: { slug, platform: "pc", rank: null, charges: null, subtype: null, amberStars: null, cyanStars: null },
+    provider: "relics_run", sourceDate: "2026-09-05", fairPrice, listPrice: fairPrice, quickSell: null,
+    lowestAsk: fairPrice, depthThree: fairPrice, depthPrice: fairPrice, closedVolume: 20,
+    liveSellOrderCount: 5, liveBuyOrderCount: 0, confidence: "high", freshness: "fresh", reasons: [] };
+}
+
+function ownedRelic(slug: string, rareReward: string, rarePrice: number): RelicInsightRow {
+  const chances = [25.33, 25.33, 25.33, 11, 11, 2];
+  const rewards = chances.map((chancePercent, index) => {
+    const rewardSlug = index === 5 ? rareReward : `${slug}_reward_${index}`;
+    const definition = { rewardSlug, rewardGameRef: `/test/${rewardSlug}`, displayNameEn: rewardSlug, chancePercent };
+    return { definition, displayName: rewardSlug, recommendation: reliablePrice(rewardSlug, index === 5 ? rarePrice : 1) };
+  });
+  return { definition: { relicSlug: slug, relicGameRef: `/test/${slug}`, displayNameEn: slug,
+      refinement: "intact", vaultStatus: "available", rewards: rewards.map(reward => reward.definition) },
+    displayName: slug, ownedQuantity: 2, sellableQuantity: 2, relicRecommendation: reliablePrice(slug, 2),
+    expectedValue: { pricedExpectedValue: null, pricedChancePercent: 100, totalChancePercent: 100,
+      missingRewardCount: 0, coverage: "complete", reasons: [] }, rewards };
+}
+
+function insightView(relics: RelicInsightRow[], voidTraces = 0): InsightsView {
+  return { metadata: { source: "wfcd_warframe_items", fetchedAt: new Date(now).toISOString(), schemaVersion: 1,
+      setCount: 0, relicCount: relics.length, primePartCount: 0, rivenDispositionCount: 0,
+      itemDefinitionCount: 0, checksumSha256: "test" },
+    inventoryAvailable: true, sets: [], relics, ducats: [], voidTraces };
+}
+
+function personalView(relic: RelicInsightRow): PersonalGoalsView {
+  return { inventoryAvailable: true, metadataAvailable: true, observedAt: new Date(now).toISOString(), catalog: [],
+    goals: [{ setSlug: "goal", displayName: "Моя цель", displayNameEn: "My goal", imageUrl: null,
+      completedAt: null, completionPending: false,
+      parts: [{ slug: "blade", displayName: "Лезвие", displayNameEn: "Blade", imageUrl: null,
+        requiredQuantity: 1, allocatedQuantity: 0 }] }],
+    relics: [{ definition: relic.definition, displayName: relic.displayName, ownedQuantity: relic.ownedQuantity }] };
+}
+
+describe("мои реликвии и активные разломы", () => {
+  it("применяет правила эра × миссия × режим и допускает имеющуюся Акси в Омнию", () => {
+    const world = fixture();
+    world.fissures = [fissure("defense", "Axi", "Defense", "steel"),
+      fissure("capture", "Axi", "Capture", "steel"), fissure("lith", "Lith", "Defense"),
+      fissure("omnia", "Omnia", "Survival", "storm"), fissure("requiem", "Requiem", "Defense")];
+    const insights = insightView([ownedRelic("axi_goal_relic", "blade", 100), ownedRelic("requiem_i_relic", "requiem_reward", 5)]);
+    const rules = [{ id: "axi-defense", tier: "Axi", missionType: "Defense", mode: "steel" as const },
+      { id: "omnia-storm", tier: "Omnia", missionType: "any", mode: "storm" as const },
+      { id: "requiem", tier: "Requiem", missionType: "Defense", mode: "normal" as const }];
+    expect(selectFissureMatches(world, insights, null, rules, now).map(match => match.fissure.id)).toEqual(["defense", "omnia", "requiem"]);
+    expect(selectFissureMatches(world, insights, null, rules, now).find(match => match.fissure.id === "omnia")?.relic.relicSlug).toBe("axi_goal_relic");
+    world.fissures[3].isHard = true;
+    expect(selectFissureMatches(world, insights, null, [{ id: "steel-storm", tier: "Omnia", missionType: "any", mode: "steel" }], now)
+      .map(match => match.fissure.id)).toEqual(["omnia"]);
+    expect(selectFissureMatches(world, insights, null, [], now)).toEqual([]);
+  });
+
+  it("ставит недостающую деталь цели выше платины и учитывает улучшение реликвии", () => {
+    const world = fixture(); world.fissures = [fissure("axi", "Axi", "Defense")];
+    const goalRelic = ownedRelic("axi_goal_relic", "blade", 100);
+    const cashRelic = ownedRelic("axi_cash_relic", "other", 1000);
+    const insights = insightView([goalRelic, cashRelic]);
+    const rules = [DEFAULT_FISSURE_RULE];
+    const goals = personalView(goalRelic);
+    expect(selectFissureMatches(world, insights, goals, rules, now)[0]).toMatchObject({
+      relic: { relicSlug: "axi_goal_relic" }, goalChancePercent: 2, goalNames: ["Моя цель"] });
+    expect(selectFissureMatches(world, insights, null, rules, now)[0].relic.relicSlug).toBe("axi_cash_relic");
+    const refined = selectFissureMatches(world, insightView([goalRelic], 100), goals, rules, now)[0];
+    expect(refined.relic.recommendedRefinement).toBe("radiant");
+    expect(refined.goalChancePercent).toBe(10);
+  });
+
+  it("скрывает истёкшие разломы, недоступный источник и реликвии без копий", () => {
+    const world = fixture(); world.fissures = [fissure("axi", "Axi", "Defense")];
+    const insights = insightView([ownedRelic("axi_goal_relic", "blade", 100)]);
+    const rules = [DEFAULT_FISSURE_RULE];
+    world.fissures[0].expiry = new Date(now - 1).toISOString();
+    expect(selectFissureMatches(world, insights, null, rules, now)).toEqual([]);
+    world.fissures[0].expiry = new Date(now + 60_000).toISOString();
+    world.unavailableSections.push("fissures");
+    expect(selectFissureMatches(world, insights, null, rules, now)).toEqual([]);
+    world.unavailableSections = [];
+    insights.relics[0].ownedQuantity = 0;
+    expect(selectFissureMatches(world, insights, null, rules, now)).toEqual([]);
   });
 });

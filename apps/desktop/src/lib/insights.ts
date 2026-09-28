@@ -304,6 +304,8 @@ export interface RelicRankingContext {
   tracePlatinumValue?: number;
   /** 1 — соло, 4 — полный публичный отряд. */
   squadSize?: number;
+  /** Недостающие детали личных целей: при их наличии улучшение выбирается по шансу детали. */
+  priorityRewardSlugs?: readonly string[];
 }
 
 export type RelicOverviewScenario = "solo" | "matching_squad";
@@ -326,6 +328,7 @@ type RelicRewardRarity = keyof typeof rewardChanceByRefinement.intact;
 
 interface RelicOpeningOption extends Omit<RelicOpeningRecommendation, "priorityScore"> {
   economicValue: number | null;
+  priorityChancePercent: number;
 }
 
 const COMPLETE_RELIC_PRICE_COVERAGE = 99;
@@ -336,8 +339,8 @@ export const DEFAULT_TRACE_PLATINUM_VALUE = 0.02;
 
 /**
  * Ранжирует только реально имеющиеся реликвии и для каждой выбирает осмысленное
- * улучшение. Ценность наград остаётся главным сигналом, а шанс закончить сет
- * добавляет персональный приоритет поверх рыночной цены.
+ * улучшение. По умолчанию главным сигналом остаётся ценность наград; при
+ * заданных деталях личной цели сначала выбирается максимальный шанс их добыть.
  */
 export function rankRelicsToOpen(
   relics: RelicInsightRow[],
@@ -374,6 +377,7 @@ export function rankRelicsToOpen(
   const squadSize = Number.isFinite(context.squadSize)
     ? Math.min(4, Math.max(1, Math.trunc(context.squadSize ?? 4)))
     : 4;
+  const priorityRewards = new Set(context.priorityRewardSlugs ?? []);
   const selected = [...groups.values()].flatMap((group): RelicOpeningOption[] => {
     const options = relicOpeningOptions(
       group,
@@ -382,9 +386,10 @@ export function rankRelicsToOpen(
       context.availableTraces,
       tracePlatinumValue,
       squadSize,
+      priorityRewards,
     );
     if (options.length === 0) return [];
-    return [[...options].sort(compareOpeningOptions)[0]];
+    return [[...options].sort((left, right) => compareOpeningOptions(left, right, priorityRewards.size > 0))[0]];
   });
 
   const maxEconomicValue = Math.max(
@@ -392,11 +397,13 @@ export function rankRelicsToOpen(
     ...selected.map((option) => option.economicValue ?? Number.NEGATIVE_INFINITY),
   );
   return selected
-    .map(({ economicValue, ...option }) => ({
+    .map(({ economicValue, priorityChancePercent, ...option }) => ({
       ...option,
-      priorityScore: economicValue !== null && economicValue > 0 && maxEconomicValue > 0
-        ? Math.round(economicValue / maxEconomicValue * 100)
-        : 0,
+      priorityScore: priorityRewards.size > 0 && priorityChancePercent > 0
+        ? Math.round(priorityChancePercent)
+        : economicValue !== null && economicValue > 0 && maxEconomicValue > 0
+          ? Math.round(economicValue / maxEconomicValue * 100)
+          : 0,
     }))
     .sort((left, right) =>
       nullableOpportunity(squadSize > 1 ? right.squadExpectedPlatinum : right.expectedPlatinum)
@@ -412,6 +419,7 @@ function relicOpeningOptions(
   availableTraces: number | null | undefined,
   tracePlatinumValue: number,
   squadSize: number,
+  priorityRewards: ReadonlySet<string>,
 ): RelicOpeningOption[] {
   const representative = group[0];
   const totalOwnedQuantity = group.reduce((sum, relic) => sum + relic.ownedQuantity, 0);
@@ -443,6 +451,7 @@ function relicOpeningOptions(
     let totalChancePercent = 0;
     let completionChancePercent = 0;
     let progressChancePercent = 0;
+    let priorityChancePercent = 0;
     let expectedSetPremium = 0;
     const pricedOutcomes: Array<{ value: number; probability: number }> = [];
     const economicOutcomes: Array<{ value: number; probability: number }> = [];
@@ -459,6 +468,7 @@ function relicOpeningOptions(
       }
       const rewardSlug = reward.definition.rewardSlug;
       if (!rewardSlug) continue;
+      if (priorityRewards.has(rewardSlug)) priorityChancePercent += chancePercent;
       if (progressRewards.has(rewardSlug)) progressChancePercent += chancePercent;
       const targets = completionByReward.get(rewardSlug) ?? [];
       if (targets.length > 0) {
@@ -515,6 +525,7 @@ function relicOpeningOptions(
       pricedChancePercent: clampPercent(pricedChancePercent),
       completionChancePercent: clampPercent(completionChancePercent),
       progressChancePercent: clampPercent(progressChancePercent),
+      priorityChancePercent: clampPercent(priorityChancePercent),
       completionTargets,
       economicValue,
     }];
@@ -522,8 +533,9 @@ function relicOpeningOptions(
   return candidates;
 }
 
-function compareOpeningOptions(left: RelicOpeningOption, right: RelicOpeningOption): number {
-  return nullableOpportunity(right.economicValue) - nullableOpportunity(left.economicValue)
+function compareOpeningOptions(left: RelicOpeningOption, right: RelicOpeningOption, preferRewards: boolean): number {
+  return (preferRewards ? right.priorityChancePercent - left.priorityChancePercent : 0)
+    || nullableOpportunity(right.economicValue) - nullableOpportunity(left.economicValue)
     || left.traceCost - right.traceCost
     || right.completionChancePercent - left.completionChancePercent
     || refinementIndex(left.recommendedRefinement) - refinementIndex(right.recommendedRefinement);

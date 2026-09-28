@@ -46,6 +46,7 @@
 
   export let onOpenSettings: () => void;
   export let onOpenMarketSales: () => void;
+  export let initialRelicSlug = "";
 
   const SET_PAGE_SIZE = 12;
   const DUCAT_PAGE_SIZE = 24;
@@ -416,7 +417,7 @@
   let activeMode: InsightsViewMode = loadInsightsViewPreferences().mode;
   let plannerSetSlug = "";
   let planMode: "personal" | "trade" = "personal";
-  let plannerRelicSlug = "";
+  let plannerRelicSlug = initialRelicSlug;
   let setQuery = "";
   let showAllSetRows = false;
   let showAllDucats = false;

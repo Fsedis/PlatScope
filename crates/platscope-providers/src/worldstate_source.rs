@@ -188,7 +188,7 @@ async fn refresh_references(client: &BoundedHttpClient, cache: &mut SourceCache)
     }
 }
 
-const REFERENCE_URLS: [(&str, &str); 5] = [
+const REFERENCE_URLS: [(&str, &str); 8] = [
     (
         "languages",
         "https://raw.githubusercontent.com/WFCD/warframe-worldstate-data/master/data/languages.json",
@@ -208,6 +208,18 @@ const REFERENCE_URLS: [(&str, &str); 5] = [
     (
         "deimosRewards",
         "https://raw.githubusercontent.com/WFCD/warframe-drop-data/gh-pages/data/deimosRewards.json",
+    ),
+    (
+        "fissureModifiers",
+        "https://raw.githubusercontent.com/WFCD/warframe-worldstate-data/master/data/fissureModifiers.json",
+    ),
+    (
+        "missionTypes",
+        "https://raw.githubusercontent.com/WFCD/warframe-worldstate-data/master/data/missionTypes.json",
+    ),
+    (
+        "solNodes",
+        "https://raw.githubusercontent.com/WFCD/warframe-worldstate-data/master/data/solNodes.json",
     ),
 ];
 
@@ -277,6 +289,23 @@ fn normalize_direct(
         })
         .collect::<Vec<_>>();
     let mut root = json!({"timestamp": time, "events": [], "syndicateMissions": null});
+    // Разломы и Бури Бездны в прямом WorldState лежат в разных массивах.
+    // Отсутствующий справочник оставляет секцию недоступной, а не пустой.
+    if let (Some(active), Some(storms)) = (
+        raw["ActiveMissions"].as_array(),
+        raw["VoidStorms"].as_array(),
+    ) {
+        let fissures = active
+            .iter()
+            .map(|mission| (mission, false))
+            .chain(storms.iter().map(|mission| (mission, true)))
+            .filter_map(|(mission, storm)| match period(mission) {
+                Some((start, end)) if start > millis || end <= millis => None,
+                _ => Some(direct_fissure(mission, storm, references).unwrap_or(Value::Null)),
+            })
+            .collect::<Vec<_>>();
+        root["fissures"] = json!(fissures);
+    }
     if let Some(end) = current
         .iter()
         .find(|m| m["Tag"] == "CetusSyndicate")
@@ -383,6 +412,37 @@ fn direct_trader(raw: Option<&Value>, languages: &Value) -> Value {
     json!({"activation": iso(start), "expiry": iso(end), "location": location, "inventory": inventory})
 }
 
+fn direct_fissure(raw: &Value, storm: bool, references: &HashMap<&str, Value>) -> Option<Value> {
+    let (start, end) = period(raw)?;
+    let node_key = raw["Node"].as_str()?;
+    let node = references.get("solNodes")?.get(node_key)?;
+    let node_name = node["value"].as_str()?;
+    let tier_key = if storm {
+        raw["ActiveMissionTier"].as_str()?
+    } else {
+        raw["Modifier"].as_str()?
+    };
+    let tier = references.get("fissureModifiers")?.get(tier_key)?;
+    let mission_type = if storm {
+        node["type"].as_str()?
+    } else {
+        let key = raw["MissionType"].as_str()?;
+        references.get("missionTypes")?.get(key)?["value"].as_str()?
+    };
+    Some(json!({
+        "id": raw["_id"]["$oid"],
+        "activation": iso(start),
+        "expiry": iso(end),
+        "node": node_name,
+        "missionType": mission_type,
+        "missionTypeKey": mission_type,
+        "tier": tier["value"],
+        "tierNum": tier["num"],
+        "isStorm": storm,
+        "isHard": !storm && raw["Hard"].as_bool().unwrap_or(false),
+    }))
+}
+
 fn direct_mission(
     raw: &Value,
     languages: &Value,
@@ -480,7 +540,8 @@ mod tests {
         let activity =
             crate::parse_world_activity(&serde_json::to_vec(&parsed).unwrap(), now).unwrap();
         assert_eq!(activity.cycles.len(), 5);
-        assert!(activity.unavailable_sections.is_empty());
+        // Исторический снимок сделан до появления секции ActiveMissions/VoidStorms.
+        assert_eq!(activity.unavailable_sections, ["fissures"]);
         assert_eq!(activity.resurgence.as_ref().unwrap().inventory.len(), 21);
         // Имена новых реликвий могут отсутствовать у WFCD, но game_ref и стоимость не теряются.
         assert!(
@@ -522,6 +583,51 @@ mod tests {
             parsed["nightwave"]["tag"],
             "RadioLegionIntermission16Syndicate"
         );
+    }
+
+    #[test]
+    fn direct_response_maps_active_fissures_and_void_storms() {
+        let (mut raw, mut refs, now) = fixture();
+        let start = (now.timestamp_millis() - 60_000).to_string();
+        let end = (now.timestamp_millis() + 60_000).to_string();
+        raw["ActiveMissions"] = json!([{
+            "_id": {"$oid": "normal"}, "Node": "SolNode1", "MissionType": "MT_DEFENSE",
+            "Modifier": "VoidT4", "Hard": true,
+            "Activation": {"$date": {"$numberLong": start}},
+            "Expiry": {"$date": {"$numberLong": end}}
+        }]);
+        raw["VoidStorms"] = json!([{
+            "_id": {"$oid": "storm"}, "Node": "CrewBattleNode1", "ActiveMissionTier": "VoidT2",
+            "Activation": {"$date": {"$numberLong": start}},
+            "Expiry": {"$date": {"$numberLong": end}}
+        }]);
+        refs.insert(
+            "fissureModifiers",
+            json!({
+                "VoidT4": {"value": "Axi", "num": 4},
+                "VoidT2": {"value": "Meso", "num": 2}
+            }),
+        );
+        refs.insert("missionTypes", json!({"MT_DEFENSE": {"value": "Defense"}}));
+        refs.insert(
+            "solNodes",
+            json!({
+                "SolNode1": {"value": "Test (Earth)", "type": "Defense"},
+                "CrewBattleNode1": {"value": "Test Storm (Venus)", "type": "Survival"}
+            }),
+        );
+        let parsed = normalize_direct(&raw, &refs, now).unwrap();
+        let activity =
+            crate::parse_world_activity(&serde_json::to_vec(&parsed).unwrap(), now).unwrap();
+        assert!(!activity.unavailable_sections.contains(&"fissures".into()));
+        assert_eq!(activity.fissures.len(), 2);
+        assert_eq!(activity.fissures[0].tier, "Axi");
+        assert_eq!(activity.fissures[0].mission_type_key, "Defense");
+        assert!(activity.fissures[0].is_hard);
+        assert!(!activity.fissures[0].is_storm);
+        assert_eq!(activity.fissures[1].tier, "Meso");
+        assert_eq!(activity.fissures[1].mission_type_key, "Survival");
+        assert!(activity.fissures[1].is_storm);
     }
 
     #[test]

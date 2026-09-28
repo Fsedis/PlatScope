@@ -147,6 +147,7 @@
   let bountyRegion = "all";
   let marketWorkspace: MarketWorkspace = "sales";
   let inventoryInitialQuery = "";
+  let insightsInitialRelicSlug = "";
   let marketActionMessage = "";
   let pageHeading: HTMLHeadingElement;
   let selectedIdentity = "";
@@ -529,6 +530,7 @@
     onNavigate={screen => {
       if (screen === "inventory") inventoryInitialQuery = "";
       if (screen === "bounty_hunter") bountyRegion = "all";
+      if (screen === "insights") insightsInitialRelicSlug = "";
       navigateTo(screen);
     }} />
 
@@ -549,7 +551,8 @@
   {#if activeScreen === "world_activity"}
     <WorldActivityScreen onOpenSettings={() => navigateTo("settings")}
       onOpenBounties={region => { bountyRegion = region; navigateTo("bounty_hunter"); }}
-      onOpenInsights={mode => { saveInsightsViewPreferences({ mode }); navigateTo("insights"); }} />
+      onOpenInsights={mode => { insightsInitialRelicSlug = ""; saveInsightsViewPreferences({ mode }); navigateTo("insights"); }}
+      onOpenRelic={slug => { insightsInitialRelicSlug = slug; saveInsightsViewPreferences({ mode: "relics" }); navigateTo("insights"); }} />
   {:else if activeScreen === "market"}
   <div class="live-region sr-only" role="status" aria-live="polite">
     {#if loading}
@@ -757,7 +760,7 @@
   {:else if activeScreen === "mission"}
     <MissionResearch />
   {:else if activeScreen === "insights"}
-    <InsightsScreen
+    <InsightsScreen initialRelicSlug={insightsInitialRelicSlug}
       onOpenSettings={() => navigateTo("settings")}
       onOpenMarketSales={openMarketSales}
     />

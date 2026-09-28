@@ -61,6 +61,21 @@ pub struct ActivityEvent {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ActivityFissure {
+    pub id: String,
+    #[serde(flatten)]
+    pub period: ActivityPeriod,
+    pub node: String,
+    pub mission_type: String,
+    pub mission_type_key: String,
+    pub tier: String,
+    pub tier_num: u8,
+    pub is_storm: bool,
+    pub is_hard: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WorldActivitySnapshot {
     pub fetched_at: DateTime<Utc>,
     pub source_at: DateTime<Utc>,
@@ -70,6 +85,8 @@ pub struct WorldActivitySnapshot {
     pub steel_path: Option<ActivitySteelPath>,
     pub sortie: Option<ActivityPeriod>,
     pub events: Vec<ActivityEvent>,
+    #[serde(default)]
+    pub fissures: Vec<ActivityFissure>,
     pub unavailable_sections: Vec<String>,
 }
 
@@ -152,6 +169,34 @@ fn trader(value: &Value, resurgence: bool) -> Option<ActivityTrader> {
         location: string(&value["location"])?,
         inventory_incomplete: inventory.len() != raw_inventory.len(),
         inventory,
+    })
+}
+
+fn fissure(value: &Value, period: ActivityPeriod) -> Option<ActivityFissure> {
+    let tier = string(&value["tier"])?;
+    let tier_num = match tier.as_str() {
+        "Lith" => 1,
+        "Meso" => 2,
+        "Neo" => 3,
+        "Axi" => 4,
+        "Requiem" => 5,
+        "Omnia" => 6,
+        _ => return None,
+    };
+    if value["tierNum"].as_u64()? != u64::from(tier_num) {
+        return None;
+    }
+    let mission_type = string(&value["missionType"])?;
+    Some(ActivityFissure {
+        id: string(&value["id"])?,
+        period,
+        node: string(&value["node"])?,
+        mission_type_key: string(&value["missionTypeKey"]).unwrap_or_else(|| mission_type.clone()),
+        mission_type,
+        tier,
+        tier_num,
+        is_storm: value["isStorm"].as_bool()?,
+        is_hard: value["isHard"].as_bool()?,
     })
 }
 
@@ -238,6 +283,31 @@ pub fn parse_world_activity(
     if raw_events.is_none_or(|raw| raw.len() != events.len()) {
         unavailable.push("events".into());
     }
+    let raw_fissures = root["fissures"].as_array();
+    let mut fissures = Vec::new();
+    let mut fissures_incomplete = raw_fissures.is_none();
+    if let Some(raw_fissures) = raw_fissures {
+        if raw_fissures.len() > 100 {
+            fissures_incomplete = true;
+        }
+        for raw in raw_fissures.iter().take(100) {
+            let Some(active_period) = period(raw) else {
+                fissures_incomplete = true;
+                continue;
+            };
+            if active_period.activation > fetched_at || active_period.expiry <= fetched_at {
+                continue;
+            }
+            if let Some(fissure) = fissure(raw, active_period) {
+                fissures.push(fissure);
+            } else {
+                fissures_incomplete = true;
+            }
+        }
+    }
+    if fissures_incomplete {
+        unavailable.push("fissures".into());
+    }
     if cycles.is_empty()
         && baro.is_none()
         && resurgence.is_none()
@@ -257,6 +327,7 @@ pub fn parse_world_activity(
         steel_path,
         sortie,
         events,
+        fissures,
         unavailable_sections: unavailable,
     })
 }
@@ -312,6 +383,34 @@ mod tests {
         let trader = parse(&value).resurgence.unwrap();
         assert!(trader.inventory_incomplete);
         assert_eq!(trader.inventory.len(), 1);
+    }
+    #[test]
+    fn keeps_only_current_valid_fissures_and_marks_partial_section() {
+        let mut value = fixture();
+        let valid = json!({
+            "id": "axi-defense", "activation": "2026-09-05T09:00:00Z",
+            "expiry": "2026-09-05T10:00:00Z", "node": "Test (Earth)",
+            "missionType": "Defense", "missionTypeKey": "Defense",
+            "tier": "Axi", "tierNum": 4, "isStorm": false, "isHard": true
+        });
+        let mut expired = valid.clone();
+        expired["id"] = json!("expired");
+        expired["expiry"] = json!("2026-09-05T09:30:00Z");
+        let mut mismatched_tier = valid.clone();
+        mismatched_tier["tierNum"] = json!(3);
+        value["fissures"] = json!([valid, expired, mismatched_tier, null]);
+        let result = parse(&value);
+        assert_eq!(result.fissures.len(), 1);
+        assert_eq!(result.fissures[0].mission_type_key, "Defense");
+        assert!(result.unavailable_sections.contains(&"fissures".into()));
+        value["fissures"] = json!([]);
+        let empty = parse(&value);
+        assert!(empty.fissures.is_empty());
+        assert!(!empty.unavailable_sections.contains(&"fissures".into()));
+        let mut cached = serde_json::to_value(empty).unwrap();
+        cached.as_object_mut().unwrap().remove("fissures");
+        let previous: WorldActivitySnapshot = serde_json::from_value(cached).unwrap();
+        assert!(previous.fissures.is_empty());
     }
     #[test]
     fn rejects_empty_or_unstamped_document() {

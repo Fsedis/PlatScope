@@ -5,7 +5,7 @@ import directSourceViews from "../../../../fixtures/worldstate/views-2026-09-07.
 /** Только демонстрационные данные фонового браузера, не настройки игрока. */
 export function makeWorldActivityMock(scenario: string | null, now = Date.now()): WorldActivityView {
   // Зафиксированный результат настоящего резервного загрузчика, без данных аккаунта.
-  if (scenario === "direct") return structuredClone(directSourceViews.world) as WorldActivityView;
+  if (scenario === "direct") return { fissures: [], ...structuredClone(directSourceViews.world) } as WorldActivityView;
   const date = (minutes: number) => new Date(now + minutes * 60_000).toISOString();
   const gear = (name: string, nameEn: string, ref: string, cost: number): ActivityOffer => ({
     gameRef: ref, displayName: name, displayNameEn: nameEn, kind: "equipment",
@@ -52,6 +52,13 @@ export function makeWorldActivityMock(scenario: string | null, now = Date.now())
     steelPath: { activation: date(-6000), expiry: date(2400), reward: "Rifle Riven Mod", cost: 75 },
     sortie: { activation: date(-300), expiry: date(1100) },
     events: [{ id: "dog-days", name: "Дог Дэйз", activation: date(-600), expiry: date(4500) }],
+    fissures: [
+      { id: "axi-defense", activation: date(-15), expiry: date(45), node: "Ио (Юпитер)", missionType: "Defense", missionTypeKey: "Defense", tier: "Axi", tierNum: 4, isStorm: false, isHard: false },
+      { id: "axi-survival", activation: date(-20), expiry: date(75), node: "Нимус (Эрида)", missionType: "Survival", missionTypeKey: "Survival", tier: "Axi", tierNum: 4, isStorm: false, isHard: true },
+      { id: "meso-capture", activation: date(-10), expiry: date(55), node: "Кассини (Сатурн)", missionType: "Capture", missionTypeKey: "Capture", tier: "Meso", tierNum: 2, isStorm: false, isHard: false },
+      { id: "lith-defense", activation: date(-5), expiry: date(35), node: "Литий (Земля)", missionType: "Defense", missionTypeKey: "Defense", tier: "Lith", tierNum: 1, isStorm: false, isHard: false },
+      { id: "omnia-alchemy", activation: date(-7), expiry: date(50), node: "Камбия (Деймос)", missionType: "Alchemy", missionTypeKey: "Alchemy", tier: "Omnia", tierNum: 6, isStorm: false, isHard: false },
+    ],
   };
   // Публичный ассортимент Варзии, обогащённый настоящим справочником в тесте ядра.
   if (scenario === "real") view.resurgenceOffers = structuredClone(realResurgenceOffers) as ActivityOffer[];
@@ -59,6 +66,7 @@ export function makeWorldActivityMock(scenario: string | null, now = Date.now())
   if (scenario === "expired") {
     view.cycles.forEach(cycle => { cycle.expiry = date(-1); });
     view.baro!.expiry = date(-1); view.resurgence!.expiry = date(-1); view.steelPath!.expiry = date(-1);
+    view.fissures.forEach(fissure => { fissure.expiry = date(-1); });
   }
   if (scenario === "stale") { view.refreshFailed = true; view.sourceAt = date(-90); }
   if (scenario === "partial") { view.unavailableSections = ["vallis", "resurgence"]; view.cycles = view.cycles.filter(cycle => cycle.key !== "vallis"); view.resurgence = null; }

@@ -170,6 +170,10 @@ fn should_refresh(cache: &ActivityCache, force: bool) -> bool {
                     .cycles
                     .iter()
                     .any(|cycle| cycle.period.expiry <= chrono::Utc::now())
+                || snapshot
+                    .fissures
+                    .iter()
+                    .any(|fissure| fissure.period.expiry <= chrono::Utc::now())
         })
 }
 
@@ -196,6 +200,16 @@ fn preserve_unavailable_sections(
     }
     if next.unavailable_sections.contains(&"events".into()) {
         next.events.clone_from(&previous.events);
+    }
+    if next.unavailable_sections.contains(&"fissures".into()) {
+        for fissure in &previous.fissures {
+            if fissure.period.activation <= next.fetched_at
+                && fissure.period.expiry > next.fetched_at
+                && !next.fissures.iter().any(|current| current.id == fissure.id)
+            {
+                next.fissures.push(fissure.clone());
+            }
+        }
     }
 }
 
@@ -511,13 +525,40 @@ mod tests {
     }
     #[test]
     fn failed_section_keeps_last_good_value_and_stays_marked_unavailable() {
-        let previous = snapshot();
+        let mut previous = snapshot();
+        let now = chrono::Utc::now();
+        previous
+            .fissures
+            .push(platscope_providers::ActivityFissure {
+                id: "current".into(),
+                period: platscope_providers::ActivityPeriod {
+                    activation: now - chrono::Duration::minutes(10),
+                    expiry: now + chrono::Duration::minutes(10),
+                },
+                node: "Test (Earth)".into(),
+                mission_type: "Defense".into(),
+                mission_type_key: "Defense".into(),
+                tier: "Axi".into(),
+                tier_num: 4,
+                is_storm: false,
+                is_hard: false,
+            });
+        let mut expired = previous.fissures[0].clone();
+        expired.id = "expired".into();
+        expired.period.expiry = now - chrono::Duration::seconds(1);
+        previous.fissures.push(expired);
         let mut next = previous.clone();
+        next.fetched_at = now;
         next.cycles.clear();
+        next.fissures.clear();
         next.unavailable_sections.push("cetus".into());
+        next.unavailable_sections.push("fissures".into());
         preserve_unavailable_sections(&mut next, &previous);
         assert_eq!(next.cycles[0].state, "day");
+        assert_eq!(next.fissures.len(), 1);
+        assert_eq!(next.fissures[0].id, "current");
         assert!(next.unavailable_sections.contains(&"cetus".into()));
+        assert!(next.unavailable_sections.contains(&"fissures".into()));
     }
     #[test]
     fn manual_refresh_cannot_bypass_rate_limit_or_failure_backoff() {

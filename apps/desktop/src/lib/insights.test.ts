@@ -762,6 +762,18 @@ describe("insights presentation", () => {
     expect(result.traceCost).toBe(0);
   });
 
+  it("chooses the attainable refinement with the best chance for a personal goal", () => {
+    const relic = pricedRelicRow("lith_g1_relic", "intact", "missing_goal_part", 1);
+    relic.rewards[0].recommendation = recommendation(relic.rewards[0].definition.rewardSlug!, 50);
+    const context = { squadSize: 1, availableTraces: 100, priorityRewardSlugs: ["missing_goal_part"] };
+
+    expect(rankRelicsToOpen([relic], [], { squadSize: 1, availableTraces: 100 })[0].recommendedRefinement).toBe("intact");
+    const [goal] = rankRelicsToOpen([relic], [], context);
+    expect(goal.recommendedRefinement).toBe("radiant");
+    expect(goal.traceCost).toBe(100);
+    expect(rankRelicsToOpen([relic], [], { ...context, availableTraces: 0 })[0].recommendedRefinement).toBe("intact");
+  });
+
   it("does not ask for traces when the recommended refinement is already owned", () => {
     const set = setRow("Ivara Prime Set", 1);
     const relic = pricedRelicRow("neo_i1_relic", "radiant", `${set.definition.setSlug}_a`);

@@ -28,8 +28,9 @@ pub use relics_run::{RelicsRunCatalogProvider, RelicsRunProvider};
 pub use warframe_market::WarframeMarketProvider;
 pub use wfcd_metadata::WfcdMetadataProvider;
 pub use world_activity::{
-    ActivityCycle, ActivityEvent, ActivityOffer, ActivityPeriod, ActivitySteelPath, ActivityTrader,
-    WorldActivityProvider, WorldActivitySnapshot, parse_world_activity,
+    ActivityCycle, ActivityEvent, ActivityFissure, ActivityOffer, ActivityPeriod,
+    ActivitySteelPath, ActivityTrader, WorldActivityProvider, WorldActivitySnapshot,
+    parse_world_activity,
 };
 pub use worldstate::{
     BountyJob, BountyMission, BountyRewardDrop, BountyState, DailyMarketState, NightwaveState,
