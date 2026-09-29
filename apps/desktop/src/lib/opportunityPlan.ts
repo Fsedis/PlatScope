@@ -115,7 +115,7 @@ export function planCompletionBudget(rows: SetInsightRow[], budget: number, goal
 
 const traceCosts: Record<RelicRefinement, number> = { intact: 0, exceptional: 25, flawless: 50, radiant: 100 };
 export interface RelicPlanStep { source: RelicInsightRow; target: RelicRefinement; quantity: number; traceCost: number }
-export interface AcquisitionPlan { steps: RelicPlanStep[]; chance: number; openings: number; traces: number; buy: MissingSetPart[]; buyCost: number | null; relicValue: number | null; capped: boolean }
+export interface AcquisitionPlan { steps: RelicPlanStep[]; chance: number; openings: number; traces: number; buy: MissingSetPart[]; buyCost: number | null; capped: boolean }
 
 /** Соло, без повторного использования одной копии. Подбирает до заданного числа открытий. */
 export function planSetAcquisition(row: SetInsightRow, relics: RelicInsightRow[], traces: number | null | undefined, maxOpenings = 10): AcquisitionPlan {
@@ -156,11 +156,5 @@ export function planSetAcquisition(row: SetInsightRow, relics: RelicInsightRow[]
     if (step) { step.quantity++; step.traceCost += best.cost; }
     else steps.push({ source: best.source, target: best.target, quantity: 1, traceCost: best.cost });
   }
-  let relicValue: number | null = 0;
-  for (const step of steps) {
-    const price = step.source.relicRecommendation;
-    if (!price || !positive(price.fairPrice) || !["fresh", "aging"].includes(price.freshness) || !["high", "medium"].includes(price.confidence)) { relicValue = null; break; }
-    relicValue += price.fairPrice * step.quantity;
-  }
-  return { steps, chance: support.aggregateChancePercent, openings: selected.length, traces: traceTotal, buy, buyCost, relicValue, capped: selected.length >= cap && support.aggregateChancePercent < 80 };
+  return { steps, chance: support.aggregateChancePercent, openings: selected.length, traces: traceTotal, buy, buyCost, capped: selected.length >= cap && support.aggregateChancePercent < 80 };
 }

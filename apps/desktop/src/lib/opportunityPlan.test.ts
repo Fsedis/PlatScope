@@ -100,7 +100,7 @@ describe("план возможностей", () => {
   it("план реликвий не расходует лишние копии и неизвестные следы", () => {
     const row=set("a",10,20), source=relic("r",row.components[1].definition.slug,2,3);
     const result=planSetAcquisition(row,[source],null,10);
-    expect(result).toMatchObject({openings:3,traces:0,buyCost:0,relicValue:6});
+    expect(result).toMatchObject({openings:3,traces:0,buyCost:0});
     expect(result.chance).toBeCloseTo((1-.98**3)*100);
     expect(result.steps[0].target).toBe("intact");
     expect(source.ownedQuantity).toBe(3);

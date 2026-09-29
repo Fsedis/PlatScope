@@ -125,8 +125,8 @@ function pricedRelicRow(
 
 function openingRecommendation(
   displayName: string,
-  expectedPlatinum: number | null,
-  squadExpectedPlatinum: number | null,
+  dropPrice: number | null,
+  dropChancePercent: number,
   priorityScore = 50,
 ): RelicOpeningRecommendation {
   return {
@@ -137,12 +137,13 @@ function openingRecommendation(
     sourceRefinement: "intact",
     recommendedRefinement: "intact",
     traceCost: 0,
-    grossExpectedPlatinum: expectedPlatinum,
-    squadGrossExpectedPlatinum: squadExpectedPlatinum,
-    relicOpportunityCost: 1,
-    traceOpportunityCost: 0,
-    expectedPlatinum,
-    squadExpectedPlatinum,
+    highestDrop: dropPrice === null ? null : {
+      rewardSlug: `${displayName.toLocaleLowerCase().replaceAll(" ", "_")}_drop`,
+      displayName: `${displayName} drop`,
+      price: dropPrice,
+      chancePercent: dropChancePercent,
+    },
+    unpricedRewards: dropPrice === null,
     pricedChancePercent: 100,
     completionChancePercent: 0,
     progressChancePercent: 0,
@@ -289,13 +290,33 @@ describe("insights presentation", () => {
     expect(setOpportunity(reservePublishedSetListings(row,[]))).toMatchObject({completeSets:3,availableCompleteSets:0,sellableCompleteSets:0,profitableToComplete:false});
   });
 
-  it("does not calculate profit or relic income from stale prices", () => {
+  it("does not use the relic sale price when evaluating its drops", () => {
     const row = setRow("Stale Completion", 1);
     row.setRecommendation!.freshness = "stale";
     expect(setOpportunity(row)).toMatchObject({ completionRevenue: null, completionProfit: null, setPremiumValue: null, profitableToComplete: false });
     const relic = pricedRelicRow("Stale Relic", "intact", "rare");
     relic.relicRecommendation!.freshness = "stale";
-    expect(rankRelicsToOpen([relic], [], { availableTraces: 0 })[0].expectedPlatinum).toBeNull();
+    expect(rankRelicsToOpen([relic], [], { availableTraces: 0 })[0]).toMatchObject({
+      highestDrop: { rewardSlug: "rare", price: 40, chancePercent: 2 }, unpricedRewards: false,
+    });
+    relic.relicRecommendation = null;
+    expect(rankRelicsToOpen([relic], [], { availableTraces: 0 })[0].highestDrop?.price).toBe(40);
+  });
+
+  it("ranks by the most expensive drop, regardless of average value or relic sale price", () => {
+    const expensiveDrop = pricedRelicRow("axi_expensive_relic", "intact", "expensive_rare", 100);
+    expensiveDrop.relicRecommendation = recommendation("axi_expensive_relic", 1000);
+    const expensiveAverage = pricedRelicRow("axi_average_relic", "intact", "cheap_rare", 1);
+    expensiveAverage.rewards[0].recommendation = recommendation(
+      expensiveAverage.rewards[0].definition.rewardSlug!, 80,
+    );
+
+    const ranked = rankRelicsToOpen([expensiveAverage, expensiveDrop], [], { availableTraces: 0, squadSize: 1 });
+    expect(ranked[0]).toMatchObject({
+      relicSlug: "axi_expensive_relic",
+      highestDrop: { rewardSlug: "expensive_rare", price: 100, chancePercent: 2 },
+    });
+    expect(ranked[1].highestDrop?.price).toBe(80);
   });
 
   it("updates sale advice with the displayed live price and rejects missing part prices", () => {
@@ -440,16 +461,17 @@ describe("insights presentation", () => {
     expect(selectBestOverviewReadySet([fullyReserved, partiallyReserved])).toBe(partiallyReserved);
   });
 
-  it("selects only finite positive relic value for the requested scenario", () => {
-    const soloBest = openingRecommendation("Solo Best", 12, 4, 60);
-    const squadBest = openingRecommendation("Squad Best", 8, 25, 80);
-    const invalid = openingRecommendation("Invalid", Number.POSITIVE_INFINITY, null, 100);
-    const loss = openingRecommendation("Loss", -1, 0, 100);
+  it("selects the highest finite drop price and uses its chance to break ties", () => {
+    const priciest = openingRecommendation("Priciest", 120, 2, 60);
+    const moreLikely = openingRecommendation("More Likely", 120, 10, 50);
+    const cheaper = openingRecommendation("Cheaper", 80, 25, 80);
+    const invalid = openingRecommendation("Invalid", Number.POSITIVE_INFINITY, 50, 100);
+    const unknown = openingRecommendation("Unknown", null, 0, 100);
 
-    expect(selectBestOverviewRelic([invalid, loss, squadBest, soloBest], "solo")).toBe(soloBest);
-    expect(selectBestOverviewRelic([invalid, loss, soloBest, squadBest], "matching_squad")).toBe(squadBest);
-    expect(selectBestOverviewRelic([invalid, loss], "solo")).toBeNull();
-    expect(selectBestOverviewRelic([invalid, loss], "matching_squad")).toBeNull();
+    for (const scenario of ["solo", "matching_squad"] as const) {
+      expect(selectBestOverviewRelic([invalid, unknown, cheaper, priciest, moreLikely], scenario)).toBe(moreLikely);
+      expect(selectBestOverviewRelic([invalid, unknown], scenario)).toBeNull();
+    }
   });
 
   it("uses the conservative three-unit depth when two identical parts are required", () => {
@@ -709,11 +731,10 @@ describe("insights presentation", () => {
     expect(recommendation.traceCost).toBe(100);
     expect(recommendation.completionChancePercent).toBe(10);
     expect(recommendation.completionTargets.map((target) => target.displayName)).toEqual([set.displayName]);
-    expect(recommendation.grossExpectedPlatinum).toBeCloseTo(6.5001, 4);
-    expect(recommendation.relicOpportunityCost).toBe(2);
-    expect(recommendation.traceOpportunityCost).toBe(2);
-    expect(recommendation.expectedPlatinum).toBeCloseTo(4.5001, 4);
-    expect(recommendation.squadExpectedPlatinum).toBeGreaterThan(recommendation.expectedPlatinum ?? 0);
+    expect(recommendation.highestDrop).toMatchObject({
+      rewardSlug: `${set.definition.setSlug}_a`, price: 40, chancePercent: 10,
+    });
+    expect(recommendation.unpricedRewards).toBe(false);
   });
 
   it("does not spend traces that are absent from the supplied inventory balance", () => {
@@ -726,7 +747,7 @@ describe("insights presentation", () => {
     expect(recommendation.traceCost).toBe(0);
   });
 
-  it("does not rank a relic when even one reward has only low-confidence pricing", () => {
+  it("marks incomplete pricing without treating an untrusted reward price as the top drop", () => {
     const relic = pricedRelicRow("meso_l1_relic", "intact", "low_confidence_rare");
     relic.rewards[0].recommendation = recommendation(
       relic.rewards[0].definition.rewardSlug!,
@@ -736,9 +757,8 @@ describe("insights presentation", () => {
 
     const [result] = rankRelicsToOpen([relic], []);
 
-    expect(result.grossExpectedPlatinum).toBeNull();
-    expect(result.expectedPlatinum).toBeNull();
-    expect(result.priorityScore).toBe(0);
+    expect(result.highestDrop).toMatchObject({ rewardSlug: "low_confidence_rare", price: 40 });
+    expect(result.unpricedRewards).toBe(true);
   });
 
   it("does not inflate relic value when reward probabilities are duplicated", () => {
@@ -747,9 +767,7 @@ describe("insights presentation", () => {
 
     const [result] = rankRelicsToOpen([relic], []);
 
-    expect(result.grossExpectedPlatinum).toBeNull();
-    expect(result.squadGrossExpectedPlatinum).toBeNull();
-    expect(result.priorityScore).toBe(0);
+    expect(result.highestDrop).toBeNull();
   });
 
   it("keeps an intact relic intact when its common reward is the valuable one", () => {
@@ -760,6 +778,9 @@ describe("insights presentation", () => {
 
     expect(result.recommendedRefinement).toBe("intact");
     expect(result.traceCost).toBe(0);
+    expect(result.highestDrop).toMatchObject({
+      rewardSlug: relic.rewards[0].definition.rewardSlug, price: 50, chancePercent: 25.33,
+    });
   });
 
   it("chooses the attainable refinement with the best chance for a personal goal", () => {

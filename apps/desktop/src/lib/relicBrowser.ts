@@ -9,9 +9,6 @@ export function relicProgressSets(sets: SetInsightRow[]): SetInsightRow[] {
     return row.components.some(part => componentAvailableQuantity(part) > complete * part.definition.requiredQuantity);
   });
 }
-export function relicNet(row: RelicOpeningRecommendation, scenario: RelicOverviewScenario): number | null {
-  return scenario === "solo" ? row.expectedPlatinum : row.squadExpectedPlatinum;
-}
 export function rewardChoiceChance(chance: number, scenario: RelicOverviewScenario): number {
   const probability = Math.min(1, Math.max(0, Number.isFinite(chance) ? chance / 100 : 0));
   return 100 * (1 - (1 - probability) ** (scenario === "solo" ? 1 : 4));
@@ -27,10 +24,12 @@ export function filterRelicChoices(rows: RelicOpeningRecommendation[], relics: R
     const slug = relic.definition.relicSlug;
     names.set(slug, `${names.get(slug) ?? ""} ${relic.displayName} ${relic.definition.displayNameEn} ${slug} ${relic.rewards.map(reward => `${reward.displayName} ${reward.definition.displayNameEn}`).join(" ")}`.toLocaleLowerCase());
   }
-  const value = (row: RelicOpeningRecommendation) => relicNet(row, scenario) ?? -Infinity;
+  const price = (row: RelicOpeningRecommendation) => row.highestDrop?.price ?? -1;
+  const chance = (row: RelicOpeningRecommendation) => row.highestDrop
+    ? rewardChoiceChance(row.highestDrop.chancePercent, scenario) : -1;
   return rows.filter(row => search.every(word => (names.get(row.relicSlug) ?? row.displayName.toLocaleLowerCase()).includes(word)))
     .sort((a,b) => (sort === "progress" ? b.progressChancePercent - a.progressChancePercent : sort === "owned" ? b.totalOwnedQuantity - a.totalOwnedQuantity : 0)
-      || value(b) - value(a) || a.displayName.localeCompare(b.displayName));
+      || price(b) - price(a) || chance(b) - chance(a) || a.displayName.localeCompare(b.displayName));
 }
 
 /** Те же исходные награды и улучшение, что использованы в рейтинге. */
@@ -46,5 +45,6 @@ export function selectedRelicRewards(selected: RelicOpeningRecommendation, relic
     price: knownRewardPrice(reward.recommendation),
     targets: needs.filter(({missing}) => missing.some(part => part.slug === reward.definition.rewardSlug))
       .map(({row,missing}) => ({slug:row.definition.setSlug,name:row.displayName,finishes:missing.length === 1 && missing[0].quantity === 1})),
-  })).sort((a,b) => b.targets.length - a.targets.length || (b.price ?? -1) - (a.price ?? -1));
+  })).sort((a,b) => (b.price ?? -1) - (a.price ?? -1)
+    || b.targets.length - a.targets.length || b.chance - a.chance);
 }

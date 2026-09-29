@@ -3,6 +3,8 @@
     type FissureFilterRule, type WorldActivityView, type WorldFissure } from "./worldActivity";
   import { saveWorldPreferences, worldPreferences } from "./worldActivityStore";
   import { prepareFissureRelics, selectFissureMatches } from "./worldFissures";
+  import WorldActivityArtwork from "./WorldActivityArtwork.svelte";
+  import { relicArtwork } from "./worldActivityArtwork";
   import { refinementLabel, type InsightsView } from "./insights";
   import type { PersonalGoalsView } from "./personalGoals";
 
@@ -116,7 +118,7 @@
   <header class="fissures-heading">
     <div>
       <h2 id="fissures-heading">Разломы для моих реликвий</h2>
-      <p>Текущие миссии, куда можно взять реликвию из вашего инвентаря</p>
+      <p>Куда идти и какую реликвию взять</p>
     </div>
     {#if !loadingPersonal && !delayed && insights?.inventoryAvailable && hasOwnedRelics}
       <span class="result-count">Найдено: {matches.length}</span>
@@ -173,6 +175,10 @@
     </div>
   </details>
 
+  {#if personalError && insights && !loadingPersonal}
+    <p class="data-warning" role="status">Личные цели сейчас недоступны; реликвию выбираем по цене самой дорогой награды. <button type="button" class="retry-personal" onclick={onRetryPersonal}>Повторить загрузку</button></p>
+  {/if}
+
   {#if loadingPersonal}
     <div class="empty-state" role="status" aria-busy="true"><h3>Сверяем разломы с вашими реликвиями…</h3><p>Загружаем инвентарь, цели и оценку наград.</p></div>
   {:else if personalError && !insights}
@@ -199,35 +205,48 @@
         {@const englishName = relicEnglishName(match.relic.relicSlug, match.relic.displayName)}
         <article class="match-row">
           <div class="mission">
-            <div class="mission-heading"><h3>{tierName(match.fissure.tier)} · {missionName(match.fissure)}</h3><span title={`Закончится ${new Date(match.fissure.expiry).toLocaleString("ru-RU")}`}>{countdown(match.fissure.expiry, now)}</span></div>
-            <p>{match.fissure.node}</p>
-            <div class="mode-tags">{#each modeNames(match.fissure) as mode}<span>{mode}</span>{/each}</div>
+            <div class="mission-heading">
+              <div class="mission-title"><span class="tier-mark">{tierName(match.fissure.tier)}</span><h3>{missionName(match.fissure)}</h3></div>
+              <span class="mission-timer" title={`Закончится ${new Date(match.fissure.expiry).toLocaleString("ru-RU")}`}><small>До конца</small>{countdown(match.fissure.expiry, now)}</span>
+            </div>
+            <div class="mission-meta"><span class="mission-node">{match.fissure.node}</span><div class="mode-tags">{#each modeNames(match.fissure) as mode}<span>{mode}</span>{/each}</div></div>
           </div>
           <div class="recommendation">
-            <span class="recommendation-label">{match.goalChancePercent > 0 ? "Для личной цели" : match.expectedPlatinum !== null ? "По оценке наград" : "Подходящая реликвия"}</span>
-            <strong>{match.relic.displayName}</strong>
-            {#if englishName}
-              <small lang="en" class="relic-english">{englishName}</small>
-            {/if}
-            <p>Есть {match.relic.totalOwnedQuantity} · {match.relic.traceCost > 0
-                ? `улучшить до ${refinementLabel(match.relic.recommendedRefinement, "ru")} за ${match.relic.traceCost} следов`
-                : "можно открыть без улучшения"}</p>
+            <span class="relic-icon"><WorldActivityArtwork kind={relicArtwork(match.relic.relicSlug, englishName ?? match.relic.displayName)} /></span>
+            <div class="relic-identity">
+              <span class="choice-label">Взять на миссию</span>
+              <strong>{match.relic.displayName}</strong>
+              {#if englishName}<small lang="en" class="relic-english">{englishName}</small>{/if}
+              <span class="relic-owned">У вас: <b>{match.relic.totalOwnedQuantity}</b></span>
+            </div>
             {#if match.goalChancePercent > 0}
-              <p class="goal-detail">{match.goalNames.join(", ")} · шанс нужной детали {percent(match.goalChancePercent)}</p>
+              <div class="reason reason-goal">
+                <span>Для личной цели</span><strong>{percent(match.goalChancePercent)}</strong>
+                <small>Шанс нужной детали · {match.goalNames.join(", ")}</small>
+                {#if match.relic.highestDrop}<small>{match.relic.unpricedRewards ? "Из оценённых: " : "Самая дорогая награда: "}{match.relic.highestDrop.displayName} ≈ {platinum(match.relic.highestDrop.price)} · шанс {percent(match.relic.highestDrop.chancePercent)}</small>{/if}
+              </div>
+            {:else if match.relic.highestDrop}
+              <div class="reason"><span>{match.relic.unpricedRewards ? "Самый дорогой из оценённых дропов" : "Самый дорогой дроп"}</span><strong>≈ {platinum(match.relic.highestDrop.price)}</strong><small>{match.relic.highestDrop.displayName} · шанс {percent(match.relic.highestDrop.chancePercent)}</small></div>
+            {:else}
+              <div class="reason"><span>Подходящая реликвия</span><strong>Совпадает по эре</strong><small>Оценка наград пока недоступна</small></div>
             {/if}
-            <p class="value-detail">{match.expectedPlatinum === null
-                ? "Оценка платины недоступна"
-                : `Оценка выгоды открытия ≈ ${platinum(match.expectedPlatinum)}`}</p>
             <button type="button" class="relic-link" onclick={() => onOpenRelic(match.relic.relicSlug)}>Посмотреть реликвию</button>
           </div>
+          {#if match.relic.traceCost > 0}
+            <details class="match-details">
+              <summary>Подготовка и подробности</summary>
+              <div class="match-detail-content">
+                {#if match.relic.traceCost > 0}
+                  <p>Улучшить до «{refinementLabel(match.relic.recommendedRefinement, "ru")}» за {match.relic.traceCost} следов Бездны.</p>
+                {/if}
+              </div>
+            </details>
+          {/if}
         </article>
       {/each}
     </div>
     {#if matches.length > visibleLimit}<button type="button" class="show-more secondary" onclick={() => visibleLimit += initialLimit}>Показать ещё {Math.min(initialLimit, matches.length - visibleLimit)}</button>{/if}
-    <p class="estimate-note">Шанс и платина — оценки за одно открытие, а не гарантированная награда. Выбор миссии и реликвии выполняется в игре.</p>
-  {/if}
-  {#if personalError && insights && !loadingPersonal}
-    <p class="data-warning" role="status">Личные цели сейчас недоступны; реликвию выбираем по оценке платины. <button type="button" class="retry-personal" onclick={onRetryPersonal}>Повторить загрузку</button></p>
+    <p class="estimate-note">Цена относится к возможной награде, шанс — к одному открытию. Выпадение не гарантировано. Выбор миссии и реликвии выполняется в игре.</p>
   {/if}
 </section>
 
@@ -238,8 +257,10 @@
   .fissures-heading h2 { font-size:1.15rem; line-height:1.35; }
   .fissures-heading p { margin-top:.15rem; color:var(--text-muted); font-size:.8rem; line-height:1.45; }
   .result-count { flex:none; border-radius:999px; padding:.25rem .55rem; background:var(--accent-soft); color:var(--accent-strong); font-size:.75rem; font-weight:700; }
-  .fissure-settings { border:1px solid var(--border); border-radius:.58rem; background:var(--surface-2); }
-  .fissure-settings summary { display:flex; align-items:center; flex-wrap:wrap; gap:.2rem .55rem; min-height:2.35rem; padding:.45rem .7rem; color:var(--accent-strong); font-size:.8rem; font-weight:700; cursor:pointer; }
+  .fissure-settings { justify-self:start; min-width:0; max-width:100%; border-radius:.58rem; }
+  .fissure-settings[open] { justify-self:stretch; border:1px solid var(--border); background:var(--surface-2); }
+  .fissure-settings summary { display:flex; align-items:center; flex-wrap:wrap; gap:.2rem .55rem; min-height:1.9rem; padding:.25rem .45rem; border-radius:.45rem; color:var(--accent-strong); font-size:.8rem; font-weight:700; cursor:pointer; }
+  .fissure-settings:not([open]) summary:hover { background:var(--surface-2); }
   .fissure-settings summary::marker { content:""; }
   .fissure-settings summary::-webkit-details-marker { display:none; }
   .fissure-settings summary::before { content:""; flex:none; width:.42rem; height:.42rem; border-right:1.5px solid currentColor; border-bottom:1.5px solid currentColor; transform:rotate(-45deg); transition:transform .15s ease; }
@@ -266,27 +287,47 @@
   .empty-state h3 { font-size:.9rem; }
   .empty-state p { color:var(--text-muted); font-size:.78rem; line-height:1.5; }
   .empty-state button { margin-top:.3rem; font-size:.78rem; }
-  .match-list { display:grid; gap:.5rem; }
-  .match-row { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.15fr); gap:.8rem; border:1px solid var(--border); border-radius:.58rem; padding:.7rem .8rem; background:var(--surface-2); }
+  .match-list { display:grid; gap:.6rem; }
+  .match-row { min-width:0; overflow:hidden; border:1px solid var(--border); border-radius:.65rem; background:var(--surface-2); }
   .mission,.recommendation { min-width:0; }
-  .mission-heading { display:flex; align-items:baseline; justify-content:space-between; gap:.3rem .7rem; }
-  .mission-heading h3 { font-size:.88rem; line-height:1.35; overflow-wrap:anywhere; }
-  .mission-heading > span { flex:none; color:var(--accent-strong); font-size:.85rem; font-weight:700; font-variant-numeric:tabular-nums; white-space:nowrap; }
-  .mission p { margin-top:.25rem; color:var(--text-muted); font-size:.78rem; overflow-wrap:anywhere; }
-  .mode-tags { display:flex; flex-wrap:wrap; gap:.25rem; margin-top:.48rem; }
-  .mode-tags span { border-radius:.3rem; padding:.15rem .4rem; background:var(--surface-3); color:var(--text-muted); font-size:.75rem; }
-  .recommendation { border-left:1px solid var(--border); padding-left:.8rem; }
-  .recommendation-label { display:block; color:var(--accent-strong); font-size:.73rem; font-weight:700; }
-  .recommendation strong { display:block; margin-top:.12rem; font-size:.86rem; line-height:1.35; overflow-wrap:anywhere; }
-  .relic-english { display:block; margin-top:.1rem; color:var(--text-muted); font-size:.75rem; overflow-wrap:anywhere; }
-  .recommendation p { margin-top:.2rem; color:var(--text-muted); font-size:.78rem; line-height:1.4; overflow-wrap:anywhere; }
-  .recommendation .goal-detail { color:var(--success); }
-  .recommendation .value-detail { color:var(--text); }
+  .mission { padding:.65rem .85rem .6rem; }
+  .mission-heading,.mission-title,.mission-meta { display:flex; align-items:center; min-width:0; }
+  .mission-heading { justify-content:space-between; gap:.4rem 1rem; }
+  .mission-title { gap:.5rem; flex-wrap:wrap; }
+  .tier-mark { flex:none; border-radius:.4rem; padding:.18rem .48rem; background:var(--accent-soft); color:var(--accent-strong); font-size:.8rem; font-weight:750; }
+  .mission-heading h3 { font-size:1rem; line-height:1.3; overflow-wrap:anywhere; }
+  .mission-timer { display:flex; align-items:baseline; gap:.35rem; flex:none; color:var(--accent-strong); font-size:.98rem; font-weight:750; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .mission-timer small { color:var(--text-muted); font-size:.7rem; font-weight:500; }
+  .mission-meta { gap:.35rem .7rem; flex-wrap:wrap; margin-top:.4rem; color:var(--text-muted); font-size:.78rem; }
+  .mission-node { overflow-wrap:anywhere; }
+  .mode-tags { display:flex; flex-wrap:wrap; gap:.25rem; }
+  .mode-tags span { border-radius:.3rem; padding:.1rem .42rem; background:var(--surface-3); color:var(--text-muted); font-size:.72rem; }
+  .recommendation { display:grid; grid-template-columns:2.75rem minmax(0,1fr) minmax(10rem,.7fr) auto; align-items:center; gap:.65rem .85rem; border-top:1px solid var(--border); padding:.65rem .85rem; background:var(--surface-1); }
+  .relic-icon { display:block; width:2.75rem; height:2.75rem; color:var(--gold); }
+  .relic-identity { min-width:0; }
+  .choice-label { display:block; color:var(--accent-strong); font-size:.7rem; font-weight:700; }
+  .relic-identity strong { display:block; margin-top:.05rem; font-size:.96rem; line-height:1.3; overflow-wrap:anywhere; }
+  .relic-english { display:block; margin-top:.05rem; color:var(--text-muted); font-size:.72rem; overflow-wrap:anywhere; }
+  .relic-owned { display:inline-block; margin-top:.2rem; border-radius:.3rem; padding:.1rem .38rem; background:var(--surface-3); color:var(--text-muted); font-size:.72rem; }
+  .relic-owned b { color:var(--text); font-variant-numeric:tabular-nums; }
+  .reason { display:grid; align-content:center; gap:.05rem; min-width:0; min-height:2.75rem; border-left:1px solid var(--border); padding-left:.85rem; }
+  .reason span { color:var(--text-muted); font-size:.7rem; }
+  .reason strong { color:var(--accent-strong); font-size:.98rem; line-height:1.3; overflow-wrap:anywhere; }
+  .reason small { color:var(--text-muted); font-size:.7rem; line-height:1.35; overflow-wrap:anywhere; }
+  .reason-goal strong { color:var(--success); }
+  .relic-link { min-height:2.25rem; white-space:nowrap; }
+  .match-details { border-top:1px solid var(--border); background:var(--surface-1); }
+  .match-details summary { display:flex; align-items:center; gap:.4rem; width:max-content; max-width:100%; min-height:1.8rem; padding:.18rem .85rem; color:var(--text-muted); font-size:.72rem; cursor:pointer; }
+  .match-details summary::marker { content:""; }
+  .match-details summary::-webkit-details-marker { display:none; }
+  .match-details summary::before { content:""; flex:none; width:.35rem; height:.35rem; border-right:1.4px solid currentColor; border-bottom:1.4px solid currentColor; transform:rotate(-45deg); }
+  .match-details[open] summary::before { transform:rotate(45deg); }
+  .match-details summary:hover { color:var(--accent-strong); }
+  .match-detail-content { display:flex; flex-wrap:wrap; gap:.25rem 1.3rem; padding:0 .85rem .55rem; }
+  .match-detail-content p { color:var(--text-muted); font-size:.75rem; line-height:1.45; }
   .estimate-note { color:var(--text-muted); font-size:.75rem; line-height:1.45; }
   .show-more { justify-self:center; font-size:.78rem; }
-  .relic-link { justify-self:start; min-height:2rem; margin-top:.2rem; padding:.25rem .2rem; border:0; background:transparent; color:var(--accent-strong); font-size:.78rem; font-weight:700; text-decoration:underline; text-underline-offset:.12rem; }
-  .relic-link:hover { background:var(--accent-soft); }
-  @container (max-width:54rem) { .rule-row { grid-template-columns:repeat(3,minmax(0,1fr)) auto; } .rule-number { grid-column:1/-1; } }
-  @container (max-width:38rem) { .match-row { grid-template-columns:minmax(0,1fr); } .recommendation { border-left:0; border-top:1px solid var(--border); padding:.6rem 0 0; } .rule-row { grid-template-columns:repeat(2,minmax(0,1fr)); } .rule-number { grid-column:1/-1; } .remove-rule { justify-self:start; } }
-  @container (max-width:26rem) { .rule-row { grid-template-columns:minmax(0,1fr); } .rule-row label { grid-column:1; } .mission-heading { flex-wrap:wrap; } }
+  @container (max-width:54rem) { .rule-row { grid-template-columns:repeat(3,minmax(0,1fr)) auto; } .rule-number { grid-column:1/-1; } .recommendation { grid-template-columns:2.75rem minmax(0,1fr) minmax(9rem,.7fr); } .relic-link { grid-column:2/-1; justify-self:start; } }
+  @container (max-width:38rem) { .recommendation { grid-template-columns:2.75rem minmax(0,1fr); } .reason { grid-column:1/-1; border-left:0; border-top:1px solid var(--border); padding:.5rem 0 0; } .relic-link { grid-column:1/-1; justify-self:stretch; white-space:normal; } .rule-row { grid-template-columns:repeat(2,minmax(0,1fr)); } .rule-number { grid-column:1/-1; } .remove-rule { justify-self:start; } }
+  @container (max-width:26rem) { .rule-row { grid-template-columns:minmax(0,1fr); } .rule-row label { grid-column:1; } .mission-heading { align-items:start; } .mission-timer { align-items:end; flex-direction:column; gap:0; } }
 </style>

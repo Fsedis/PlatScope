@@ -282,14 +282,10 @@ export interface RelicOpeningRecommendation {
   sourceRefinement: RelicRefinement;
   recommendedRefinement: RelicRefinement;
   traceCost: number;
-  grossExpectedPlatinum: number | null;
-  squadGrossExpectedPlatinum: number | null;
-  relicOpportunityCost: number | null;
-  traceOpportunityCost: number;
-  /** Чистое матожидание для одиночного открытия. */
-  expectedPlatinum: number | null;
-  /** Чистое матожидание лучшей награды, если отряд открывает ту же реликвию и улучшение. */
-  squadExpectedPlatinum: number | null;
+  /** Самая дорогая награда с надёжной ценой; шанс относится к выбранному улучшению. */
+  highestDrop: { rewardSlug: string; displayName: string; price: number; chancePercent: number } | null;
+  /** Часть наград не имеет надёжной цены, поэтому максимум известен только среди оценённых. */
+  unpricedRewards: boolean;
   pricedChancePercent: number;
   completionChancePercent: number;
   progressChancePercent: number;
@@ -300,8 +296,6 @@ export interface RelicOpeningRecommendation {
 export interface RelicRankingContext {
   /** Фактический баланс; null означает, что источник его не предоставляет. */
   availableTraces?: number | null;
-  /** Оценка альтернативной стоимости одного следа в платине. */
-  tracePlatinumValue?: number;
   /** 1 — соло, 4 — полный публичный отряд. */
   squadSize?: number;
   /** Недостающие детали личных целей: при их наличии улучшение выбирается по шансу детали. */
@@ -327,15 +321,11 @@ const rewardChanceByRefinement = {
 type RelicRewardRarity = keyof typeof rewardChanceByRefinement.intact;
 
 interface RelicOpeningOption extends Omit<RelicOpeningRecommendation, "priorityScore"> {
-  economicValue: number | null;
   priorityChancePercent: number;
 }
 
-const COMPLETE_RELIC_PRICE_COVERAGE = 99;
+const MIN_COMPLETE_RELIC_CHANCE = 99;
 const MAX_COMPLETE_RELIC_CHANCE = 101;
-const RELIC_CHANCE_TOLERANCE = 0.05;
-/** Условная альтернативная стоимость следа: 100 следов = 2p. */
-export const DEFAULT_TRACE_PLATINUM_VALUE = 0.02;
 
 /**
  * Ранжирует только реально имеющиеся реликвии и для каждой выбирает осмысленное
@@ -355,7 +345,7 @@ export function rankRelicsToOpen(
     groups.set(relic.definition.relicSlug, group);
   }
 
-  const completionByReward = new Map<string, Array<{ setSlug: string; displayName: string; premium: number }>>();
+  const completionByReward = new Map<string, Array<{ setSlug: string; displayName: string }>>();
   const progressRewards = new Set<string>();
   for (const set of sets) {
     const opportunity = setOpportunity(set);
@@ -366,14 +356,10 @@ export function rankRelicsToOpen(
     targets.push({
       setSlug: set.definition.setSlug,
       displayName: set.displayName,
-      premium: Math.max(0, opportunity.setPremiumValue ?? 0),
     });
     completionByReward.set(rewardSlug, targets);
   }
 
-  const tracePlatinumValue = Number.isFinite(context.tracePlatinumValue)
-    ? Math.max(0, context.tracePlatinumValue ?? 0)
-    : DEFAULT_TRACE_PLATINUM_VALUE;
   const squadSize = Number.isFinite(context.squadSize)
     ? Math.min(4, Math.max(1, Math.trunc(context.squadSize ?? 4)))
     : 4;
@@ -384,41 +370,38 @@ export function rankRelicsToOpen(
       completionByReward,
       progressRewards,
       context.availableTraces,
-      tracePlatinumValue,
-      squadSize,
       priorityRewards,
     );
     if (options.length === 0) return [];
-    return [[...options].sort((left, right) => compareOpeningOptions(left, right, priorityRewards.size > 0))[0]];
+    return [[...options].sort((left, right) => compareOpeningOptions(left, right, priorityRewards.size > 0, squadSize))[0]];
   });
 
-  const maxEconomicValue = Math.max(
+  const maxDropPrice = Math.max(
     0,
-    ...selected.map((option) => option.economicValue ?? Number.NEGATIVE_INFINITY),
+    ...selected.map((option) => option.highestDrop?.price ?? Number.NEGATIVE_INFINITY),
   );
   return selected
-    .map(({ economicValue, priorityChancePercent, ...option }) => ({
+    .sort((left, right) =>
+      (priorityRewards.size > 0 ? right.priorityChancePercent - left.priorityChancePercent : 0)
+      || dropPrice(right) - dropPrice(left)
+      || dropChoiceChance(right, squadSize) - dropChoiceChance(left, squadSize)
+      || left.displayName.localeCompare(right.displayName, "ru-RU")
+    )
+    .map(({ priorityChancePercent, ...option }) => ({
       ...option,
       priorityScore: priorityRewards.size > 0 && priorityChancePercent > 0
         ? Math.round(priorityChancePercent)
-        : economicValue !== null && economicValue > 0 && maxEconomicValue > 0
-          ? Math.round(economicValue / maxEconomicValue * 100)
+        : option.highestDrop && maxDropPrice > 0
+          ? Math.round(option.highestDrop.price / maxDropPrice * 100)
           : 0,
-    }))
-    .sort((left, right) =>
-      nullableOpportunity(squadSize > 1 ? right.squadExpectedPlatinum : right.expectedPlatinum)
-        - nullableOpportunity(squadSize > 1 ? left.squadExpectedPlatinum : left.expectedPlatinum)
-      || left.displayName.localeCompare(right.displayName, "ru-RU")
-    );
+    }));
 }
 
 function relicOpeningOptions(
   group: RelicInsightRow[],
-  completionByReward: Map<string, Array<{ setSlug: string; displayName: string; premium: number }>>,
+  completionByReward: Map<string, Array<{ setSlug: string; displayName: string }>>,
   progressRewards: Set<string>,
   availableTraces: number | null | undefined,
-  tracePlatinumValue: number,
-  squadSize: number,
   priorityRewards: ReadonlySet<string>,
 ): RelicOpeningOption[] {
   const representative = group[0];
@@ -446,25 +429,31 @@ function relicOpeningOptions(
             targetRefinement,
           ),
     }));
-    let grossExpectedPlatinum = 0;
     let pricedChancePercent = 0;
     let totalChancePercent = 0;
     let completionChancePercent = 0;
     let progressChancePercent = 0;
     let priorityChancePercent = 0;
-    let expectedSetPremium = 0;
-    const pricedOutcomes: Array<{ value: number; probability: number }> = [];
-    const economicOutcomes: Array<{ value: number; probability: number }> = [];
+    let highestDrop: RelicOpeningRecommendation["highestDrop"] = null;
+    let unpricedRewards = false;
     const completionTargets: RelicSetCompletionTarget[] = [];
 
     for (const reward of rewards) {
       const chancePercent = clampPercent(reward.chancePercent);
       totalChancePercent += chancePercent;
       const price = credibleFairPrice(reward.recommendation);
-      let completionPremium = 0;
-      if (price !== null) {
-        grossExpectedPlatinum += chancePercent / 100 * price;
+      if (price !== null && chancePercent > 0) {
         pricedChancePercent += chancePercent;
+        if (!highestDrop || price > highestDrop.price || (price === highestDrop.price && chancePercent > highestDrop.chancePercent)) {
+          highestDrop = {
+            rewardSlug: reward.definition.rewardSlug ?? reward.definition.rewardGameRef,
+            displayName: reward.displayName,
+            price,
+            chancePercent,
+          };
+        }
+      } else if (chancePercent > 0) {
+        unpricedRewards = true;
       }
       const rewardSlug = reward.definition.rewardSlug;
       if (!rewardSlug) continue;
@@ -473,8 +462,6 @@ function relicOpeningOptions(
       const targets = completionByReward.get(rewardSlug) ?? [];
       if (targets.length > 0) {
         completionChancePercent += chancePercent;
-        completionPremium = Math.max(...targets.map((target) => target.premium));
-        expectedSetPremium += chancePercent / 100 * completionPremium;
         for (const target of targets) {
           completionTargets.push({
             setSlug: target.setSlug,
@@ -483,30 +470,11 @@ function relicOpeningOptions(
           });
         }
       }
-      if (price !== null) {
-        pricedOutcomes.push({ value: price, probability: chancePercent / 100 });
-        economicOutcomes.push({ value: price + completionPremium, probability: chancePercent / 100 });
-      }
     }
 
-    const hasCompletePricing = totalChancePercent >= COMPLETE_RELIC_PRICE_COVERAGE
-      && totalChancePercent <= MAX_COMPLETE_RELIC_CHANCE
-      && totalChancePercent - pricedChancePercent <= RELIC_CHANCE_TOLERANCE;
-    const coveredGrossExpectedPlatinum = hasCompletePricing ? grossExpectedPlatinum : null;
-    const squadGrossExpectedPlatinum = hasCompletePricing
-      ? expectedBestOf(pricedOutcomes, squadSize)
-      : null;
-    const soloEconomicGross = hasCompletePricing ? grossExpectedPlatinum + expectedSetPremium : null;
-    const squadEconomicGross = hasCompletePricing ? expectedBestOf(economicOutcomes, squadSize) : null;
-    const relicOpportunityCost = credibleFairPrice(source.relicRecommendation);
-    const traceOpportunityCost = traceCost * tracePlatinumValue;
-    const expectedPlatinum = soloEconomicGross !== null && relicOpportunityCost !== null
-      ? soloEconomicGross - relicOpportunityCost - traceOpportunityCost
-      : null;
-    const squadExpectedPlatinum = squadEconomicGross !== null && relicOpportunityCost !== null
-      ? squadEconomicGross - relicOpportunityCost - traceOpportunityCost
-      : null;
-    const economicValue = squadSize > 1 ? squadExpectedPlatinum : expectedPlatinum;
+    // Не выдаём ошибочную таблицу шансов за достоверный список наград.
+    const validChances = totalChancePercent >= MIN_COMPLETE_RELIC_CHANCE
+      && totalChancePercent <= MAX_COMPLETE_RELIC_CHANCE;
     return [{
       relicSlug: representative.definition.relicSlug,
       displayName: representative.displayName,
@@ -516,52 +484,34 @@ function relicOpeningOptions(
       sourceRefinement: source.definition.refinement,
       recommendedRefinement: targetRefinement,
       traceCost,
-      grossExpectedPlatinum: coveredGrossExpectedPlatinum,
-      squadGrossExpectedPlatinum,
-      relicOpportunityCost,
-      traceOpportunityCost,
-      expectedPlatinum,
-      squadExpectedPlatinum,
+      highestDrop: validChances ? highestDrop : null,
+      unpricedRewards,
       pricedChancePercent: clampPercent(pricedChancePercent),
       completionChancePercent: clampPercent(completionChancePercent),
       progressChancePercent: clampPercent(progressChancePercent),
       priorityChancePercent: clampPercent(priorityChancePercent),
       completionTargets,
-      economicValue,
     }];
   });
   return candidates;
 }
 
-function compareOpeningOptions(left: RelicOpeningOption, right: RelicOpeningOption, preferRewards: boolean): number {
+function dropPrice(option: Pick<RelicOpeningRecommendation, "highestDrop">): number {
+  return option.highestDrop?.price ?? -1;
+}
+
+function dropChoiceChance(option: Pick<RelicOpeningRecommendation, "highestDrop">, squadSize: number): number {
+  const chance = (option.highestDrop?.chancePercent ?? 0) / 100;
+  return 100 * (1 - (1 - chance) ** squadSize);
+}
+
+function compareOpeningOptions(left: RelicOpeningOption, right: RelicOpeningOption, preferRewards: boolean, squadSize: number): number {
   return (preferRewards ? right.priorityChancePercent - left.priorityChancePercent : 0)
-    || nullableOpportunity(right.economicValue) - nullableOpportunity(left.economicValue)
+    || dropPrice(right) - dropPrice(left)
+    || dropChoiceChance(right, squadSize) - dropChoiceChance(left, squadSize)
     || left.traceCost - right.traceCost
     || right.completionChancePercent - left.completionChancePercent
     || refinementIndex(left.recommendedRefinement) - refinementIndex(right.recommendedRefinement);
-}
-
-function expectedBestOf(
-  outcomes: Array<{ value: number; probability: number }>,
-  squadSize: number,
-): number {
-  const totalProbability = outcomes.reduce((sum, outcome) => sum + outcome.probability, 0);
-  if (!(totalProbability > 0)) return 0;
-  const scale = totalProbability > 1 ? 1 / totalProbability : 1;
-  const grouped = new Map<number, number>();
-  for (const outcome of outcomes) {
-    grouped.set(outcome.value, (grouped.get(outcome.value) ?? 0) + outcome.probability * scale);
-  }
-  const coveredProbability = Math.min(1, totalProbability * scale);
-  if (coveredProbability < 1) grouped.set(0, 1 - coveredProbability);
-  let cumulative = 0;
-  let expected = 0;
-  for (const [value, probability] of [...grouped.entries()].sort((left, right) => left[0] - right[0])) {
-    const next = Math.min(1, cumulative + probability);
-    expected += value * (next ** squadSize - cumulative ** squadSize);
-    cumulative = next;
-  }
-  return expected;
 }
 
 function credibleFairPrice(recommendation: PriceRecommendation | null | undefined): number | null {
@@ -733,24 +683,23 @@ export function selectBestOverviewReadySet(rows: readonly SetInsightRow[]): SetI
     .sort(compareReadySetRows)[0] ?? null;
 }
 
-/** Выбирает реликвию только при конечной положительной выгоде выбранного сценария. */
+/** Выбирает реликвию по цене самой дорогой награды и шансу её увидеть. */
 export function selectBestOverviewRelic(
   recommendations: readonly RelicOpeningRecommendation[],
   scenario: RelicOverviewScenario,
 ): RelicOpeningRecommendation | null {
-  const value = (recommendation: RelicOpeningRecommendation): number | null => {
-    const candidate = scenario === "solo"
-      ? recommendation.expectedPlatinum
-      : recommendation.squadExpectedPlatinum;
-    return candidate !== null && Number.isFinite(candidate) && candidate > 0 ? candidate : null;
-  };
+  const squadSize = scenario === "solo" ? 1 : 4;
   return recommendations.reduce<RelicOpeningRecommendation | null>((best, recommendation) => {
-    const candidateValue = value(recommendation);
-    if (candidateValue === null) return best;
+    const candidateValue = dropPrice(recommendation);
+    if (!Number.isFinite(candidateValue) || candidateValue <= 0) return best;
     if (best === null) return recommendation;
-    const bestValue = value(best);
-    if (bestValue === null || candidateValue > bestValue) return recommendation;
+    const bestValue = dropPrice(best);
+    if (candidateValue > bestValue) return recommendation;
     if (candidateValue < bestValue) return best;
+    const candidateChance = dropChoiceChance(recommendation, squadSize);
+    const bestChance = dropChoiceChance(best, squadSize);
+    if (candidateChance > bestChance) return recommendation;
+    if (candidateChance < bestChance) return best;
     if (recommendation.priorityScore > best.priorityScore) return recommendation;
     if (recommendation.priorityScore < best.priorityScore) return best;
     return recommendation.displayName.localeCompare(best.displayName, "ru-RU") < 0 ? recommendation : best;

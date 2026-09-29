@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { filterRelicChoices, knownRewardPrice, relicNet, relicProgressSets, rewardChoiceChance, selectedRelicRewards } from "./relicBrowser";
+import { filterRelicChoices, knownRewardPrice, relicProgressSets, rewardChoiceChance, selectedRelicRewards } from "./relicBrowser";
 import { rankRelicsToOpen, type RelicInsightRow, type SetInsightRow } from "./insights";
 import type { PriceRecommendation } from "./market";
 
@@ -20,14 +20,14 @@ describe("выбор реликвии",()=>{
     for(const query of ["лит n1","lith n1","НИКС система","Nyx Systems"]) expect(filterRelicChoices(ranked,[source],query,"value","solo")).toHaveLength(1);
     expect(filterRelicChoices(ranked,[source],"не существует","value","solo")).toEqual([]);
   });
-  it("сортирует по выбранному сценарию и оставляет неизвестную оценку последней",()=>{
+  it("сортирует по цене самого дорогого дропа, затем по шансу и оставляет неизвестную цену последней",()=>{
     const base=rankRelicsToOpen([relic()],[],{availableTraces:0,squadSize:1})[0];
-    const a={...base,relicSlug:"a",displayName:"A",expectedPlatinum:10,squadExpectedPlatinum:5};
-    const b={...base,relicSlug:"b",displayName:"B",expectedPlatinum:5,squadExpectedPlatinum:20};
-    const c={...base,relicSlug:"c",displayName:"C",expectedPlatinum:null,squadExpectedPlatinum:null};
-    expect(filterRelicChoices([c,b,a],[],"","value","solo")).toEqual([a,b,c]);
-    expect(filterRelicChoices([c,b,a],[],"","value","matching_squad")).toEqual([b,a,c]);
-    expect(relicNet(c,"solo")).toBeNull();
+    const a={...base,relicSlug:"a",displayName:"A",highestDrop:{rewardSlug:"a",displayName:"A",price:100,chancePercent:2}};
+    const b={...base,relicSlug:"b",displayName:"B",highestDrop:{rewardSlug:"b",displayName:"B",price:80,chancePercent:25}};
+    const tied={...base,relicSlug:"tied",displayName:"Tied",highestDrop:{rewardSlug:"tied",displayName:"Tied",price:100,chancePercent:10}};
+    const c={...base,relicSlug:"c",displayName:"C",highestDrop:null,unpricedRewards:true};
+    for(const scenario of ["solo","matching_squad"] as const)
+      expect(filterRelicChoices([c,b,a,tied],[],"","value",scenario)).toEqual([tied,a,b,c]);
   });
   it("сортирует по нужным деталям и количеству отдельно от цены",()=>{
     const base=rankRelicsToOpen([relic()],[],{availableTraces:0,squadSize:1})[0];

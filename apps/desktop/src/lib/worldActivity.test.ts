@@ -226,16 +226,20 @@ describe("мои реликвии и активные разломы", () => {
     expect(selectFissureMatches(world, insights, null, [], now)).toEqual([]);
   });
 
-  it("ставит недостающую деталь цели выше платины и учитывает улучшение реликвии", () => {
+  it("ставит недостающую деталь цели выше цены дропа и не учитывает цену самой реликвии", () => {
     const world = fixture(); world.fissures = [fissure("axi", "Axi", "Defense")];
     const goalRelic = ownedRelic("axi_goal_relic", "blade", 100);
     const cashRelic = ownedRelic("axi_cash_relic", "other", 1000);
+    cashRelic.relicRecommendation = reliablePrice("axi_cash_relic", 5000);
     const insights = insightView([goalRelic, cashRelic]);
     const rules = [DEFAULT_FISSURE_RULE];
     const goals = personalView(goalRelic);
     expect(selectFissureMatches(world, insights, goals, rules, now)[0]).toMatchObject({
       relic: { relicSlug: "axi_goal_relic" }, goalChancePercent: 2, goalNames: ["Моя цель"] });
     expect(selectFissureMatches(world, insights, null, rules, now)[0].relic.relicSlug).toBe("axi_cash_relic");
+    expect(selectFissureMatches(world, insights, null, rules, now)[0].relic.highestDrop).toMatchObject({
+      rewardSlug: "other", price: 1000, chancePercent: 2,
+    });
     const refined = selectFissureMatches(world, insightView([goalRelic], 100), goals, rules, now)[0];
     expect(refined.relic.recommendedRefinement).toBe("radiant");
     expect(refined.goalChancePercent).toBe(10);

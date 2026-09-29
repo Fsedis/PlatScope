@@ -18,8 +18,6 @@ export interface FissureMatch {
   /** Шанс получить хотя бы одну недостающую деталь сохранённой цели за одно открытие. */
   goalChancePercent: number;
   goalNames: string[];
-  /** Чистая оценка одиночного открытия; null означает недостаточно надёжных цен. */
-  expectedPlatinum: number | null;
 }
 
 function relicEra(slug: string): RelicEra | null {
@@ -82,9 +80,8 @@ function personalChance(
   return { goalChancePercent: Math.min(100, chance), goalNames: [...names] };
 }
 
-function economicValue(relic: RelicOpeningRecommendation): number {
-  const value = relic.expectedPlatinum;
-  return value !== null && Number.isFinite(value) ? value : Number.NEGATIVE_INFINITY;
+function highestDropPrice(relic: RelicOpeningRecommendation): number {
+  return relic.highestDrop?.price ?? -1;
 }
 
 /** Рейтинг меняется только при обновлении инвентаря, цен или личных целей. */
@@ -104,7 +101,8 @@ export function prepareFissureRelics(
     const era = relicEra(relic.relicSlug);
     return era ? [{ era, relic, ...personalChance(relic, goals, needs) }] : [];
   }).sort((left, right) => right.goalChancePercent - left.goalChancePercent
-    || economicValue(right.relic) - economicValue(left.relic)
+    || highestDropPrice(right.relic) - highestDropPrice(left.relic)
+    || (right.relic.highestDrop?.chancePercent ?? 0) - (left.relic.highestDrop?.chancePercent ?? 0)
     || left.relic.displayName.localeCompare(right.relic.displayName, "ru-RU"));
 }
 
@@ -128,7 +126,6 @@ export function selectFissureMatches(
       relic: best.relic,
       goalChancePercent: best.goalChancePercent,
       goalNames: best.goalNames,
-      expectedPlatinum: best.relic.expectedPlatinum,
     }] : [];
   }).sort((left, right) => Date.parse(left.fissure.expiry) - Date.parse(right.fissure.expiry));
 }
