@@ -622,8 +622,8 @@ mod tests {
     #[test]
     fn bundled_pack_is_signed_complete_and_keeps_old_profiles() {
         let pack = ProfilePack::bundled().unwrap();
-        assert_eq!(pack.revision, 3);
-        assert_eq!(pack.profiles.len(), 3);
+        assert_eq!(pack.revision, 5);
+        assert_eq!(pack.profiles.len(), 4);
         let old = Profile::legacy(0x1000);
         assert_eq!(old.address(0x28a4888).unwrap(), 0x1000 + 0x28a4888);
         assert!(old.address(0x28a4889).is_err());
@@ -645,18 +645,18 @@ mod tests {
     fn only_signed_newer_complete_pack_is_cached() {
         let directory = tempfile::tempdir().unwrap();
         let bundled = ProfilePack::latest_cached(directory.path()).unwrap();
-        assert_eq!(bundled.revision, 3);
+        assert_eq!(bundled.revision, 5);
         let current = include_bytes!("profiles/current-v2.json");
         let signature = include_bytes!("profiles/current-v2.json.sig");
         let installed = ProfilePack::install_signed(directory.path(), current, signature)
             .unwrap()
             .unwrap();
-        assert_eq!(installed.revision, 4);
+        assert_eq!(installed.revision, 6);
         assert_eq!(
             ProfilePack::latest_cached(directory.path())
                 .unwrap()
                 .revision,
-            4
+            6
         );
         assert!(
             ProfilePack::install_signed(directory.path(), current, signature)
@@ -670,7 +670,7 @@ mod tests {
             ProfilePack::latest_cached(directory.path())
                 .unwrap()
                 .revision,
-            4
+            6
         );
     }
 
@@ -754,8 +754,8 @@ mod tests {
                 .trim()
         );
         let pack = ProfilePack::from_signed(&payload, envelope.signature.as_bytes()).unwrap();
-        assert_eq!(pack.revision, 4);
-        assert_eq!(pack.profiles.len(), 3);
+        assert_eq!(pack.revision, 6);
+        assert_eq!(pack.profiles.len(), 4);
     }
 
     #[test]
@@ -771,7 +771,7 @@ mod tests {
                 .trim()
         );
         let pack = ProfilePack::from_signed(&payload, envelope.signature.as_bytes()).unwrap();
-        assert_eq!(pack.revision, 2);
+        assert_eq!(pack.revision, 3);
         assert!(
             pack.profiles
                 .iter()

@@ -314,7 +314,15 @@ impl Names {
     fn localize_part(&self, part: &mut Part) {
         // Картинки добавляются к представлению: сохранённый снимок от них не зависит.
         part.image_url = self.0.lookup_image(&part.path).map(str::to_owned);
-        crate::localize_component_image_url(&mut part.image_url);
+        if let Some(local_url) = part
+            .image_url
+            .as_deref()
+            .and_then(crate::market_thumb_protocol_url)
+        {
+            part.image_url = Some(local_url);
+        } else {
+            crate::localize_component_image_url(&mut part.image_url);
+        }
         let translated = self.part(&part.path);
         if !translated.name.is_empty()
             && (translated.name != translated.name_en

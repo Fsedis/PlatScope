@@ -96,6 +96,7 @@ const REWARD_LOG_DEBOUNCE: Duration = Duration::from_secs(8);
 const REWARD_LOG_READ_LIMIT: u64 = 256 * 1024;
 const REWARD_OVERLAY_VISIBLE_FOR: Duration = Duration::from_secs(18);
 const WFCD_IMAGE_BASE_URL: &str = "https://cdn.warframestat.us/img/";
+const MARKET_THUMB_BASE_URL: &str = "https://warframe.market/static/assets/items/images/";
 const COMPONENT_IMAGE_PROTOCOL: &str = "component-image";
 const COMPONENT_IMAGE_CACHE_DIRECTORY: &str = "component-images";
 const MAX_COMPONENT_IMAGE_BYTES: usize = 1024 * 1024;
@@ -2825,15 +2826,33 @@ fn reward_market_image_url(thumb: &str) -> String {
 
 fn component_image_file_name(remote_url: &str) -> Option<&str> {
     let file_name = remote_url.strip_prefix(WFCD_IMAGE_BASE_URL)?;
-    let valid = !file_name.is_empty()
+    valid_image_file_name(file_name, "png").then_some(file_name)
+}
+
+fn valid_image_file_name(file_name: &str, extension: &str) -> bool {
+    !file_name.is_empty()
         && file_name.len() <= 128
         && Path::new(file_name)
             .extension()
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("png"))
+            .is_some_and(|actual| actual.eq_ignore_ascii_case(extension))
         && file_name
             .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'));
-    valid.then_some(file_name)
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
+fn market_thumb_parts(remote_url: &str) -> Option<(&str, &str)> {
+    let path = remote_url.strip_prefix(MARKET_THUMB_BASE_URL)?;
+    let (locale, file_name) = path.split_once("/thumbs/")?;
+    (matches!(locale, "en" | "ru")
+        && (valid_image_file_name(file_name, "png") || valid_image_file_name(file_name, "webp")))
+    .then_some((locale, file_name))
+}
+
+fn market_thumb_protocol_url(remote_url: &str) -> Option<String> {
+    let (locale, file_name) = market_thumb_parts(remote_url)?;
+    Some(format!(
+        "http://{COMPONENT_IMAGE_PROTOCOL}.localhost/market/{locale}/{file_name}"
+    ))
 }
 
 fn component_image_protocol_url(remote_url: &str) -> Option<String> {
@@ -2951,20 +2970,45 @@ fn component_image_response(
     cache_directory: &Path,
     request_path: &str,
 ) -> tauri::http::Response<Vec<u8>> {
-    let file_name = request_path.trim_start_matches('/');
-    if component_image_file_name(&format!("{WFCD_IMAGE_BASE_URL}{file_name}")) != Some(file_name) {
+    let path = request_path.trim_start_matches('/');
+    let image = if let Some(market_path) = path.strip_prefix("market/") {
+        market_path.split_once('/').and_then(|(locale, file_name)| {
+            let remote_url = format!("{MARKET_THUMB_BASE_URL}{locale}/thumbs/{file_name}");
+            market_thumb_parts(&remote_url)?;
+            let cache_name = format!("market-{locale}-{file_name}");
+            let content_type = if file_name.to_ascii_lowercase().ends_with(".webp") {
+                "image/webp"
+            } else {
+                "image/png"
+            };
+            Some((remote_url, cache_name, content_type))
+        })
+    } else {
+        component_image_file_name(&format!("{WFCD_IMAGE_BASE_URL}{path}"))
+            .filter(|file_name| *file_name == path)
+            .map(|file_name| {
+                (
+                    format!("{WFCD_IMAGE_BASE_URL}{file_name}"),
+                    file_name.to_owned(),
+                    "image/png",
+                )
+            })
+    };
+    let Some((remote_url, cache_name, content_type)) = image else {
         return component_image_http_response(
             tauri::http::StatusCode::BAD_REQUEST,
             b"invalid component image".to_vec(),
             "text/plain; charset=utf-8",
         );
-    }
-    match load_component_image(cache_directory, file_name) {
-        Ok(image) => component_image_http_response(tauri::http::StatusCode::OK, image, "image/png"),
+    };
+    match load_component_image(cache_directory, &cache_name, &remote_url, content_type) {
+        Ok(image) => {
+            component_image_http_response(tauri::http::StatusCode::OK, image, content_type)
+        }
         Err(error) => {
             tracing::warn!(
                 event = "component_image_load_failed",
-                file_name,
+                file_name = cache_name,
                 error = %error,
                 "component image could not be loaded"
             );
@@ -2988,9 +3032,14 @@ fn component_image_http_response(
         tauri::http::header::CONTENT_TYPE,
         tauri::http::HeaderValue::from_static(content_type),
     );
+    let cache_control = if status.is_success() {
+        "public, max-age=604800, immutable"
+    } else {
+        "no-store"
+    };
     response.headers_mut().insert(
         tauri::http::header::CACHE_CONTROL,
-        tauri::http::HeaderValue::from_static("public, max-age=604800, immutable"),
+        tauri::http::HeaderValue::from_static(cache_control),
     );
     response
 }
@@ -3026,11 +3075,16 @@ fn serve_component_image_protocol(
     });
 }
 
-fn load_component_image(cache_directory: &Path, file_name: &str) -> Result<Vec<u8>, String> {
+fn load_component_image(
+    cache_directory: &Path,
+    file_name: &str,
+    remote_url: &str,
+    content_type: &str,
+) -> Result<Vec<u8>, String> {
     fs::create_dir_all(cache_directory).map_err(|error| error.to_string())?;
     let cache_file = cache_directory.join(file_name);
     if let Ok(cached) = fs::read(&cache_file)
-        && valid_component_png(&cached)
+        && valid_component_image(&cached, content_type)
     {
         return Ok(cached);
     }
@@ -3042,7 +3096,7 @@ fn load_component_image(cache_directory: &Path, file_name: &str) -> Result<Vec<u
         .build()
         .map_err(|error| error.to_string())?;
     let response = client
-        .get(format!("{WFCD_IMAGE_BASE_URL}{file_name}"))
+        .get(remote_url)
         .send()
         .map_err(|error| error.to_string())?
         .error_for_status()
@@ -3057,8 +3111,8 @@ fn load_component_image(cache_directory: &Path, file_name: &str) -> Result<Vec<u
         .bytes()
         .map_err(|error| error.to_string())?
         .to_vec();
-    if !valid_component_png(&image) {
-        return Err("component image is not a valid bounded PNG".to_owned());
+    if !valid_component_image(&image, content_type) {
+        return Err("component image has an invalid format or size".to_owned());
     }
 
     let nonce = COMPONENT_IMAGE_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -3072,6 +3126,21 @@ fn load_component_image(cache_directory: &Path, file_name: &str) -> Result<Vec<u
 fn valid_component_png(image: &[u8]) -> bool {
     image.len() <= MAX_COMPONENT_IMAGE_BYTES
         && image.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A])
+}
+
+fn valid_component_image(image: &[u8], content_type: &str) -> bool {
+    match content_type {
+        "image/png" => valid_component_png(image),
+        "image/webp" => {
+            image.len() >= 12
+                && image.len() <= MAX_COMPONENT_IMAGE_BYTES
+                && image.starts_with(b"RIFF")
+                && image[8..12] == *b"WEBP"
+                && u32::from_le_bytes([image[4], image[5], image[6], image[7]]) as usize + 8
+                    == image.len()
+        }
+        _ => false,
+    }
 }
 
 fn find_reward_ocr_executable(app: &AppHandle) -> Result<PathBuf, String> {
@@ -4746,13 +4815,36 @@ mod tests {
         assert!(
             component_image_protocol_url("https://cdn.warframestat.us/img/../secret.png").is_none()
         );
+        let market = "https://warframe.market/static/assets/items/images/en/thumbs/intensify.123.128x128.webp";
+        assert_eq!(
+            market_thumb_protocol_url(market).as_deref(),
+            Some("http://component-image.localhost/market/en/intensify.123.128x128.webp")
+        );
+        assert!(
+            market_thumb_protocol_url("https://evil.example/items/images/en/thumbs/mod.webp")
+                .is_none()
+        );
+        assert!(
+            market_thumb_protocol_url(
+                "https://warframe.market/static/assets/items/images/en/thumbs/../mod.webp"
+            )
+            .is_none()
+        );
 
         let invalid = component_image_response(Path::new("unused"), "/../secret.png");
         assert_eq!(invalid.status(), tauri::http::StatusCode::BAD_REQUEST);
+        let invalid_market =
+            component_image_response(Path::new("unused"), "/market/en/../mod.webp");
+        assert_eq!(
+            invalid_market.status(),
+            tauri::http::StatusCode::BAD_REQUEST
+        );
         assert!(valid_component_png(&[
             0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A
         ]));
         assert!(!valid_component_png(b"not a png"));
+        assert!(valid_component_image(b"RIFF\x04\0\0\0WEBP", "image/webp"));
+        assert!(!valid_component_image(b"RIFF\x05\0\0\0WEBP", "image/webp"));
     }
 
     #[test]
