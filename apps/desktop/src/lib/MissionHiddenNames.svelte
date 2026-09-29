@@ -10,15 +10,15 @@
 <details class="hidden-names">
   <summary>Скрытые <span>{names.length}</span></summary>
   {#if names.length}
-    <p>Скрыто на этой карте: {count}. Все экземпляры с этими названиями убраны с карты и из списка.</p>
+    <p>Скрыто объектов: {count}</p>
     <ul>
       {#each names as name}
         <li><div><strong>{hiddenMissionNameLabel(name)}</strong>{#if name.nameEn && name.nameEn !== hiddenMissionNameLabel(name)}<small>{name.nameEn}</small>{/if}</div><button {disabled} aria-label={`Вернуть на карту: ${hiddenMissionNameLabel(name)}`} onclick={() => onrestore(name)}>Вернуть</button></li>
       {/each}
     </ul>
     {#if names.length > 1}<button class="restore-all" {disabled} onclick={onrestoreall}>Вернуть все</button>{/if}
-    <p>После возврата действуют включённые фильтры карты.</p>
-  {:else}<p>Нажмите «Скрыть» рядом с ненужным предметом. Здесь можно будет вернуть его и все экземпляры с таким названием.</p>{/if}
+
+  {/if}
 </details>
 
 <style>

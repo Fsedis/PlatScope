@@ -353,6 +353,49 @@ pub struct MasteryItemDefinition {
     pub max_rank: Option<u8>,
 }
 
+/// Подтверждённый рецепт кузницы; наличие цены само по себе не определяет магазин.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CraftingRecipeDefinition {
+    pub result_game_ref: String,
+    pub blueprint_game_ref: String,
+    pub blueprint_consumed: bool,
+    pub blueprint_source: BlueprintSource,
+    pub blueprint_price: Option<u64>,
+    pub mastery_requirement: Option<u8>,
+    pub build_price: u64,
+    pub build_time_seconds: u64,
+    pub ingredients: Vec<CraftingIngredientDefinition>,
+    pub blueprint_drops: Vec<CraftingDropSource>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BlueprintSource {
+    Market,
+    Dojo,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CraftingIngredientDefinition {
+    pub game_ref: String,
+    pub display_name_en: String,
+    pub display_name_ru: Option<String>,
+    pub image_url: Option<String>,
+    pub quantity: u32,
+    pub equipment: bool,
+    pub drops: Vec<CraftingDropSource>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CraftingDropSource {
+    pub location: String,
+    pub chance_percent: f64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GameItemLocalization {
@@ -443,6 +486,8 @@ pub struct GameMetadataSnapshot {
     pub item_definitions: Vec<GameItemDefinition>,
     #[serde(default)]
     pub mastery_items: Vec<MasteryItemDefinition>,
+    #[serde(default)]
+    pub crafting_recipes: Vec<CraftingRecipeDefinition>,
     #[serde(default)]
     pub item_localizations: Vec<GameItemLocalization>,
     #[serde(default)]

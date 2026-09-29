@@ -817,7 +817,7 @@
 
 <section class="sales-workspace" aria-labelledby="sales-heading">
   <header class="sales-header">
-    <div><h2 id="sales-heading" class:sr-only={view === "orders"}>{view === "history" ? "История сделок" : "Мои объявления"}</h2><p>{view === "history" ? "Обмены из игры и ваши торговые партнёры." : "Выберите объявление, чтобы сравнить цены и изменить его."}</p></div>
+    <div><h2 id="sales-heading" class:sr-only={view === "orders"}>{view === "history" ? "История сделок" : "Мои объявления"}</h2></div>
     {#if account?.connected}<div class="sales-header__actions"><MarketPresence disabled={accountBusy || applying} verified={account.profile?.verification ?? false} /><button class="secondary account-button" aria-expanded={accountPanelOpen} onclick={() => accountPanelOpen = !accountPanelOpen}><span translate="no">{account.profile?.ingameName ?? "Warframe Market"}</span></button>{#if view === "orders" && rows.length}<button onclick={orderType === "buy" ? onBrowseMarket : onOpenInventory}>{orderType === "buy" ? "Создать заявку на покупку" : "Выставить предмет"}</button>{/if}</div>{/if}
   </header>
   {#if errorMessage}<div class="inline-error" role="alert"><span>{errorMessage}</span>{#if !applying}<button class="secondary" onclick={() => loadAll()} disabled={loading}>Повторить загрузку</button>{/if}</div>{/if}
@@ -826,10 +826,10 @@
   {#if view === "history"}
     <MarketTradeHistory {events} {account} salesSummary={summaryUnavailable ? null : tradeSales} unavailable={historyUnavailable} busy={applying} onRetry={retryTrade} onIgnore={ignoreTrade} onRestore={restoreTradeEvent} onUndo={confirmUndo} onReload={() => loadEvents()} />
   {:else if loading && !account}
-    <section class="sales-empty" role="status"><h3>Загружаем объявления…</h3><p>Сверяем остатки и последние сделки.</p><div class="skeleton"></div><div class="skeleton"></div></section>
-  {:else if !account && errorMessage}<section class="sales-empty"><h3>Объявления пока недоступны</h3><p>Повторите загрузку или воспользуйтесь поиском предметов.</p><button class="secondary" onclick={onBrowseMarket}>Найти предмет</button></section>
+    <section class="sales-empty" role="status"><h3>Загружаем объявления…</h3><div class="skeleton"></div><div class="skeleton"></div></section>
+  {:else if !account && errorMessage}<section class="sales-empty"><h3>Объявления пока недоступны</h3><button class="secondary" onclick={onBrowseMarket}>Найти предмет</button></section>
   {:else if !account?.connected}
-    <section class="welcome"><div><p class="eyebrow">Ваши продажи в одном месте</p><h3>Подключите Warframe Market</h3><p>Здесь появятся ваши объявления, подсказки по ценам и количество доступных копий.</p><ul><li>Сравнивайте свою цену с предложениями рынка.</li><li>Меняйте цену, количество и показ объявления.</li><li>Следите за сделками, подтверждёнными игрой.</li></ul><button class="text-button" onclick={onBrowseMarket}>Посмотреть цены без подключения →</button></div>
+    <section class="welcome"><div><h3>Подключите Warframe Market</h3><button class="text-button" onclick={onBrowseMarket}>Посмотреть цены без подключения →</button></div>
       <form class="connect-panel" onsubmit={connectAccount}><label for="market-wfm-email">Email Warframe Market<input id="market-wfm-email" type="email" name="username" autocomplete="username" spellcheck="false" bind:value={email} required maxlength="128" placeholder="name@example.com" /></label><label for="market-wfm-password">Пароль Warframe Market<input id="market-wfm-password" type="password" name="password" autocomplete="current-password" bind:value={password} required maxlength="128" /></label><button type="submit" disabled={accountBusy}>{accountBusy ? "Подключаем…" : "Подключить аккаунт"}</button><details class="security-details"><summary>Как хранятся данные входа</summary><p>Пароль не сохраняется. Ключ сессии хранится в защищённом хранилище Windows.</p></details></form>
     </section>
   {:else}
@@ -849,8 +849,8 @@
       {#if liveProgress}<p class="status-line" role="status">{liveProgress}</p>{/if}{#if analyticsError}<p class="status-line" role="status">{analyticsError}</p>{/if}
       {#if visibleRows.length}
         <MarketOrderTable rows={visibleRows} {selectedIds} activeId={editingOrder?.id ?? null} inventoryKnown={!!inventory} busy={applying || reviewOpen} verified={!!account.profile?.verification} onToggle={toggleSelected} onSelectPage={selectPage} onActivate={beginManualEdit}/>
-      {:else if rows.length}<div class="sales-empty"><h3>Подходящих объявлений нет</h3><p>Измените название или отбор.</p><button class="secondary" onclick={() => {orderQuery="";orderFilter="all";}}>Показать все объявления</button></div>
-      {:else}<div class="sales-empty"><h3>{orderType === "sell" ? "Нет объявлений на продажу" : "Нет заявок на покупку"}</h3><p>{orderType === "sell" ? "Выберите предмет из инвентаря, чтобы выставить его на Warframe Market." : "Найдите предмет на рынке и разместите заявку с нужной ценой."}</p><button class="secondary" onclick={orderType === "sell" ? onOpenInventory : onBrowseMarket}>{orderType === "sell" ? "Выставить предмет" : "Найти предмет"}</button></div>{/if}
+      {:else if rows.length}<div class="sales-empty"><h3>Подходящих объявлений нет</h3><button class="secondary" onclick={() => {orderQuery="";orderFilter="all";}}>Показать все объявления</button></div>
+      {:else}<div class="sales-empty"><h3>{orderType === "sell" ? "Нет объявлений на продажу" : "Нет заявок на покупку"}</h3><button class="secondary" onclick={orderType === "sell" ? onOpenInventory : onBrowseMarket}>{orderType === "sell" ? "Выставить предмет" : "Найти предмет"}</button></div>{/if}
     </section>
     {#if editingOrder}
       <aside id="order-detail" class="order-detail" tabindex="-1" aria-labelledby="order-detail-heading">
@@ -880,7 +880,7 @@
       </aside>
     {/if}
     </div>
-    <div class="workspace-footnote"><span>Список обновляется раз в минуту. Выберите предмет для изменения объявления; отметьте флажками несколько для массовых действий.</span><details><summary>Как читать статистику</summary><p>Графики показывают последние 7 завершённых дней UTC. Процент сравнивает их с предыдущей неделей. «Объём / день» — средний объём закрытых сделок Warframe Market, не все обмены в игре. Пропуски данных остаются пропусками. Ориентир цены — за штуку; цена партии подписана отдельно.</p></details></div>
+    <div class="workspace-footnote"><details><summary>Как читать статистику</summary><p>Графики показывают последние 7 завершённых дней UTC. Процент сравнивает их с предыдущей неделей. «Объём / день» — средний объём закрытых сделок Warframe Market, не все обмены в игре. Пропуски данных остаются пропусками. Ориентир цены — за штуку; цена партии подписана отдельно.</p></details></div>
   {/if}
 </section>
 
@@ -908,7 +908,7 @@
   {#if errorMessage}<p class="inline-error" role="alert">{errorMessage}</p>{/if}{#if applyProgress}<p role="status">{applyProgress}</p>{/if}<div class="confirm-actions"><button disabled={applying} onclick={applyVisibility}>{applying ? "Отправляем…" : visibilityIntent ? "Показать объявления" : "Скрыть объявления"}</button><button class="secondary" disabled={applying} onclick={() => visibilityDialog.close()}>Отмена</button></div>
 </dialog>
 <dialog class="sales-dialog" bind:this={undoDialog} onclose={() => tradeToUndo = null} oncancel={event => { if (applying) event.preventDefault(); }} aria-labelledby="trade-undo-heading">
-  <h2 id="trade-undo-heading">Вернуть объявление к состоянию до сделки?</h2><p class="dialog-description">Используйте отмену, если предмет или количество были сопоставлены неправильно.</p>{#if tradeToUndo}<p>{soldItems(tradeToUndo)}</p>{/if}{#if errorMessage}<p class="inline-error" role="alert">{errorMessage}</p>{/if}<div class="confirm-actions"><button disabled={applying} onclick={() => tradeToUndo && undoTrade(tradeToUndo)}>Вернуть объявление</button><button class="secondary" disabled={applying} onclick={() => undoDialog.close()}>Отмена</button></div>
+  <h2 id="trade-undo-heading">Вернуть объявление к состоянию до сделки?</h2>{#if tradeToUndo}<p>{soldItems(tradeToUndo)}</p>{/if}{#if errorMessage}<p class="inline-error" role="alert">{errorMessage}</p>{/if}<div class="confirm-actions"><button disabled={applying} onclick={() => tradeToUndo && undoTrade(tradeToUndo)}>Вернуть объявление</button><button class="secondary" disabled={applying} onclick={() => undoDialog.close()}>Отмена</button></div>
 </dialog>
 
 <style>
@@ -916,15 +916,15 @@
   h2,h3,p,dd,dl { margin:0; } p { font-size:.8125rem; line-height:1.5; color:var(--text-muted); } h2 { font-size:1.15rem; } h3 { font-size:1rem; }
   button { min-height:2rem; font-size:.8125rem; } .text-button { background:none; border-color:transparent; color:var(--accent); box-shadow:none; }
   .sales-header,.sales-header__actions,.account-panel,.orders-heading,.orders-toolbar,.batch-bar,.confirm-actions,.dialog-heading,.pending-notice { display:flex; align-items:center; justify-content:space-between; gap:.6rem; }
-  .sales-header p { margin-top:.25rem; } .sales-header__actions,.confirm-actions { justify-content:flex-start; flex-wrap:wrap; }
+   .sales-header__actions,.confirm-actions { justify-content:flex-start; flex-wrap:wrap; }
   .account-button { display:flex; align-items:center; gap:.45rem; }
   .account-panel { padding:.75rem; border:1px solid var(--border); border-radius:.5rem; background:var(--surface-1); } .account-panel strong { font-size:.875rem; }
   .inline-error,.data-note { margin:0; border:1px solid var(--border); border-radius:.5rem; padding:.6rem .8rem; font-size:.8125rem; line-height:1.5; }
   .inline-error { display:flex; align-items:center; justify-content:space-between; gap:1rem; background:var(--danger-soft); color:var(--danger); border-color:var(--danger); } .data-note { background:var(--surface-2); }
-  .sales-empty { padding:1.5rem; border:1px solid var(--border); border-radius:.5rem; background:var(--surface-1); } .sales-empty p { margin:.5rem 0 .8rem; max-width:42rem; } .orders-panel .sales-empty { border:0; }
+  .sales-empty { padding:1.5rem; border:1px solid var(--border); border-radius:.5rem; background:var(--surface-1); }  .orders-panel .sales-empty { border:0; }
   .skeleton { height:2.5rem; border-radius:.3rem; background:var(--surface-2); margin-top:.5rem; }
   .welcome { display:grid; grid-template-columns:minmax(0,1fr) minmax(18rem,.75fr); gap:2rem; padding:1.5rem; border:1px solid var(--border); border-radius:.7rem; background:var(--surface-1); }
-  .welcome h3 { font-size:1.3rem; margin:.6rem 0; } .welcome ul { padding-left:1.2rem; font-size:.875rem; line-height:1.9; color:var(--text-muted); }
+  .welcome h3 { font-size:1.3rem; margin:.6rem 0; }
   .eyebrow { font-size:.75rem; letter-spacing:.08em; text-transform:uppercase; color:var(--text-subtle); font-weight:700; }
   .connect-panel { display:grid; align-content:start; gap:1rem; padding:1rem; border-radius:.5rem; background:var(--surface-2); }
   .connect-panel label,.order-editor__fields label { display:grid; gap:.4rem; font-size:.8125rem; font-weight:600; }
@@ -982,5 +982,5 @@
   @media(max-width:1350px) { .orders-layout { grid-template-columns:minmax(0,1fr) 21.5rem; gap:1rem; } .orders-toolbar { grid-template-columns:1fr 1fr; } .order-search { grid-column:1/-1; } }
   @media(max-width:1100px) { .welcome { grid-template-columns:1fr; gap:1rem; } .orders-layout { grid-template-columns:minmax(0,1fr); } .order-detail { display:none; position:static; max-height:none; overflow:visible; } .detail-open .order-detail { display:block; } .detail-open .orders-panel { display:none; } .detail-back { display:block; margin-bottom:1rem; } }
 
-  @media(max-width:750px) { .sales-header,.workspace-footnote { flex-wrap:wrap; } .sales-header p { max-width:25rem; } .sales-header__actions { flex-wrap:wrap; } }
+  @media(max-width:750px) { .sales-header,.workspace-footnote { flex-wrap:wrap; }  .sales-header__actions { flex-wrap:wrap; } }
 </style>

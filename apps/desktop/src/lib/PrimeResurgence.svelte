@@ -33,9 +33,9 @@
 
 <div class="resurgence-content">
   {#if !offers.length}
-    <p class="notice">Ассортимент этой ротации ещё не получен. Список появится после обновления источника.</p>
+    <p class="notice">Ассортимент ещё не получен.</p>
   {:else}
-  {#if incomplete}<p class="notice">Варзия передала неполный ассортимент. Ниже — подтверждённые товары.</p>{/if}
+  {#if incomplete}<p class="notice">Ассортимент получен не полностью.</p>{/if}
   {#if warframes.length}
     <section aria-label="Варфреймы текущей ротации">
       <h3>Варфреймы этой ротации</h3>
@@ -54,7 +54,7 @@
       </div>
     </section>
   {:else if !catalogAvailable}
-    <p class="notice">Справочник предметов ещё не загружен. Пока доступны названия из источника; состав реликвий появится после загрузки.
+    <p class="notice">Справочник предметов ещё не загружен.
       <button type="button" class="text-button" onclick={onOpenSettings}>Открыть настройки данных</button></p>
   {:else}<p class="notice">Пока не удалось определить варфреймов по полученному ассортименту.</p>{/if}
 
@@ -72,10 +72,8 @@
 
   <section id="rotation-relics" class="relic-section" aria-label="Реликвии текущей ротации">
     <div class="relic-heading"><div><h3 bind:this={relicHeading} tabindex="-1">{selected ? `Реликвии: ${selected.displayName}` : "Реликвии за Ая"} <span class="count">{relics.length}</span></h3>
-      <p>{selected ? "Показаны детали выбранного предмета." : equipment.length ? "Выберите предмет выше, чтобы найти его детали." : "Реликвии из текущего ассортимента Варзии."}</p>
-      <p class="relic-legend">В наличии — все уровни улучшения. Шанс — за одно открытие без улучшения.</p>
       {#if $resurgenceInventory.error}<p class="inventory-notice" role="status">Не удалось прочитать инвентарь. Количество появится после повторной проверки.</p>
-      {:else if !$resurgenceInventory.loading && !$resurgenceInventory.view}<p class="inventory-notice">Инвентарь ещё не загружен. Откройте «Мои предметы» и загрузите его из игры.</p>{/if}
+      {:else if !$resurgenceInventory.loading && !$resurgenceInventory.view}<p class="inventory-notice">Инвентарь ещё не загружен.</p>{/if}
       {#if selected?.masteryRef && selected.equipmentCategory !== "warframe"}<div class="selected-mastery"><MasteryBadge gameRef={selected.masteryRef} /></div>{/if}</div>
       {#if selected}<button type="button" class="secondary reset" onclick={resetSelection}>Вся ротация</button>{/if}</div>
     <div class="relic-grid" aria-live="polite">
@@ -86,9 +84,8 @@
           <header><div class="relic-name"><span class="relic-icon"><WorldActivityArtwork kind={relicArtwork(relic.relicSlug, relic.displayNameEn)} /></span><h4>{shortRelicName(relic.displayName)}</h4></div><span class="cost">{offerCost(relic, true)}</span></header>
           <p class="relic-owned" class:has-stock={owned !== null && owned > 0}>В наличии: <strong>{owned === null ? "—" : owned.toLocaleString("ru-RU")}</strong>{#if $resurgenceInventory.loading}<span> · проверяем…</span>{/if}</p>
           {#if rewards.length}<ul class="featured-rewards">{#each rewards as reward}<li><span>{reward.displayName}</span><b aria-label={`Шанс выпадения без улучшения: ${chance(reward.chancePercent)}`}>{chance(reward.chancePercent)}</b></li>{/each}</ul>
-          {:else if catalogAvailable}<p class="relic-hint">{relic.rewards.length ? "Другие награды — в составе реликвии." : "Состав реликвии ещё не загружен."}</p>{/if}
+          {:else if catalogAvailable && !relic.rewards.length}<p class="relic-hint">Состав реликвии ещё не загружен.</p>{/if}
           {#if relic.rewards.length}<details class="reward-details" name="rotation-rewards"><summary>Все награды и шансы</summary>
-            <p>Одно открытие, без улучшения. Выпадет одна награда из списка.</p>
             <ul>{#each relic.rewards as reward}<li><span>{reward.displayName}</span><b>{chance(reward.chancePercent)}</b></li>{/each}</ul>
           </details>{/if}
         </article>
@@ -98,7 +95,6 @@
 
   {#if paidOffers.length}
     <details class="paid-offers"><summary>Готовые предметы, наборы и украшения · {paidOffers.length}</summary>
-      <p>Покупка за Королевскую Ая. Для добычи деталей используйте реликвии выше.</p>
       <ul>{#each paidOffers as offer}<li><span>{offer.displayName}</span><b>{offerCost(offer, true)}</b></li>{/each}</ul>
     </details>
   {/if}
@@ -152,13 +148,11 @@
   .relic-owned { margin-top:.45rem; font-size:.8125rem; }
   .relic-owned strong { font-variant-numeric:tabular-nums; }
   .relic-owned.has-stock { color:var(--text); }
-  .relic-legend { font-size:.75rem; }
   .inventory-notice { color:var(--accent-strong); }
   .relic-hint { margin-top:.65rem; }
   .reward-details { margin-top:.75rem; font-size:.8125rem; border-top:1px solid var(--border); }
   summary { cursor:pointer; color:var(--accent-strong); font-weight:600; line-height:1.5; padding:.65rem 0 .15rem; font-size:.75rem; }
   summary:hover { color:var(--accent); }
-  .reward-details p,.paid-offers p { margin-top:.6rem; font-size:.75rem; }
   .reward-details ul,.paid-offers ul { list-style:none; padding:0; margin:.65rem 0 0; }
   .reward-details li,.paid-offers li { display:flex; justify-content:space-between; gap:.75rem; padding:.55rem 0; border-bottom:1px solid var(--border); line-height:1.5; }
   .reward-details li:last-child,.paid-offers li:last-child { border-bottom:0; }

@@ -22,7 +22,6 @@
       error: "Не удалось открыть данные о сборках.",
       retry: "Повторить",
       notScanned: "Сборки ещё не считаны",
-      notScannedBody: "Запустите Warframe и обновите инвентарь — PlatScope прочитает моды в конфигурациях A/B/C.",
       update: "Обновить из Warframe",
       updating: "Обновляем…",
       scanError: "Не удалось прочитать сборки. Запустите Warframe, войдите в игру и повторите.",
@@ -37,28 +36,23 @@
       listTitle: "Надетые моды",
       shown: (count: number) => `Показано: ${count}`,
       empty: "Надетые моды не найдены",
-      emptyBody: "В считанных конфигурациях нет модов из торгового инвентаря.",
       noFiltered: "Ничего не найдено",
-      noFilteredBody: "Измените название мода или тип предмета.",
       clear: "Сбросить",
       rank: (rank: number) => `ранг ${rank}`,
       copies: (count: number) => `копий: ${count}`,
       configs: (count: number) => `конфигураций: ${count}`,
       selectPrompt: "Выберите мод слева",
-      selectPromptBody: "Здесь появятся все предметы и конфигурации, где он установлен.",
       installedOn: "Где установлен",
       usage: (equipment: number, configs: number) => `Предметов: ${equipment} · Конфигураций: ${configs}`,
       free: (count: number) => `Свободно для продажи: ${count}`,
       noFree: "Свободных копий для продажи нет",
       config: (label: string) => `Конфигурация ${label}`,
-      readOnly: "Чтобы снять мод, откройте указанный предмет и конфигурацию в Арсенале Warframe. PlatScope ничего не меняет в игре.",
-    },
+      },
     en: {
       loading: "Loading equipped mods…",
       error: "Unable to open loadout data.",
       retry: "Try again",
       notScanned: "Loadouts have not been scanned",
-      notScannedBody: "Start Warframe and update the inventory to read mods from configurations A/B/C.",
       update: "Update from Warframe",
       updating: "Updating…",
       scanError: "Unable to read loadouts. Start Warframe, sign in, and try again.",
@@ -73,22 +67,18 @@
       listTitle: "Equipped mods",
       shown: (count: number) => `Shown: ${count}`,
       empty: "No equipped mods found",
-      emptyBody: "The scanned configurations contain no mods from the market inventory.",
       noFiltered: "No matches",
-      noFilteredBody: "Change the mod name or item type.",
       clear: "Reset",
       rank: (rank: number) => `rank ${rank}`,
       copies: (count: number) => `copies: ${count}`,
       configs: (count: number) => `configurations: ${count}`,
       selectPrompt: "Select a mod on the left",
-      selectPromptBody: "Every item and configuration using it will appear here.",
       installedOn: "Installed on",
       usage: (equipment: number, configs: number) => `Items: ${equipment} · Configurations: ${configs}`,
       free: (count: number) => `Free to sell: ${count}`,
       noFree: "No free copies to sell",
       config: (label: string) => `Configuration ${label}`,
-      readOnly: "To remove the mod, open the listed item and configuration in the Warframe Arsenal. PlatScope never changes the game.",
-    },
+      },
   } as const;
   const kindCopy = {
     ru: { warframe: "Варфреймы", primary: "Основное", secondary: "Дополнительное", melee: "Ближний бой", companion: "Компаньоны", companion_weapon: "Оружие компаньона", archwing: "Арчвинг", archgun: "Арчган", archmelee: "Арчмили", necramech: "Некрамехи", amp: "Усилители", other: "Прочее" },
@@ -177,7 +167,7 @@
 {#if !loading && (!inventory || !inventory.modUsageScanned)}
   <section class="empty-panel equipped-empty" aria-labelledby="equipped-not-scanned">
     <h2 id="equipped-not-scanned">{c.notScanned}</h2>
-    <p>{c.notScannedBody}</p>
+
     <button type="button" onclick={scanWarframe} disabled={scanning}>{scanning ? c.updating : c.update}</button>
   </section>
 {:else if inventory}
@@ -206,9 +196,9 @@
   </section>
 
   {#if allEntries.length === 0}
-    <section class="empty-panel equipped-empty"><h2>{c.empty}</h2><p>{c.emptyBody}</p></section>
+    <section class="empty-panel equipped-empty"><h2>{c.empty}</h2></section>
   {:else if entries.length === 0}
-    <section class="empty-panel equipped-empty"><h2>{c.noFiltered}</h2><p>{c.noFilteredBody}</p><button type="button" onclick={() => { query = ""; kind = "all"; }}>{c.clear}</button></section>
+    <section class="empty-panel equipped-empty"><h2>{c.noFiltered}</h2><button type="button" onclick={() => { query = ""; kind = "all"; }}>{c.clear}</button></section>
   {:else}
     <div class="equipped-workspace">
       <section class="equipped-master" aria-labelledby="equipped-list-title">
@@ -272,10 +262,10 @@
                 </li>
               {/each}
             </ul>
-            <p class="equipped-readonly">{c.readOnly}</p>
+
           </div>
         {:else}
-          <div class="equipped-detail__empty"><h2>{c.selectPrompt}</h2><p>{c.selectPromptBody}</p></div>
+          <div class="equipped-detail__empty"><h2>{c.selectPrompt}</h2></div>
         {/if}
       </section>
     </div>

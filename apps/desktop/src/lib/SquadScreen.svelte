@@ -100,7 +100,7 @@
   {#if error}<div class="message error" role="alert"><span>{error}</span><button disabled={busy} onclick={() => void refresh()}>Повторить</button></div>{/if}
   {#if notice}<p class="message notice" role="status">{notice}</p>{/if}
   {#if loading && !view}
-    <div class="loading" role="status"><span class="loading-mark" aria-hidden="true"></span><div><strong>Загружаем отряд и билды</strong><p>Получаем экипировку и вашу коллекцию.</p></div></div>
+    <div class="loading" role="status"><span class="loading-mark" aria-hidden="true"></span><div><strong>Загружаем отряд и билды</strong></div></div>
   {:else if view}
     {#if mode === "squad"}
       <div class="capture-bar">
@@ -117,7 +117,7 @@
       <aside class="roster" aria-label={mode === "squad" ? "Участники отряда" : mode === "saved" ? "Коллекция билдов" : "Конфигурации снаряжения"}>
         <div class="roster-heading"><h2>{mode === "squad" ? "Сопартийцы" : mode === "saved" ? "Моя коллекция" : "Снаряжение"}</h2><span class="count">{mode === "squad" ? members.length : mode === "saved" ? saved.length : configurations.length}</span></div>
         {#if mode === "squad"}
-          {#if !members.length}<div class="sidebar-empty"><strong>Отряд пока пуст</strong><p>Войдите в отряд в Warframe. Участники появятся после событий игры.</p></div>{/if}
+          {#if !members.length}<div class="sidebar-empty"><strong>Отряд пока пуст</strong></div>{/if}
           <div class="roster-list">
             {#each members as m (m.name)}
               <button class="roster-row member-row" class:selected={member?.name === m.name} aria-pressed={member?.name === m.name} onclick={() => { player = m.name; equipmentKey = ""; notice = ""; }}>
@@ -128,7 +128,7 @@
           </div>
         {:else if mode === "saved"}
           <label class="search"><span>Найти билд</span><input type="search" bind:value={query} placeholder="Игрок, предмет или мод" /></label>
-          {#if !saved.length}<div class="sidebar-empty"><strong>{query ? "Билды не найдены" : "Коллекция пока пуста"}</strong><p>{query ? "Попробуйте другое название или имя игрока." : "Выберите сопартийца и сохраните его экипировку."}</p></div>{/if}
+          {#if !saved.length}<div class="sidebar-empty"><strong>{query ? "Билды не найдены" : "Коллекция пока пуста"}</strong></div>{/if}
           <div class="roster-list">
             {#each saved as b (b.id)}
               <button class="roster-row" class:selected={selectedBuild?.id === b.id} aria-pressed={selectedBuild?.id === b.id} onclick={() => { savedId = b.id; savedEquipmentKey = ""; editing = false; deleting = false; notice = ""; }}>
@@ -141,7 +141,7 @@
         {:else}
           <label class="search"><span>Категория</span><select bind:value={configurationCategory}><option value="">Всё снаряжение</option>{#each configurationCategories as category}<option value={category}>{category}</option>{/each}</select></label>
           <label class="search"><span>Найти предмет или мод</span><input type="search" bind:value={configurationQuery} placeholder="Название на русском или английском" /></label>
-          {#if !configurations.length}<div class="sidebar-empty"><strong>{configurationQuery || configurationCategory ? "Ничего не найдено" : "Конфигураций пока нет"}</strong><p>{configurationQuery || configurationCategory ? "Измените запрос или категорию." : view.configurationsAt ? "Откройте Арсенал и повторите чтение." : "Нажмите «Прочитать конфигурации»."}</p></div>{/if}
+          {#if !configurations.length}<div class="sidebar-empty"><strong>{configurationQuery || configurationCategory ? "Ничего не найдено" : "Конфигураций пока нет"}</strong></div>{/if}
           <div class="roster-list">
             {#each configurations as e (e.key)}
               <button class="roster-row" class:selected={equipment?.key === e.key} aria-pressed={equipment?.key === e.key} onclick={() => { configurationKey = e.key; notice = ""; }}>
@@ -176,7 +176,7 @@
               {#if editing}<form onsubmit={e => { e.preventDefault(); void saveEdit(); }}>
                 <label>Название билда<input bind:value={title} required maxlength="100" /></label><label>Заметка<textarea bind:value={note} maxlength="3000" rows="3" placeholder="Для какой миссии подходит, что изменить…"></textarea></label>
                 <div class="actions"><button class="primary" disabled={busy}>Сохранить изменения</button><button type="button" disabled={busy} onclick={() => editing = false}>Отмена</button></div>
-              </form>{:else}<p>{selectedBuild.note || "Добавьте, чем понравился билд и где его попробовать."}</p><button onclick={edit}>Изменить название и заметку</button>{/if}
+              </form>{:else}{#if selectedBuild.note}<p>{selectedBuild.note}</p>{/if}<button onclick={edit}>Изменить название и заметку</button>{/if}
             </details>
           {/key}
         {/if}
@@ -199,16 +199,16 @@
           <div class="main-empty">
             <div class="empty-emblem" aria-hidden="true"><svg viewBox="0 0 64 64" fill="none"><path d="m32 8 22 12v24L32 56 10 44V20Z M10 20l22 12 22-12 M32 32v24" stroke="currentColor" stroke-width="1.3"/><path d="m21 26 11-6 11 6" stroke="currentColor" stroke-width="1.3"/></svg></div>
             {#if mode === "squad"}
-              <h2>{member?.status === "ambiguous" ? "Принадлежность не определена" : member ? "Экипировка ещё не получена" : "Здесь появится экипировка отряда"}</h2>
-              <p>{member?.status === "ambiguous" ? "Найдено несколько подходящих снимков. Показывать один из них как билд этого игрока пока нельзя." : !view.running ? "Запустите Warframe и войдите в отряд. Сохранённые билды доступны и без игры." : member ? "Попробуйте прочитать экипировку снова после входа игрока в миссию." : "Выберите сопартийца после его появления в отряде, чтобы рассмотреть снаряжение и сохранить комплект."}</p>
+              <h2>{member?.status === "ambiguous" ? "Принадлежность не определена" : member ? "Экипировка ещё не получена" : "Выберите сопартийца"}</h2>
+              {#if member?.status === "ambiguous"}<p>Найдено несколько подходящих снимков.</p>{:else if !view.running}<p>Warframe не запущен.</p>{/if}
               {#if !members.length && view.running}<small>Если игрок вошёл до запуска PlatScope, его снимок может уже отсутствовать в памяти.</small>{/if}
-            {:else if mode === "saved"}<h2>{query ? "Нет подходящих билдов" : "Ваша коллекция экипировки"}</h2><p>{query ? "Измените поиск, чтобы найти сохранённого игрока, предмет или мод." : "Сохраните экипировку сопартийца — она останется здесь после его выхода и перезапуска приложения."}</p>
-            {:else}<h2>{view.readingConfigurations ? "Читаем конфигурации…" : "Выберите конфигурацию"}</h2><p>Здесь появятся предмет и его улучшения. Владелец и активный вариант конфигураций из памяти не определены.</p>{/if}
+            {:else if mode === "saved"}<h2>{query ? "Нет подходящих билдов" : "Ваша коллекция экипировки"}</h2>
+            {:else}<h2>{view.readingConfigurations ? "Читаем конфигурации…" : "Выберите конфигурацию"}</h2>{/if}
           </div>
         {/if}
 
         {#if mode === "saved" && selectedBuild}
-          <footer class="collection-footer"><span>Билд хранится на этом компьютере</span><button class="delete" disabled={busy} onclick={() => { deletingId = selectedBuild?.id ?? ""; deleting = true; }}>Удалить билд</button></footer>
+          <footer class="collection-footer"><button class="delete" disabled={busy} onclick={() => { deletingId = selectedBuild?.id ?? ""; deleting = true; }}>Удалить билд</button></footer>
           {#if deleting}<div class="delete-confirm" role="group" aria-label="Подтверждение удаления"><p>Удалить «{selectedBuild.title}» из коллекции?</p><div class="actions"><button class="delete" disabled={busy} onclick={() => void remove()}>Удалить из коллекции</button><button disabled={busy} onclick={() => deleting = false}>Оставить</button></div></div>{/if}
         {/if}
       </div>
@@ -235,10 +235,10 @@
   .equipment-selector { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,170px),1fr)); gap:.5rem; } .equipment-choice { display:flex; align-items:center; gap:.6rem; text-align:left; padding:.65rem; overflow-wrap:anywhere; background:var(--surface-2); } .equipment-choice>span { min-width:0; display:grid; gap:.16rem; } .equipment-choice strong { font-size:.78rem; line-height:1.3; } .equipment-choice small { font-size:.65rem; } .equipment-choice .category { font-size:.59rem; text-transform:uppercase; letter-spacing:.04em; } .equipment-choice.selected { border-color:var(--accent); background:var(--accent-soft); box-shadow:inset 0 -2px 0 var(--accent); }
   .notes { border:1px solid var(--border); background:var(--surface-2); padding:.65rem .8rem; border-radius:.5rem; font-size:.8rem; } summary { cursor:pointer; font-size:.76rem; font-weight:600; } .notes p { margin:.8rem 0; white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.6; } .notes>button { font-size:.73rem; } form { display:grid; gap:.7rem; margin-top:.8rem; } form label { display:grid; gap:.35rem; font-size:.75rem; } .actions { display:flex; flex-wrap:wrap; gap:.5rem; }
   .collection-footer { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:.7rem; border-top:1px solid var(--border); padding-top:.9rem; font-size:.7rem; color:var(--text-muted); } button.delete { border-color:var(--border); color:var(--danger); background:transparent; } button.delete:hover:not(:disabled) { border-color:var(--danger); background:var(--danger-soft); } .delete-confirm { border:1px solid var(--danger); border-radius:.5rem; padding:.8rem; font-size:.8rem; overflow-wrap:anywhere; } .delete-confirm p { margin:0 0 .7rem; }
-  .sidebar-empty { padding:.65rem .15rem; color:var(--text-muted); font-size:.79rem; line-height:1.55; } .sidebar-empty strong { color:var(--text); } .sidebar-empty p { margin:.4rem 0 0; }
+  .sidebar-empty { padding:.65rem .15rem; color:var(--text-muted); font-size:.79rem; line-height:1.55; } .sidebar-empty strong { color:var(--text); }
   .main-empty { display:grid; justify-items:center; align-content:center; gap:.8rem; text-align:center; min-height:330px; padding:2rem 1rem; color:var(--text-muted); } .main-empty h2 { font-size:1.15rem; color:var(--text); margin:0; } .main-empty p { max-width:31rem; font-size:.87rem; line-height:1.65; margin:0; } .main-empty small { max-width:28rem; } .empty-emblem { color:var(--gold); width:64px; height:64px; margin-bottom:.4rem; } svg { width:100%; height:100%; }
   .message { display:flex; align-items:center; justify-content:space-between; gap:.8rem; padding:.75rem 1rem; margin:0; border:1px solid var(--border); border-radius:.6rem; font-size:.8rem; line-height:1.5; overflow-wrap:anywhere; } .message.error { background:var(--danger-soft); color:var(--danger); } .message.notice { color:var(--success); background:var(--success-soft); } .message button { flex:none; }
-  .loading { display:flex; align-items:center; gap:1rem; padding:2rem; border:1px solid var(--border); border-radius:.8rem; background:var(--surface-1); } .loading p { color:var(--text-muted); font-size:.85rem; margin:.4rem 0 0; } .loading-mark { width:1.25rem; height:1.25rem; border:2px solid var(--border); border-top-color:var(--accent); border-radius:50%; } @media (prefers-reduced-motion:no-preference) { .loading-mark { animation:turn 1s linear infinite; } } @keyframes turn { to { transform:rotate(360deg); } }
+  .loading { display:flex; align-items:center; gap:1rem; padding:2rem; border:1px solid var(--border); border-radius:.8rem; background:var(--surface-1); }  .loading-mark { width:1.25rem; height:1.25rem; border:2px solid var(--border); border-top-color:var(--accent); border-radius:50%; } @media (prefers-reduced-motion:no-preference) { .loading-mark { animation:turn 1s linear infinite; } } @keyframes turn { to { transform:rotate(360deg); } }
   @media (max-width:1100px) { .workspace { grid-template-columns:215px minmax(0,1fr); gap:.75rem; } .detail { padding:.85rem; } .roster { padding:.65rem; } .equipment-selector { grid-template-columns:repeat(auto-fit,minmax(min(100%,155px),1fr)); } .header-actions { align-items:flex-start; } }
   @media (max-width:780px) { .workspace { grid-template-columns:minmax(0,1fr); } .roster-list { max-height:19rem; } .modes { flex-wrap:wrap; } .modes button { flex:1 1 10rem; padding:.45rem; font-size:.74rem; } .capture-actions { justify-content:space-between; width:100%; gap:.6rem; } .detail { padding:.75rem; } .loadout-header { align-items:flex-start; } .header-actions { width:100%; } .main-empty { min-height:240px; } }
   @media (max-width:440px) { .equipment-selector { grid-template-columns:minmax(0,1fr); } .message { align-items:flex-start; flex-direction:column; } .loadout-title h2 { font-size:1.05rem; } }

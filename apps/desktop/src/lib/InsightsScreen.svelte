@@ -69,10 +69,8 @@
       loadError: "Не удалось рассчитать возможности. Цены и инвентарь не изменились.",
       retry: "Повторить",
       noSnapshot: "Сначала загрузите данные предметов",
-      noSnapshotBody: "Обновление рынка и игровых данных находится в настройках.",
       openSettings: "Открыть настройки",
       noInventory: "Инвентарь ещё не загружен",
-      noInventoryBody: "Запустите чтение инвентаря в настройках — после этого появятся персональные варианты.",
       overviewMode: "Лучшее сейчас",
       resourcesMode: "Ресурсы",
       relicMode: "Реликвии",
@@ -81,7 +79,6 @@
       ducatMode: "Дукаты",
       filters: "Разделы заработка",
       overviewTitle: "Что выгодно сделать сейчас",
-      overviewBody: "Быстрые решения для реликвий и прайм-комплектов по вашему инвентарю и сохранённым ценам.",
       overviewSell: "Продать готовый сет",
       overviewComplete: "Дособрать ещё один сет",
       overviewRelic: "Открыть реликвию",
@@ -97,12 +94,8 @@
       showReadySets: "Показать готовые сеты",
       showCompleteSets: "Показать варианты",
       showRelicRanking: "Открыть рейтинг",
-      modeResourcesHint: "Репутация, кредиты Норы, дукаты, стальная эссенция и лишние мистификаторы.",
-      modeRelicsHint: "Сравнение самых дорогих наград, шансов выпадения и возможности дособрать комплект.",
       modeCompleteTitle: "Что выгодно дособрать",
-      modeCompleteHint: "Быстрые варианты: не больше двух видов и трёх деталей. Выгода учитывает стоимость уже имеющихся частей.",
       modeReadyTitle: "Готовые сеты для рынка",
-      modeReadyHint: "Сначала — комплекты, которые выгоднее продавать целиком. Перед ордером можно проверить текущие предложения.",
       saleAdvice: (mode: SetSaleMode) => ({
         set: "Выгоднее комплектом",
         parts: "Выгоднее по частям",
@@ -110,7 +103,6 @@
         insufficient_inventory: "Не хватает деталей",
         insufficient_pricing: "Проверьте цену",
       })[mode],
-      modeDucatsHint: "Детали с наименьшей потерей платины за один дукат.",
       setResultCount: (visible: number, total: number) => `Показано ${visible} из ${total}`,
       showMore: (count: number) => `Показать ещё ${count}`,
       showLess: "Свернуть список",
@@ -158,10 +150,7 @@
       marketOpenError: "Не удалось открыть Warframe Market. Повторите действие.",
       relicPlan: "Подходящие реликвии",
       aggregateChance: "Шанс получить все недостающие детали из указанных реликвий",
-      probabilityNote: "Это вероятность, а не гарантия. Расчёт предполагает одиночное открытие каждой копии и независимые результаты.",
       openNowTitle: "Какую реликвию открыть сейчас",
-      openNowBodySolo: "Сначала — реликвия с самой дорогой возможной наградой. Шанс показан для одного открытия.",
-      openNowBodySquad: "Сначала — реликвия с самой дорогой возможной наградой. Шанс увидеть её показан для четырёх одинаковых реликвий.",
       relicScenario: "Расчёт для",
       soloScenario: "Соло",
       squadScenario: "4 одинаковые реликвии",
@@ -227,7 +216,6 @@
       noBuyResults: "Нет сетов, которые выгодно дособрать покупкой недостающих деталей по надёжным ценам.",
       noReadyResults: "Готовых сетов для продажи сейчас нет.",
       ducatTitle: "Что дешевле обменять на дукаты",
-      ducatBody: "Сначала показаны детали с наименьшей потерей платины за один дукат.",
       ducatWarning: "Проверьте количество перед обменом: действие в игре необратимо.",
       primePart: "Деталь Прайм",
       sellable: "Можно обменять",
@@ -242,10 +230,8 @@
       loadError: "Unable to calculate opportunities. Prices and inventory were not changed.",
       retry: "Try again",
       noSnapshot: "Load item data first",
-      noSnapshotBody: "Market and game-data updates are available in Settings.",
       openSettings: "Open settings",
       noInventory: "Inventory has not been loaded",
-      noInventoryBody: "Run the inventory scan in Settings to see personal opportunities.",
       overviewMode: "Best now",
       resourcesMode: "Resources",
       relicMode: "Relics",
@@ -254,7 +240,6 @@
       ducatMode: "Ducats",
       filters: "Earning sections",
       overviewTitle: "Best actions now",
-      overviewBody: "Quick decisions for relics and Prime sets based on your inventory and saved prices.",
       overviewSell: "Sell a complete set",
       overviewComplete: "Complete one more set",
       overviewRelic: "Open a relic",
@@ -270,12 +255,8 @@
       showReadySets: "Show complete sets",
       showCompleteSets: "Show opportunities",
       showRelicRanking: "Open ranking",
-      modeResourcesHint: "Standing, Nora Cred, ducats, Steel Essence, and spare Arcanes.",
-      modeRelicsHint: "Compare highest-priced rewards, drop chances, and set completion opportunities.",
       modeCompleteTitle: "Sets worth completing",
-      modeCompleteHint: "Quick options: at most two part types and three pieces. Profit includes the value of parts you already own.",
       modeReadyTitle: "Ready sets for the market",
-      modeReadyHint: "Sets that are worth selling complete come first. Check current offers before listing.",
       saleAdvice: (mode: SetSaleMode) => ({
         set: "Better as a set",
         parts: "Better as parts",
@@ -283,7 +264,6 @@
         insufficient_inventory: "Parts missing",
         insufficient_pricing: "Check the price",
       })[mode],
-      modeDucatsHint: "Parts with the lowest platinum loss per ducat.",
       setResultCount: (visible: number, total: number) => `Showing ${visible} of ${total}`,
       showMore: (count: number) => `Show ${count} more`,
       showLess: "Show fewer",
@@ -331,10 +311,7 @@
       marketOpenError: "Unable to open Warframe Market. Try again.",
       relicPlan: "Matching relics",
       aggregateChance: "Chance to get every missing part from the listed relics",
-      probabilityNote: "This is a probability, not a guarantee. It assumes a solo opening for each copy and independent outcomes.",
       openNowTitle: "Which relic to open now",
-      openNowBodySolo: "Relics with the highest-priced possible reward come first. The chance is shown for one opening.",
-      openNowBodySquad: "Relics with the highest-priced possible reward come first. The chance to see it is shown for four matching relics.",
       relicScenario: "Calculate for",
       soloScenario: "Solo",
       squadScenario: "4 matching relics",
@@ -400,7 +377,6 @@
       noBuyResults: "No sets are currently profitable to finish by buying missing parts at reliable prices.",
       noReadyResults: "No complete sets are ready to sell.",
       ducatTitle: "Lowest platinum cost per ducat",
-      ducatBody: "Parts with the lowest platinum value per ducat are shown first.",
       ducatWarning: "Check the quantity before trading: the in-game action cannot be undone.",
       primePart: "Prime part",
       sellable: "Available",
@@ -743,19 +719,19 @@
 
     {#if loading && !view && activeMode === "overview"}
       <section class="plan-loading" aria-busy="true" aria-label="Загрузка плана">
-        <h2>Готовим ваш план</h2><p>Сопоставляем инвентарь, цены комплектов и доступные реликвии.</p>
+        <h2>Готовим ваш план</h2>
         <div class="plan-placeholder" aria-hidden="true"><span></span><span></span><span></span></div>
       </section>
     {:else if !loading && !view && !errorMessage}
       <div class="message">
         <h2>{c.noSnapshot}</h2>
-        <p>{c.noSnapshotBody}</p>
+
         <button type="button" onclick={onOpenSettings}>{c.openSettings}</button>
       </div>
     {:else if view}
     {#if !view.inventoryAvailable && activeMode !== "overview"}
       <div class="message message--action" role="note">
-        <div><h2>{c.noInventory}</h2><p>{c.noInventoryBody}</p></div>
+        <div><h2>{c.noInventory}</h2></div>
         <button type="button" onclick={onOpenSettings}>{c.openSettings}</button>
       </div>
     {/if}
@@ -775,7 +751,7 @@
         <header>
           <div>
             <h2 id="ducat-heading">{c.ducatTitle}</h2>
-            <p>{c.ducatBody}</p>
+
           </div>
           <p class="warning">{c.ducatWarning}</p>
         </header>
@@ -813,7 +789,7 @@
         <section class="mode-heading" aria-labelledby="set-mode-title">
           <div>
             <h2 id="set-mode-title">{activeMode === "complete_sets" ? c.modeCompleteTitle : c.modeReadyTitle}</h2>
-            <p>{activeMode === "complete_sets" ? c.modeCompleteHint : c.modeReadyHint}</p>
+
           </div>
           <label class="set-search">
             <span>{c.search}</span>
@@ -1045,7 +1021,7 @@
   }
   .plan-loading { border:1px solid var(--border); border-radius:.85rem; padding:1.35rem; background:var(--surface-1); }
   .plan-loading h2 { margin:0; font-size:1.25rem; }
-  .plan-loading p { color:var(--text-muted); font-size:.875rem; line-height:1.5; }
+
   .plan-placeholder { display:grid; gap:.65rem; margin-top:1.5rem; }
   .plan-placeholder span { display:block; height:3.25rem; border-radius:.45rem; background:var(--surface-2); }
   .resource-mode[hidden] {
@@ -1167,19 +1143,13 @@
     gap: .8rem;
     padding: .68rem .75rem;
   }
-  .mode-heading h2,
-  .mode-heading p {
+  .mode-heading h2 {
     margin: 0;
   }
   .mode-heading h2 {
     font-size: .98rem;
   }
-  .mode-heading p {
-    max-width: 72ch;
-    margin-block-start: .18rem;
-    color: var(--text-muted);
-    font-size: .75rem;
-  }
+
   .set-search {
     display: grid;
     flex: 0 1 18rem;
@@ -1522,11 +1492,7 @@
   .ducat-panel h2 {
     font-size: 1rem;
   }
-  .ducat-panel header div p {
-    margin-block-start: .2rem;
-    color: var(--text-muted);
-    font-size: .75rem;
-  }
+
   .ducat-panel .warning {
     max-width: 28rem;
     color: var(--danger);

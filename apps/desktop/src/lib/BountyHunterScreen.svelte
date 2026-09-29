@@ -222,7 +222,7 @@
 
 <div class="bounty-screen">
   <header class="intro">
-    <div><h2>Выберите, за чем отправиться</h2><p>Найдите нужную награду или сравните заказы по стоимости добычи.</p></div>
+    <div><h2>Выберите, за чем отправиться</h2></div>
     {#if view}<div class="rotation"><span class="auto-label"><i></i>Обновляется автоматически</span><strong>{loading ? "Получаем заказы…" : rotationAt ? "Ближайшая смена через " + countdown(rotationAt, nowMs) : "Ожидаем новые заказы"}</strong>{#if view}<small>Проверено в {time(view.fetchedAt)}</small>{/if}</div>{/if}
   </header>
 
@@ -230,17 +230,17 @@
     <section class="notice error" role="alert"><div><strong>{error}</strong><p>Повторим автоматически{retryAt ? " через " + countdown(retryAt, nowMs) : ""}.</p></div><button class="secondary" disabled={loading} onclick={() => load(true)}>{loading ? "Проверяем…" : "Повторить загрузку"}</button></section>
   {/if}
   {#if loading && !view}
-    <section class="loading" role="status" aria-label="Загрузка заказов"><strong>Получаем активные заказы и награды…</strong><p>Сверяем текущую ротацию и сохранённые цены.</p><div></div><div></div><div></div></section>
+    <section class="loading" role="status" aria-label="Загрузка заказов"><strong>Получаем активные заказы и награды…</strong><div></div><div></div><div></div></section>
   {:else if !view && !error}
-    <section class="empty"><h3>Нужны данные о предметах</h3><p>Загрузите справочник предметов в настройках, чтобы сопоставить награды и цены.</p><button onclick={onOpenSettings}>Открыть настройки данных</button></section>
+    <section class="empty"><h3>Нужны данные о предметах</h3><button onclick={onOpenSettings}>Открыть настройки данных</button></section>
   {/if}
 
   {#if view}
     {#if expiredCount > 0 && !error}
-      <section class="notice"><div><strong>Ротация сменилась — ждём новые заказы.</strong><p>Заказы с истёкшим сроком скрыты. {loading ? "Обновляем список…" : "Следующая проверка через " + countdown(retryAt, nowMs) + "."}</p></div></section>
+      <section class="notice"><div><strong>Ротация сменилась — ждём новые заказы.</strong><p>{loading ? "Обновляем список…" : "Следующая проверка через " + countdown(retryAt, nowMs) + "."}</p></div></section>
     {/if}
     <div class="region-choices" role="group" aria-label="Регион заказов">
-      <button class:chosen={region === "all"} aria-pressed={region === "all"} onclick={() => { region = "all"; resetSelection(); }}><span><strong>Все регионы</strong><small>Сравнить все заказы</small></span><b>{allJobs.length}</b></button>
+      <button class:chosen={region === "all"} aria-pressed={region === "all"} onclick={() => { region = "all"; resetSelection(); }}><span><strong>Все регионы</strong></span><b>{allJobs.length}</b></button>
       {#each view.regions as place (place.key)}
         <button class:chosen={region === place.key} aria-pressed={region === place.key} onclick={() => { region = place.key; resetSelection(); }}>
           {#if art[place.key]}<span class="region-art"><WorldActivityArtwork kind={art[place.key]} /></span>{/if}
@@ -249,18 +249,18 @@
       {/each}
     </div>
     <section class="filters" aria-label="Поиск заказов">
-      <label class="search-label">Что хотите получить?<span class="search-field"><input aria-label="Что хотите получить?" bind:this={searchInput} value={query} oninput={event => search(event.currentTarget.value)} placeholder="Например, Айя. Можно искать и по названию заказа." />{#if query}<button class="secondary" aria-label="Очистить поиск" onclick={() => search("")}>Сбросить</button>{/if}</span></label>
+      <label class="search-label">Что хотите получить?<span class="search-field"><input aria-label="Что хотите получить?" bind:this={searchInput} value={query} oninput={event => search(event.currentTarget.value)} placeholder="Награда или название заказа" />{#if query}<button class="secondary" aria-label="Очистить поиск" onclick={() => search("")}>Сбросить</button>{/if}</span></label>
       <label>Показывать сначала<select bind:value={sort} onchange={resetSelection}><option value="platinum">Дороже награды</option><option value="reward_chance">Выше шанс награды</option><option value="level">Ниже уровень врагов</option><option value="rotation">Скорее сменятся</option></select></label>
       <label class="priced-filter"><input type="checkbox" bind:checked={onlyPriced} onchange={resetSelection} /> Только с оценкой в платине</label>
     </section>
     <details class="watchlist">
-      <summary><span>Отслеживаемые награды <b>{watchPreferences.rewards.length}</b></span><small>{watchPreferences.rewards.length ? "Открыть список" : "Сохраняйте нужное и узнавайте о появлении"}</small></summary>
+      <summary><span>Отслеживаемые награды <b>{watchPreferences.rewards.length}</b></span></summary>
       <div class="watchlist-body">
-        <div class="watch-intro"><p>Отслеживайте награды в подробностях заказа. Уведомления о появлении приходят, пока PlatScope работает.</p><label><input type="checkbox" checked={watchPreferences.enabled} disabled={notificationBusy} onchange={event => setWatchNotifications(event.currentTarget.checked)} /> Уведомлять о появлении</label></div>
+        <div class="watch-intro"><label><input type="checkbox" checked={watchPreferences.enabled} disabled={notificationBusy} onchange={event => setWatchNotifications(event.currentTarget.checked)} /> Уведомлять о появлении</label></div>
         {#each watchPreferences.rewards as reward (reward.key)}
           {@const available = allJobs.filter(row => row.job.rewards.some(item => item.trackingKey === reward.key)).length}
           <div class="watch-row">{#if reward.imageUrl}<img src={reward.imageUrl} alt="" loading="lazy" onerror={event => { (event.currentTarget as HTMLImageElement).style.display = "none"; }} onload={event => { (event.currentTarget as HTMLImageElement).style.display = ""; }} />{/if}<div><strong>{reward.displayName}</strong><span>{available ? "Сейчас в заказах: " + available : "Нет в активных заказах"}</span></div><button class="secondary" onclick={() => findReward(reward)} aria-label={"Найти заказы: " + reward.displayName}>Найти заказы</button><button class="text-button" aria-label={"Удалить из отслеживаемых: " + reward.displayName} onclick={() => removeWatchedReward(reward.key)}>Удалить</button></div>
-        {:else}<p class="watch-empty">Пока ничего не отслеживается. Откройте заказ и нажмите «Отслеживать» рядом с нужной наградой.</p>{/each}
+        {:else}<p class="watch-empty">Нет отслеживаемых наград</p>{/each}
       </div>
     </details>
     {#if watchMessage}<p class="feedback" role="status">{watchMessage}</p>{/if}
@@ -268,7 +268,7 @@
     <div class="hunter-layout" bind:this={layout}>
       <section class="job-list" aria-label="Подходящие заказы">
         <div class="list-title"><h2 bind:this={listHeading} tabindex="-1">Подходящие заказы <span>{jobs.length}</span></h2>{#if region !== "all" || query || onlyPriced}<button class="text-button" onclick={resetFilters}>Сбросить фильтры</button>{/if}</div>
-        <p class="list-help">{query ? "Найденные заказы и награды. Для поиска по награде сравниваем шанс её получения." : sort === "reward_chance" ? "Сначала заказы с наибольшим шансом одной из наград. Уточните награду в поиске." : "Сравните добычу и сложность. Выберите заказ, чтобы увидеть все награды."}</p>
+
         <div class="list-columns"><span>Заказ и награда</span><span>Стоимость добычи</span></div>
         {#each displayedJobs as row (bountyJobIdentity(row))}
           {@const reward = bountyFeaturedReward(row.job, query, targetKey, sort === "reward_chance")}
@@ -280,10 +280,10 @@
             <span class="job-value"><strong>{estimate.value === null ? (!row.job.rewards.length ? "Нет данных" : estimate.total ? "Нет оценки" : "Не для продажи") : "≈ " + num(estimate.value) + " пл."}</strong><small>{estimate.value !== null ? (row.job.title.toLocaleLowerCase("ru").includes("бесконечн") ? "за цикл этапов" : "за весь заказ") : (estimate.total ? "Проверьте цены" : "Полезно в игре")}{#if estimate.total && estimate.priced < estimate.total}<span class="partial">Цены: {estimate.priced} из {estimate.total}</span>{/if}</small><span class="row-action">{selected && bountyJobIdentity(selected) === bountyJobIdentity(row) ? "Выбран" : "Подробнее"} →</span></span>
           </button>
         {:else}
-          <section class="empty"><h3>{allJobs.length ? (onlyPriced ? "Нет подходящих заказов с оценкой" : "Подходящих заказов нет") : "Ждём актуальные заказы"}</h3><p>{allJobs.length ? (onlyPriced ? "Снимите фильтр «Только с оценкой в платине», чтобы увидеть и награды без известной цены." : "Измените награду или регион. Возможно, нужной награды нет в этой ротации.") : "Список появится автоматически, когда источник обновится."}</p>{#if allJobs.length}<button class="secondary" onclick={resetFilters}>Показать все заказы</button>{/if}</section>
+          <section class="empty"><h3>{allJobs.length ? (onlyPriced ? "Нет подходящих заказов с оценкой" : "Подходящих заказов нет") : "Ждём актуальные заказы"}</h3>{#if allJobs.length}<button class="secondary" onclick={resetFilters}>Показать все заказы</button>{/if}</section>
         {/each}
         {#if jobs.length > displayedJobs.length}<button class="secondary show-more" onclick={() => showAll = true}>Показать остальные заказы · {jobs.length - displayedJobs.length}</button>{/if}
-        {#if jobs.length}<p class="list-footnote">≈ пл. — средняя стоимость выпавших предметов при продаже. Это не гарантированная выплата за заказ.</p>{/if}
+
       </section>
 
       {#if selected}
@@ -331,10 +331,10 @@
   .watchlist summary { cursor:pointer; padding:.8rem 1rem; font-size:.8125rem; }
   .watchlist summary > span { font-weight:650; }
   .watchlist summary b { margin-left:.4rem; font-size:.75rem; border-radius:1rem; padding:.1rem .4rem; background:var(--surface-3); }
-  .watchlist summary small { float:right; font-size:.75rem; color:var(--text-muted); margin-top:.1rem; }
+
   .watchlist-body { padding:0 1rem 1rem; }
   .watch-intro { display:flex; gap:2rem; align-items:center; justify-content:space-between; border-top:1px solid var(--border); padding-top:.8rem; }
-  .watch-intro p { font-size:.8125rem; max-width:44rem; }
+
   .watch-intro label { display:flex; align-items:center; gap:.5rem; font-size:.8125rem; flex:none; }
   .watch-empty { margin-top:.8rem; }
   .watch-row { display:flex; align-items:center; gap:.75rem; padding:.75rem 0; border-bottom:1px solid var(--border); }
@@ -348,7 +348,7 @@
   .list-title h2 { scroll-margin-top:1.5rem; }
   .list-title span { color:var(--text-subtle); margin-left:.4rem; font-size:.875rem; font-weight:400; }
   .list-title button { font-size:.75rem; padding:0; border:0; }
-  .list-help { font-size:.8125rem; margin:.4rem 0 1rem; min-height:2.5em; }
+
   .list-columns { display:flex; justify-content:space-between; padding:0 1rem .6rem; color:var(--text-subtle); font-size:.75rem; }
   .job-row { display:flex; width:100%; align-items:stretch; justify-content:space-between; gap:1rem; text-align:left; color:var(--text); background:var(--surface-1); border:1px solid var(--border); border-radius:.65rem; padding:1rem; margin-bottom:.55rem; font-weight:400; }
   .job-row:hover { background:var(--surface-hover); border-color:var(--border-strong); }
@@ -366,14 +366,14 @@
   .partial { display:block; color:var(--accent); }
   .row-action { font-size:.75rem; font-weight:600; color:var(--accent); margin-top:auto; padding-top:.6rem; }
   .show-more { width:100%; margin-top:.35rem; min-height:2.75rem; }
-  .list-footnote { font-size:.75rem; margin:1rem .2rem; }
+
   .job-detail { border:1px solid var(--border); border-radius:.85rem; padding:1.35rem; background:var(--surface-1); box-shadow:var(--shadow-sm); position:sticky; top:1rem; max-height:calc(100dvh - 2rem); overflow:auto; scrollbar-width:thin; scroll-margin-top:1rem; }
   .job-detail:focus-visible,.list-title h2:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
   .notice { display:flex; align-items:center; justify-content:space-between; gap:1rem; border:1px solid var(--border); border-radius:.6rem; background:var(--surface-2); padding:1rem; margin-bottom:1rem; font-size:.875rem; }
   .notice p { font-size:.8125rem; margin-top:.35rem; } .notice button { flex:none; }
   .notice.error { border-color:var(--danger); }
   .empty,.loading { padding:2rem; border:1px solid var(--border); border-radius:.75rem; background:var(--surface-1); }
-  .empty p,.loading p { margin:.65rem 0 1rem; max-width:36rem; }
+
   .loading div { height:4rem; background:var(--surface-2); border-radius:.5rem; margin-top:.75rem; }
   .feedback { padding:.7rem 1rem; border-radius:.5rem; background:var(--surface-2); border:1px solid var(--border); font-size:.8125rem; margin:0 0 1rem; color:var(--text); }
   @container bounty (max-width:78rem) {
@@ -389,7 +389,7 @@
     .intro { flex-direction:column; gap:.8rem; }
     .rotation { text-align:left; }
     .filters { grid-template-columns:minmax(0,1fr); }
-    .watchlist summary small { display:none; }
+
     .watch-intro { flex-direction:column; align-items:flex-start; gap:.75rem; }
     .watch-row { flex-wrap:wrap; }
     .watch-row div { min-width:55%; }

@@ -32,10 +32,10 @@ use platscope_core::{
     GameMetadataService, HistoryBootstrapOutcome, HistoryService, InsightsService, InsightsView,
     InventoryService, InventoryView, LivePricingResult, LivePricingService, LiveSellNowResult,
     LoggingGuard, MarketBrowserService, MarketDataService, MarketHistoryView, MarketRefreshOutcome,
-    MarketSearchResult, MasteryService, MasteryView, PersonalGoalsService, PersonalGoalsView,
-    PriceRecommendation, PricingService, ResourceConverterService, ResourceConverterView,
-    SETTINGS_KEY, SellNowService, SellNowView, UpdateListingInput, WorldActivityService,
-    WorldActivityView, enrich_account_view, init_logging,
+    MarketSearchResult, MasteryPlanService, MasteryPlanView, MasteryService, MasteryView,
+    PersonalGoalsService, PersonalGoalsView, PriceRecommendation, PricingService,
+    ResourceConverterService, ResourceConverterView, SETTINGS_KEY, SellNowService, SellNowView,
+    UpdateListingInput, WorldActivityService, WorldActivityView, enrich_account_view, init_logging,
 };
 use platscope_domain::{InventoryResolution, MarketItemKind, MarketVariantKey, PrimeSetDefinition};
 use platscope_readonly_scan::inventory::{
@@ -354,6 +354,51 @@ fn load_mastery(state: State<'_, AppState>) -> Result<MasteryView, String> {
             view
         })
         .map_err(|_| "unable to load saved mastery history".to_owned())
+}
+
+fn mastery_plan_response(
+    state: &AppState,
+    selection: Option<(Vec<String>, String)>,
+) -> Result<MasteryPlanView, String> {
+    let settings = state
+        .database
+        .lock()
+        .map_err(|_| "Не удалось открыть сохранённые данные.".to_owned())?
+        .get_setting::<AppSettings>(SETTINGS_KEY)
+        .map_err(|_| "Не удалось загрузить настройки.".to_owned())?
+        .unwrap_or_default();
+    let mut view = match selection {
+        Some((refs, checksum)) => {
+            MasteryPlanService::save(&state.database, &settings, refs, &checksum)
+        }
+        None => MasteryPlanService::view(&state.database, &settings),
+    }
+    .map_err(|_| {
+        "Не удалось загрузить или сохранить план. Обновите данные и повторите.".to_owned()
+    })?;
+    for item in view.candidates.iter_mut().chain(view.queue.iter_mut()) {
+        localize_component_image_url(&mut item.image_url);
+        for material in &mut item.materials {
+            localize_component_image_url(&mut material.definition.image_url);
+        }
+    }
+    Ok(view)
+}
+
+#[tauri::command(async)]
+#[allow(clippy::needless_pass_by_value)]
+fn load_mastery_plan(state: State<'_, AppState>) -> Result<MasteryPlanView, String> {
+    mastery_plan_response(&state, None)
+}
+
+#[tauri::command(async)]
+#[allow(clippy::needless_pass_by_value)]
+fn save_mastery_plan(
+    state: State<'_, AppState>,
+    game_refs: Vec<String>,
+    expected_inventory_checksum: String,
+) -> Result<MasteryPlanView, String> {
+    mastery_plan_response(&state, Some((game_refs, expected_inventory_checksum)))
 }
 
 #[tauri::command(async)]
@@ -2066,6 +2111,8 @@ pub fn run() {
             inventory_refresh::set_inventory_auto_refresh,
             load_inventory,
             load_mastery,
+            load_mastery_plan,
+            save_mastery_plan,
             set_inventory_keep_copies,
             personal_goals,
             set_personal_goal,

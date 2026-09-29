@@ -21,9 +21,10 @@ use crate::{
 
 const DEFAULT_BASE_URL: &str =
     "https://raw.githubusercontent.com/WFCD/warframe-items/master/data/json";
-const WFCD_DOCUMENT_NAMES: [&str; 15] = [
+const WFCD_DOCUMENT_NAMES: [&str; 16] = [
     "Relics.json",
     "Components.json",
+    "Resources.json",
     "Warframes.json",
     "Primary.json",
     "Secondary.json",
@@ -41,7 +42,9 @@ const WFCD_DOCUMENT_NAMES: [&str; 15] = [
 const ARCANE_DISSOLUTION_URL: &str = "https://raw.githubusercontent.com/calamity-inc/warframe-public-export-plus/senpai/ExportArcanes.json";
 const ARCANE_PACKS_URL: &str = "https://raw.githubusercontent.com/calamity-inc/warframe-public-export-plus/senpai/ExportBoosterPacks.json";
 const VENDOR_MANIFESTS_URL: &str = "https://raw.githubusercontent.com/calamity-inc/warframe-public-export-plus/senpai/ExportVendors.json";
-const MAX_DOCUMENT_COUNT: usize = 18;
+const RECIPES_URL: &str = "https://raw.githubusercontent.com/calamity-inc/warframe-public-export-plus/senpai/ExportRecipes.json";
+const DOJO_RECIPES_URL: &str = "https://raw.githubusercontent.com/calamity-inc/warframe-public-export-plus/senpai/ExportDojoRecipes.json";
+const MAX_DOCUMENT_COUNT: usize = 21;
 const MAX_METADATA_DOCUMENT_BYTES: usize = 64 * 1024 * 1024;
 const MAX_TOTAL_BYTES: usize = 128 * 1024 * 1024;
 const MAX_CONCURRENT_DOWNLOADS: usize = 4;
@@ -88,6 +91,8 @@ impl GameMetadataProvider for WfcdMetadataProvider {
                 ("ArcaneDissolution.json", ARCANE_DISSOLUTION_URL),
                 ("ArcanePacks.json", ARCANE_PACKS_URL),
                 ("VendorManifests.json", VENDOR_MANIFESTS_URL),
+                ("CraftingRecipes.json", RECIPES_URL),
+                ("DojoRecipes.json", DOJO_RECIPES_URL),
             ]
             .map(|(name, url)| (name.to_owned(), url.to_owned())),
         );
@@ -383,6 +388,11 @@ fn normalize_wfcd_metadata(
             parse_item_localizations(&document.body, &mut item_localizations)?;
         } else if document.name.eq_ignore_ascii_case("Components.json") {
             // Компоненты уже разобраны отдельно для рецептов наборов.
+        } else if matches!(
+            document.name.as_str(),
+            "Resources.json" | "CraftingRecipes.json" | "DojoRecipes.json"
+        ) {
+            // Рецепты и материалы разбираются отдельно от торговых определений.
         } else if document.name.eq_ignore_ascii_case("Mods.json") {
             parse_syndicate_offers(&document.body, &catalog_by_game_ref, &mut syndicate_offers)?;
         } else if document.name.eq_ignore_ascii_case("ArcaneDissolution.json") {
@@ -429,6 +439,8 @@ fn normalize_wfcd_metadata(
     riven_dispositions.sort_by(|left, right| left.weapon_name_en.cmp(&right.weapon_name_en));
     let item_definitions: Vec<_> = item_definitions.into_values().collect();
     let mastery_items = normalize_mastery_items(dump, &item_localizations)?;
+    let crafting_recipes =
+        crate::crafting_metadata::normalize_recipes(dump, &mastery_items, &item_localizations)?;
     let item_localizations: Vec<_> = item_localizations.into_values().collect();
     let syndicate_offers: Vec<_> = syndicate_offers.into_values().collect();
     let nightwave_offers: Vec<_> = nightwave_offers.into_values().collect();
@@ -438,7 +450,7 @@ fn normalize_wfcd_metadata(
         metadata: GameMetadataSnapshotMetadata {
             source: GameMetadataSource::WfcdWarframeItems,
             fetched_at: dump.fetched_at,
-            schema_version: 10,
+            schema_version: 11,
             set_count: u64::try_from(prime_sets.len()).unwrap_or(u64::MAX),
             relic_count: u64::try_from(relics.len()).unwrap_or(u64::MAX),
             prime_part_count: u64::try_from(prime_parts.len()).unwrap_or(u64::MAX),
@@ -452,6 +464,7 @@ fn normalize_wfcd_metadata(
         riven_dispositions,
         item_definitions,
         mastery_items,
+        crafting_recipes,
         item_localizations,
         syndicate_offers,
         nightwave_offers,
@@ -1293,11 +1306,20 @@ mod tests {
             .await
             .expect("production metadata downloads");
 
-        assert_eq!(dump.documents.len(), WFCD_DOCUMENT_NAMES.len() + 3);
+        assert_eq!(dump.documents.len(), WFCD_DOCUMENT_NAMES.len() + 5);
         validate_metadata_dump(&dump).expect("production metadata stays within aggregate limit");
         let snapshot = normalize_wfcd_metadata(&dump, &catalog)
             .expect("production metadata normalizes against the current catalog");
-        assert_eq!(snapshot.metadata.schema_version, 10);
+        assert_eq!(snapshot.metadata.schema_version, 11);
+        assert!(snapshot.crafting_recipes.iter().any(|recipe| {
+            recipe.result_game_ref == "/Lotus/Weapons/Tenno/Rifle/BoltoRifle"
+                && recipe.blueprint_source == platscope_domain::BlueprintSource::Market
+                && recipe.blueprint_price.is_some_and(|price| price > 0)
+        }));
+        assert!(snapshot.crafting_recipes.iter().any(|recipe| {
+            recipe.result_game_ref == "/Lotus/Weapons/ClanTech/Chemical/FlameThrower"
+                && recipe.blueprint_source == platscope_domain::BlueprintSource::Dojo
+        }));
         assert!(snapshot.mastery_items.len() > 500);
         assert!(
             snapshot

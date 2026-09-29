@@ -50,7 +50,7 @@
     <div>
       <p class="eyebrow">Приложение</p>
       <h2 id="app-update-heading">Обновления PlatScope</h2>
-      <p>Новые версии проверяются автоматически. Установка начинается только после подтверждения.</p>
+
     </div>
     <div class="update-settings__control">
       <div class="version-row">

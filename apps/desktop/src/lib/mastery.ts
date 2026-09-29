@@ -68,9 +68,9 @@ export function masteryAnnotation(
     title = t("Получаем историю освоения аккаунта.", "Loading account mastery history.");
   } else if (!item && options.error) {
     text = t("Освоение недоступно", "Mastery unavailable");
-    title = t("Не удалось загрузить историю. Повторите обновление в «Мои предметы → Освоение».", "History could not be loaded. Retry in My items → Mastery.");
+    title = t("Не удалось загрузить историю. Повторите обновление в разделе «Освоение».", "History could not be loaded. Retry in Mastery.");
   } else if ((!item || item.status === "unknown") && !options.historyAvailable) {
-    title += t(" Обновите данные из Warframe в «Мои предметы → Освоение».", "Update from Warframe in My items → Mastery.");
+    title += t(" Обновите данные из Warframe в разделе «Освоение».", "Update from Warframe in Mastery.");
   }
   if (item && options.stale) {
     text += t(" · сохранено", " · saved");

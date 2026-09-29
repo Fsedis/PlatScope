@@ -6,6 +6,8 @@ pub use personal_goals::{PersonalGoalCompletion, PersonalGoalsService, PersonalG
 
 mod mastery;
 pub use mastery::{MasteryService, MasteryView};
+mod mastery_plan;
+pub use mastery_plan::{MasteryPlanService, MasteryPlanView};
 mod world_activity;
 pub use world_activity::{WorldActivityService, WorldActivityView};
 
@@ -68,7 +70,7 @@ const HISTORY_FETCH_ATTEMPTS: u8 = 3;
 pub const DEFAULT_KEEP_COPIES: u32 = 1;
 pub const DEFAULT_REWARD_OVERLAY_SCALE_PERCENT: u16 = 100;
 pub const DEFAULT_REWARD_OVERLAY_OFFSET_PERCENT: i16 = 0;
-const CURRENT_GAME_METADATA_SCHEMA_VERSION: u32 = 10;
+const CURRENT_GAME_METADATA_SCHEMA_VERSION: u32 = 11;
 const CURRENT_CATALOG_SCHEMA_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -5738,7 +5740,7 @@ mod tests {
         SnapshotMetadata,
     };
 
-    fn empty_inventory_view(schema_version: u32) -> InventoryView {
+    pub(super) fn empty_inventory_view(schema_version: u32) -> InventoryView {
         InventoryView {
             metadata: InventorySnapshotMetadata {
                 source: InventorySource::ReadOnlyScan,
@@ -5883,7 +5885,7 @@ mod tests {
         }
     }
 
-    fn empty_game_metadata_fixture(now: chrono::DateTime<Utc>) -> GameMetadataSnapshot {
+    pub(super) fn empty_game_metadata_fixture(now: chrono::DateTime<Utc>) -> GameMetadataSnapshot {
         GameMetadataSnapshot {
             metadata: GameMetadataSnapshotMetadata {
                 source: platscope_domain::GameMetadataSource::WfcdWarframeItems,
@@ -5902,6 +5904,7 @@ mod tests {
             riven_dispositions: Vec::new(),
             item_definitions: Vec::new(),
             mastery_items: Vec::new(),
+            crafting_recipes: Vec::new(),
             item_localizations: Vec::new(),
             syndicate_offers: Vec::new(),
             nightwave_offers: Vec::new(),
@@ -6997,6 +7000,7 @@ mod tests {
             riven_dispositions: vec![],
             item_definitions: vec![],
             mastery_items: vec![],
+            crafting_recipes: vec![],
             item_localizations: vec![],
             syndicate_offers: vec![],
             nightwave_offers: vec![],

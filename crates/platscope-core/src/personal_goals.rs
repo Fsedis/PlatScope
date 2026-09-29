@@ -73,7 +73,15 @@ mod tests {
         let result = allocate(&[goal(3), goal(3)], &[item()]);
         assert_eq!(result.parts, vec![vec![3], vec![2]]);
         assert_eq!(result.tradeable, vec![3]);
-        assert_eq!(allocate(&[goal(2)], &[item()]).tradeable, vec![0]);
+        let untradeable_only = allocate(&[goal(2)], &[item()]);
+        assert_eq!(untradeable_only.tradeable, vec![0]);
+        assert_eq!(untradeable_only.untradeable, vec![2]);
+        let database = Database::open_in_memory().unwrap();
+        database.set_setting(GOALS_KEY, &vec![goal(2)]).unwrap();
+        assert_eq!(
+            crafting_reservations(&database, &[item()]).unwrap(),
+            std::collections::BTreeMap::from([("/part".into(), 2)])
+        );
     }
 
     #[test]
@@ -225,6 +233,7 @@ fn exact_part(item: &InventoryViewItem, slug: &str) -> bool {
 struct Allocation {
     parts: Vec<Vec<u32>>,
     tradeable: Vec<u32>,
+    untradeable: Vec<u32>,
 }
 
 /// Каждая физическая копия учитывается один раз, сначала для ранее добавленных целей.
@@ -261,7 +270,30 @@ fn allocate(goals: &[SavedGoal], items: &[InventoryViewItem]) -> Allocation {
                 .collect()
         })
         .collect();
-    Allocation { parts, tradeable }
+    Allocation {
+        parts,
+        tradeable,
+        untradeable,
+    }
+}
+
+/// Для изготовления защищены все занятые целью копии, включая непередаваемые.
+pub(super) fn crafting_reservations(
+    database: &Database,
+    items: &[InventoryViewItem],
+) -> Result<std::collections::BTreeMap<String, u32>, CoreError> {
+    let goals: Vec<SavedGoal> = database.get_setting(GOALS_KEY)?.unwrap_or_default();
+    let allocation = allocate(&goals, items);
+    let mut reserved = std::collections::BTreeMap::<String, u32>::new();
+    for ((item, tradeable), untradeable) in items
+        .iter()
+        .zip(allocation.tradeable)
+        .zip(allocation.untradeable)
+    {
+        let count = reserved.entry(item.canonical_game_id.clone()).or_default();
+        *count = count.saturating_add(tradeable.saturating_add(untradeable));
+    }
+    Ok(reserved)
 }
 
 pub(super) fn apply_reservations(

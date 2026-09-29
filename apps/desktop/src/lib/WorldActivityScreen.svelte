@@ -198,7 +198,7 @@
 
   {#if showNotifications}
     <div id="world-notifications" class="world-panel notification-panel" bind:this={notificationPanel} tabindex="-1" role="region" aria-labelledby="notification-heading">
-      <header class="panel-title"><div><h2 id="notification-heading">{editingId ? "Изменить напоминание" : "О чём напомнить"}</h2><p>PlatScope должен быть запущен. Свёрнутое окно не мешает напоминаниям.</p></div>
+      <header class="panel-title"><div><h2 id="notification-heading">{editingId ? "Изменить напоминание" : "О чём напомнить"}</h2><p>Требуется запущенный PlatScope.</p></div>
         <button type="button" class="icon-button" aria-label="Закрыть напоминания" onclick={closeNotifications}><WorldActivityIcon kind="close" /></button></header>
       <form onsubmit={event => { event.preventDefault(); void saveRule(); }}>
         <div class="notification-fields">
@@ -222,7 +222,7 @@
                 <button type="button" class="secondary" aria-label={`Удалить напоминание: ${ALERT_NAMES[rule.key]}, ${stateName(rule.state)}`} onclick={() => removeRule(rule.id)}>Удалить</button></div></li>
           {/each}
         </ul>
-      {:else}<p class="notification-empty">Напоминаний пока нет. Выберите событие выше или колокольчик рядом с таймером.</p>{/if}
+      {:else}<p class="notification-empty">Напоминаний пока нет.</p>{/if}
     </div>
   {/if}
 
@@ -240,7 +240,7 @@
     {/if}
 
     <section class="destinations" aria-labelledby="destinations-heading">
-      <header class="section-heading"><div><h2 id="destinations-heading">Куда отправиться</h2><p>Текущие циклы и время до их смены</p></div></header>
+      <header class="section-heading"><div><h2 id="destinations-heading">Куда отправиться</h2></div></header>
       <div class="cycle-grid">{#each cycleKeys as key}
         {@const cycle = view.cycles.find(cycle => cycle.key === key)}
         {@const active = periodState(cycle, now) === "active"}
@@ -280,7 +280,7 @@
             incomplete={view.resurgence.inventoryIncomplete} {onOpenSettings} />
           <div class="resurgence-actions"><button type="button" onclick={() => onOpenInsights("relics")}>Открыть мои реликвии<span class="small-icon"><WorldActivityIcon kind="arrow" /></span></button>
             <button type="button" class="secondary" onclick={() => onOpenInsights("complete_sets")}>Найти, что дособрать</button></div>
-        {:else}<p class="empty-copy">{resurgenceState === "upcoming" && view.resurgence ? `Начнётся ${dateLabel(view.resurgence.activation)}.` : !view.resurgence ? "Источник пока не передал текущую ротацию Варзии." : "Ротация обновляется. Покажем товары, когда источник подтвердит новый список."}</p>{/if}
+        {:else}<p class="empty-copy">{resurgenceState === "upcoming" && view.resurgence ? `Начнётся ${dateLabel(view.resurgence.activation)}.` : !view.resurgence ? "Источник пока не передал текущую ротацию Варзии." : "Ротация обновляется."}</p>{/if}
       </article>
 
       <aside class="world-schedule" aria-label="Торговцы и расписание">
@@ -301,11 +301,11 @@
                 {#if baroQuery}<p class="search-result" role="status">Найдено: {baroOffers.length} из {view.baroOffers.length}</p>{/if}
                 <ul class="offer-list">{#each baroOffers as offer}
                   <li><div><strong>{offer.displayName}</strong>{#if offer.masteryRef}<MasteryBadge gameRef={offer.masteryRef} />{/if}</div><span>{offerCost(offer, false)}</span></li>
-                {:else}<li class="offer-empty"><p>{baroQuery ? "Ничего не найдено. Попробуйте другое название." : "Баро уже прибыл, но источник ещё не передал товары."}</p>
+                {:else}<li class="offer-empty"><p>{baroQuery ? "Ничего не найдено." : "Баро уже прибыл, но источник ещё не передал товары."}</p>
                   {#if baroQuery}<button type="button" class="text-action" onclick={() => { baroQuery = ""; baroSearch?.focus(); }}>Сбросить поиск</button>{/if}</li>{/each}</ul>
               </details>
               <div class="baro-action"><button type="button" class="secondary" onclick={() => onOpenInsights("resources")}>Оценить обмен ресурсов<span class="small-icon"><WorldActivityIcon kind="arrow" /></span></button></div>
-            {:else}<p class="empty-copy">Ассортимент появится после прибытия.</p>{/if}
+            {/if}
           {:else}<p class="empty-copy">{view.baro ? "Предыдущий визит закончился. Уточняем следующий." : "Источник пока не передал расписание Баро."}</p>{/if}
         </article>
 
@@ -319,10 +319,10 @@
 
         <section class="world-panel resets-panel" aria-labelledby="resets-heading">
           <header class="schedule-heading"><h2 id="resets-heading">Обновления и сбросы</h2></header>
-          {#each [{ key: "daily" as const, title: "Ежедневный сброс", hint: "Лимиты и ежедневный вход", at: dailyReset },
-            { key: "weekly" as const, title: "Еженедельный сброс", hint: "Недельные активности", at: weeklyReset },
-            { key: "sortie" as const, title: "Новая вылазка", hint: "Смена трёх миссий", at: view.sortie ? Date.parse(view.sortie.expiry) : null }] as reset}
-            <div class="reset-cell"><div><h3>{reset.title}</h3><p>{reset.hint}</p>
+          {#each [{ key: "daily" as const, title: "Ежедневный сброс", at: dailyReset },
+            { key: "weekly" as const, title: "Еженедельный сброс", at: weeklyReset },
+            { key: "sortie" as const, title: "Новая вылазка", at: view.sortie ? Date.parse(view.sortie.expiry) : null }] as reset}
+            <div class="reset-cell"><div><h3>{reset.title}</h3>
               {#if reset.key === "sortie" && sectionStale(view, "sortie", now)}<p class="stale-note">Не удалось обновить</p>{/if}</div>
               <div class="reset-time"><strong title={reset.at ? dateLabel(reset.at) : undefined}>{countdown(reset.at, now)}</strong>
                 <button type="button" class="bell" class:enabled={activeRules.some(rule => rule.key === reset.key)} aria-label={`Напомнить: ${reset.title}`} title="Настроить напоминание" onclick={event => configure(reset.key, event.currentTarget)}><WorldActivityIcon kind="bell" /></button></div></div>
@@ -340,7 +340,7 @@
   {/if}
 
   <footer class="world-footer"><label class="start-preference"><input type="checkbox" checked={$worldPreferences.startHere}
-    onchange={event => { if (!setStartHere(event.currentTarget.checked)) event.currentTarget.checked = $worldPreferences.startHere; }} />Открывать «Сейчас в игре» при запуске</label><span>Данные и таймеры обновляются автоматически</span>
+    onchange={event => { if (!setStartHere(event.currentTarget.checked)) event.currentTarget.checked = $worldPreferences.startHere; }} />Открывать «Сейчас в игре» при запуске</label>
     {#if preferenceMessage}<p class="preference-message" role="status">{preferenceMessage}</p>{/if}</footer>
 </section>
 
@@ -369,7 +369,7 @@
   .count-badge { display:inline-flex; align-items:center; justify-content:center; min-width:1.4rem; min-height:1.4rem; padding:.05rem .4rem; border-radius:.4rem; background:var(--surface-3); color:var(--text-muted); font-size:.75rem; font-weight:650; font-variant-numeric:tabular-nums; }
   .section-heading { margin-bottom:.8rem; }
   .section-heading h2 { font-size:1.15rem; }
-  .section-heading p { margin-top:.2rem; }
+
   .cycle-grid { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:.7rem; }
   .cycle-card { --cycle-color:var(--text-muted); --cycle-tint:var(--surface-2); display:flex; flex-direction:column; min-width:0; border:1px solid var(--border); border-radius:.85rem; padding:1rem; background:linear-gradient(155deg,var(--cycle-tint),var(--surface-1) 75%); box-shadow:0 2px 3px oklch(.3 .02 60 / .025); }
   .cycle-card[data-tone="gold"] { --cycle-color:oklch(.44 .095 65); --cycle-tint:oklch(.946 .038 85); }

@@ -51,7 +51,7 @@
       <select id="keep-copies" value={String(value)} disabled={disabled || updating} onchange={save}>
         {#each choices as count}<option value={String(count)}>{count}</option>{/each}
       </select>
-    <p>{$locale === "ru" ? "Общая настройка для инвентаря и рынка. Если продажа затронет оставленные себе копии, появится предупреждение — вы сможете продолжить." : "Shared by inventory and market. Selling reserved copies shows a warning and lets you continue."}</p>
+
     {#if updating}<p role="status">{$locale === "ru" ? "Сохраняем…" : "Saving…"}</p>{/if}
     {#if error}<p class="reserve-error" role="alert">{error}</p>{/if}
   </div>

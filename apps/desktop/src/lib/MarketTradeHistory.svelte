@@ -87,7 +87,7 @@
 
 <section class="market-history" aria-label="История сделок">
   <div class="history-heading">
-    <div><p>Обмены из игры. Нажмите на имя игрока, чтобы открыть его профиль на Warframe Market.</p></div>
+
     <button class="secondary export-button" disabled={!filtered.length || unavailable} onclick={exportCsv} title="Скачать выбранные сделки в таблицу">Скачать CSV</button>
   </div>
 
@@ -101,9 +101,9 @@
 
   {#if profileMessage}<p class:failed={profileFailed} class="profile-message" role={profileFailed ? "alert" : "status"}>{profileMessage}</p>{/if}
   {#if unavailable}
-    <div class="history-empty" role="alert"><strong>История временно недоступна</strong><p>Сохранённые сделки появятся после успешной загрузки.</p><button class="secondary" disabled={busy} onclick={onReload}>Загрузить историю снова</button></div>
+    <div class="history-empty" role="alert"><strong>История временно недоступна</strong><button class="secondary" disabled={busy} onclick={onReload}>Загрузить историю снова</button></div>
   {:else if !filtered.length}
-    <div class="history-empty"><strong>{events.length ? "Таких сделок нет" : "Здесь появятся ваши сделки"}</strong><p>{events.length ? "Измените имя, предмет или период поиска." : "PlatScope запишет обмены, которые вы завершите в игре при запущенном приложении."}</p>{#if events.length}<button class="secondary" onclick={clearFilters}>Сбросить фильтры</button>{/if}</div>
+    <div class="history-empty"><strong>{events.length ? "Таких сделок нет" : "Сделок пока нет"}</strong>{#if events.length}<button class="secondary" onclick={clearFilters}>Сбросить фильтры</button>{/if}</div>
   {:else}
     <div class="history-table-wrap">
       <table class="history-table">
@@ -135,7 +135,7 @@
         </tbody>
       </table>
     </div>
-    <footer class="history-footer"><p>{events.length >= 1000 ? "Показаны последние 1 000 сделок из игры." : "Источник — обмены, записанные PlatScope в игре."} Цены в этой истории — суммы ваших сделок.</p>{#if pageCount > 1}<nav aria-label="Страницы истории сделок"><button class="secondary" disabled={page === 1} onclick={() => page -= 1}>Назад</button><span>{page} / {pageCount}</span><button class="secondary" disabled={page === pageCount} onclick={() => page += 1}>Далее</button></nav>{/if}</footer>
+    <footer class="history-footer">{#if events.length >= 1000}<p>Показаны последние 1 000 сделок.</p>{/if}{#if pageCount > 1}<nav aria-label="Страницы истории сделок"><button class="secondary" disabled={page === 1} onclick={() => page -= 1}>Назад</button><span>{page} / {pageCount}</span><button class="secondary" disabled={page === pageCount} onclick={() => page += 1}>Далее</button></nav>{/if}</footer>
   {/if}
 </section>
 
@@ -143,7 +143,7 @@
   .history-total { margin:0 0 .6rem; font-size:.8125rem; color:var(--text-muted); } .history-total strong { color:var(--text); }
   .market-history { min-width: 0; }
   .history-heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: .85rem; }
-  .history-heading p { margin: .25rem 0 0; color: var(--text-muted); font-size: .8rem; line-height: 1.45; }
+
   .export-button { flex: 0 0 auto; }
   .history-filters { display: grid; grid-template-columns: minmax(13rem, 1fr) minmax(9rem, .3fr) minmax(11rem, .3fr) auto; align-items: end; gap: .65rem; padding: .75rem; border: 1px solid var(--border); border-radius: .7rem; background: var(--surface-1); margin-bottom: .6rem; }
   .history-filters label { display: grid; gap: .25rem; color: var(--text-muted); font-size: .75rem; font-weight: 650; min-width: 0; }
@@ -189,7 +189,7 @@
   .profile-message { padding: .65rem .8rem; border-radius: .5rem; background: var(--success-soft); color: var(--success); font-size: .8rem; }
   .profile-message.failed { background: var(--danger-soft); color: var(--danger); }
   .history-empty { padding: 2.5rem 1rem; border: 1px solid var(--border); border-radius: .7rem; background: var(--surface-1); text-align: center; }
-  .history-empty p { color: var(--text-muted); font-size: .85rem; }
+
   .history-footer { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-top: .65rem; }
   .history-footer p { font-size: .75rem; color: var(--text-muted); max-width: 42rem; margin: 0; line-height: 1.4; }
   .history-footer nav { display: flex; align-items: center; gap: .6rem; flex: 0 0 auto; font-size: .8rem; }

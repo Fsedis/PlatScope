@@ -27,14 +27,14 @@
 
 <section class="market-offers" aria-label="Предложения игроков">
   <div class="offer-head">{#if showHeading}<h3>{live.quoteState === "stale_cache" ? "Сохранённые предложения" : "Предложения игроков"}</h3>{/if}<div role="group" aria-label="Тип предложений"><button class="secondary" aria-pressed={side === "sell"} onclick={() => side="sell"}>Продают · {live.sellOrderCount}</button><button class="secondary" aria-pressed={side === "buy"} onclick={() => side="buy"}>Покупают · {live.buyOrderCount}</button></div></div>
-  <p class="hint">Лучшие предложения игроков в игре, до 5 с каждой стороны. Количество в списке не означает число всех продавцов или покупателей.</p>
+
   <div class="offer-list">{#each offers as offer}<div class="offer"><strong>{money(offer.platinum)}</strong><span>{offer.perTrade > 1 ? `за ${offer.perTrade} шт.` : "за штуку"}<small>Всего: {offer.quantity} шт.</small></span><div class="trader">{#if offer.userSlug}<button class="profile" title="Открыть профиль Warframe Market" onclick={() => profile(offer)}>{offer.userIngameName || offer.userSlug} ↗</button>{:else}<span>{offer.userIngameName ?? "Игрок"}</span>{/if}{#if offer.userReputation != null}<small>Репутация: {offer.userReputation}</small>{/if}</div>{#if marketWhisper(offer,itemNameEn,itemKey)}<button class="secondary whisper" onclick={() => copyWhisper(offer)}>Скопировать сообщение</button>{/if}</div>{:else}<p>Подходящих предложений сейчас нет.</p>{/each}</div>
   {#if message}<p class="message" role="status">{message}</p>{/if}
 </section>
 
 <style>
-  h3,p { margin:0; } h3 { font-size:.9375rem; } p,.hint,small { font-size:.75rem; line-height:1.5; color:var(--text-muted); }
-  .hint { margin:.5rem 0; } .offer-head,.offer-head > div { display:flex; align-items:center; justify-content:space-between; gap:.4rem; flex-wrap:wrap; }
+  h3,p { margin:0; } h3 { font-size:.9375rem; } p, small { font-size:.75rem; line-height:1.5; color:var(--text-muted); }
+   .offer-head,.offer-head > div { display:flex; align-items:center; justify-content:space-between; gap:.4rem; flex-wrap:wrap; }
   button { min-height:2rem; padding:.3rem .6rem; font-size:.75rem; } button[aria-pressed=true] { background:var(--accent-soft); border-color:var(--accent); }
   .offer { display:flex; align-items:center; gap:.8rem; border-bottom:1px solid var(--border); padding:.45rem 0; font-size:.8125rem; }
   .offer > strong { min-width:4rem; white-space:nowrap; } .offer > span { min-width:5rem; } small { display:block; }

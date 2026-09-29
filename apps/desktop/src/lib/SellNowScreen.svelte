@@ -2,7 +2,6 @@
   import type { SellNowView as CachedSellNowView } from "./sellNow";
 
   let cachedSellNowView: CachedSellNowView | null = null;
-  let cachedItemMode: "inventory" | "mastery" = "inventory";
   const cachedChecks = new Map<string, import("./sellNow").LiveSellNowResult>();
 </script>
 
@@ -12,7 +11,6 @@
   import { onMount, tick } from "svelte";
   import { revealCompactDetail, revealElement } from "./detailNavigation";
   import { localeCode, useLocale, type AppSettings } from "./i18n";
-  import MasteryScreen from "./MasteryScreen.svelte";
   import InventoryAutoRefresh from "./InventoryAutoRefresh.svelte";
   import KeepCopiesControl from "./KeepCopiesControl.svelte";
   import { inventoryScanErrorMessage } from "./inventoryRefresh";
@@ -81,7 +79,7 @@
       loadError: (_reason: string) => "Не удалось открыть инвентарь. Сохранённые данные не изменились.",
       missingVariant: "Этот вариант больше не найден в инвентаре. Обновите список.", liveError: (_reason: string) => "Не удалось получить текущую цену. Сохранённая оценка не изменилась.",
       noSignal: "Нет рекомендации", retry: "Повторить", notImported: "Инвентарь не обновлён", addSnapshot: "Сначала обновите инвентарь",
-      addSnapshotBody: "Запустите Warframe и обновите инвентарь. PlatScope покажет все найденные предметы и рекомендации по продаже.", openInventory: "Обновить инвентарь",
+      openInventory: "Обновить инвентарь",
       summary: "Мои предметы", totalCopies: "Всего копий", candidates: "Позиций к продаже", recommended: "Продавать сейчас", priced: "С рассчитанной ценой", highPriority: "В первую очередь", nominal: "Ориентировочная сумма",
       inventoryUpdated: "Инвентарь обновлён", scanInventory: "Обновить из Warframe", scanningInventory: "Обновляем…", scanError: "Не удалось обновить инвентарь. Запустите Warframe, войдите в игру и повторите.", reserve: "Оставлять копий", reserveError: "Не удалось изменить резерв копий.",
       notForecast: "Важно:", nominalBody: "это сумма по текущим оценкам, а не гарантированная выручка.",
@@ -106,7 +104,7 @@
       loadError: (_reason: string) => "Unable to open inventory. Saved data was not changed.",
       missingVariant: "The exact variant is no longer sellable. Refresh the list.", liveError: (reason: string) => `Current price unavailable; the local estimate was preserved. ${reason}`,
       noSignal: "No signal", retry: "Recalculate", notImported: "Inventory not imported", addSnapshot: "Add a local inventory snapshot",
-      addSnapshotBody: "Start Warframe and update inventory to see all items and sell recommendations.", openInventory: "Update inventory",
+      openInventory: "Update inventory",
       summary: "My items", totalCopies: "Total copies", candidates: "Sellable items", recommended: "Sell now", priced: "Priced", highPriority: "High priority", nominal: "Nominal value",
       inventoryUpdated: "Inventory updated", scanInventory: "Update from Warframe", scanningInventory: "Updating…", scanError: "Unable to update inventory. Start Warframe, sign in, and try again.", reserve: "Keep copies", reserveError: "Unable to change the copy reserve.",
       notForecast: "Not a revenue forecast:", nominalBody: "nominal value is sellable × fair. It does not guarantee that the full volume will sell at that price.",
@@ -131,8 +129,8 @@
   $: categoryLabels = categoryCopy[$locale];
 
   const labels = {
-    ru: { all: "Все предметы", total: "Позиций в инвентаре", value: "Оценка доступных копий", search: "Название на русском или английском", free: "Есть свободные копии", price: "Оценка / шт.", check: "Проверить цену", checked: "Проверено", count: "Количество", available: "Для продажи", protected: "Почему доступно не всё?", reserve: "Резерв и защита копий", reserveHint: "Резерв задаёт рекомендуемый запас для каждого варианта. При выставлении этих копий появится предупреждение — вы сможете продолжить. Надетые и непередаваемые копии защищены отдельно.", breakdown: "Состав количества", owned: "Всего есть", tradeable: "Можно передавать", untradeable: "Нельзя передавать", unknown: "Обмен не подтверждён", equipped: "Надето", saved: "Оставлять себе", insufficient: "Нет данных о надетых модах. Обновите инвентарь, чтобы не продать используемую копию.", details: "Цена и спрос подробнее", back: "← К списку предметов", page: "Страницы инвентаря", previous: "Назад", next: "Дальше", filterCount: "Найдено", partial: "Не все доступные позиции имеют цену; сумма оценочная.", empty: "В этом снимке пока нет предметов", emptyHint: "Повторите обновление после входа в Warframe.", selectionReset: "Инвентарь изменился. Проверьте количество и подтвердите ордер заново.", show: "Показывать", reset: "Сбросить фильтры" },
-    en: { all: "All items", total: "Inventory entries", value: "Estimated sellable value", search: "Russian or English item name", free: "Has unequipped copies", price: "Estimate / item", check: "Check price", checked: "Checked", count: "Quantity", available: "For sale", protected: "Why are some copies unavailable?", reserve: "Keep copies and protection", reserveHint: "The reserve is your preferred stock for each variant. Listing these copies shows a warning and lets you continue. Equipped and untradeable copies remain protected.", breakdown: "Quantity details", owned: "Owned", tradeable: "Tradeable", untradeable: "Untradeable", unknown: "Tradeability unconfirmed", equipped: "Equipped", saved: "Keep copies", insufficient: "Equipped mod data is missing. Refresh inventory to protect copies in use.", details: "Price and demand details", back: "← Back to items", page: "Inventory pages", previous: "Previous", next: "Next", filterCount: "Found", partial: "Some sellable entries have no price; this is an estimate.", empty: "This snapshot has no items yet", emptyHint: "Refresh after logging into Warframe.", selectionReset: "Inventory changed. Check the quantity and confirm the order again.", show: "Show", reset: "Reset filters" },
+    ru: { all: "Все предметы", total: "Позиций в инвентаре", value: "Оценка доступных копий", search: "Название на русском или английском", free: "Есть свободные копии", price: "Оценка / шт.", check: "Проверить цену", checked: "Проверено", count: "Количество", available: "Для продажи", protected: "Почему доступно не всё?", reserve: "Резерв и защита копий", breakdown: "Состав количества", owned: "Всего есть", tradeable: "Можно передавать", untradeable: "Нельзя передавать", unknown: "Обмен не подтверждён", equipped: "Надето", saved: "Оставлять себе", insufficient: "Нет данных о надетых модах. Обновите инвентарь, чтобы не продать используемую копию.", details: "Цена и спрос подробнее", back: "← К списку предметов", page: "Страницы инвентаря", previous: "Назад", next: "Дальше", filterCount: "Найдено", partial: "Не все доступные позиции имеют цену; сумма оценочная.", empty: "В этом снимке пока нет предметов", selectionReset: "Инвентарь изменился. Проверьте количество и подтвердите ордер заново.", show: "Показывать", reset: "Сбросить фильтры" },
+    en: { all: "All items", total: "Inventory entries", value: "Estimated sellable value", search: "Russian or English item name", free: "Has unequipped copies", price: "Estimate / item", check: "Check price", checked: "Checked", count: "Quantity", available: "For sale", protected: "Why are some copies unavailable?", reserve: "Keep copies and protection", breakdown: "Quantity details", owned: "Owned", tradeable: "Tradeable", untradeable: "Untradeable", unknown: "Tradeability unconfirmed", equipped: "Equipped", saved: "Keep copies", insufficient: "Equipped mod data is missing. Refresh inventory to protect copies in use.", details: "Price and demand details", back: "← Back to items", page: "Inventory pages", previous: "Previous", next: "Next", filterCount: "Found", partial: "Some sellable entries have no price; this is an estimate.", empty: "This snapshot has no items yet", selectionReset: "Inventory changed. Check the quantity and confirm the order again.", show: "Show", reset: "Reset filters" },
   } as const;
   $: u = labels[$locale];
 
@@ -156,8 +154,6 @@
   let loading = cachedSellNowView === null;
   let refreshing = false;
   let scanning = false;
-  let itemMode: "inventory" | "mastery" = initialQuery ? "inventory" : cachedItemMode;
-  function selectItemMode(mode: "inventory" | "mastery") { itemMode = mode; cachedItemMode = mode; }
   let errorMessage = "";
   let selectedIdentity = "";
   let checkedPrices = new Map(cachedChecks);
@@ -177,15 +173,14 @@
   let detailOpen = false;
   $: t = $locale === "ru" ? (ru: string, _en: string) => ru : (_ru: string, en: string) => en;
   $: filterOptions = [
-    { value: "all", label: t("Без ограничений", "No restrictions"), hint: "" },
-    { value: "sellable", label: t("Есть копии для продажи", "Has sellable copies"), hint: t("Есть хотя бы одна копия после резерва и защиты надетых предметов. Наличие цены не обязательно.", "At least one copy remains after reserves and protection. A price is not required.") },
-    { value: "unavailable", label: t("Нет копий для продажи", "No sellable copies"), hint: t("Копии оставлены себе, защищены или пока не распознаны для рынка.", "Copies are reserved, protected, or not yet matched to the market.") },
-    { value: "duplicates", label: t("Две копии и больше", "Two or more copies"), hint: t("От двух копий одного варианта, включая оставленные себе. Разные ранги считаются отдельно.", "At least two copies of the same variant, including reserved copies. Ranks are counted separately.") },
-    { value: "equipped", label: t("Есть надетые копии", "Has equipped copies"), hint: t("Предмет используется в сборках. Другие его копии могут быть доступны для продажи.", "Used in loadouts. Other copies may still be sellable.") },
-    { value: "unpriced", label: t("Нет оценки цены", "No price estimate"), hint: t("Для этих вариантов нет оценки цены. Это не означает, что их нельзя продать.", "These variants have no price estimate. This does not mean they cannot be sold.") },
-    { value: "attention", label: t("Не распознаны для рынка", "Needs market matching"), hint: t("Не определён точный вариант или возможность обмена. Причина указана в карточке предмета.", "The exact variant or tradeability is unknown. See the item details for the reason.") },
+    { value: "all", label: t("Без ограничений", "No restrictions") },
+    { value: "sellable", label: t("Есть копии для продажи", "Has sellable copies") },
+    { value: "unavailable", label: t("Нет копий для продажи", "No sellable copies") },
+    { value: "duplicates", label: t("Две копии и больше", "Two or more copies") },
+    { value: "equipped", label: t("Есть надетые копии", "Has equipped copies") },
+    { value: "unpriced", label: t("Нет оценки цены", "No price estimate") },
+    { value: "attention", label: t("Не распознаны для рынка", "Needs market matching") },
   ] as const;
-  $: filterHint = filterOptions.find(option => option.value === preset)?.hint ?? "";
   $: sortOptions = [
     { key: "name", direction: "asc", label: t("По названию: А → Я", "Name: A → Z") },
     { key: "fair", direction: "desc", label: t("Сначала дороже", "Highest price first") },
@@ -558,12 +553,8 @@
 </script>
 
 
+{#if view}
 <div class="inventory-topbar">
-  <div class="item-mode-switch" role="group" aria-label={t("Мои предметы", "My items")}>
-    <button type="button" aria-pressed={itemMode === "inventory"} onclick={() => selectItemMode("inventory")}>{t("Инвентарь", "Inventory")}</button>
-    <button type="button" aria-pressed={itemMode === "mastery"} onclick={() => selectItemMode("mastery")}>{t("Освоение", "Mastery")}</button>
-  </div>
-  {#if itemMode === "inventory" && view}
     <div class="inventory-sync">
       <time datetime={view.inventoryMetadata.observedAt} title={inventorySourceLabel(view.inventoryMetadata.source, $locale) + " · " + new Date(view.inventoryMetadata.observedAt).toLocaleString(localeCode($locale))}>
         {t("Обновлено", "Updated")} {new Date(view.inventoryMetadata.observedAt).toLocaleString(localeCode($locale), {day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}
@@ -576,13 +567,9 @@
         {scanning || refreshingInBackground ? c.scanningInventory : t("Обновить", "Refresh")}
       </button>
     </div>
-  {/if}
 </div>
+{/if}
 
-{#if itemMode === "mastery"}
-  {#if errorMessage}<div class="error-block" role="alert"><p>{errorMessage}</p></div>{/if}
-  <MasteryScreen {scanning} onScan={scanWarframe} />
-{:else}
   <div class="sell-now-status" class:sr-only={!loading || !!view} role="status" aria-live="polite">{scanning ? c.scanningInventory : resultStatus}</div>
   {#if errorMessage}
     <div class="error-block" role="alert"><p>{errorMessage}</p><button type="button" class="secondary" onclick={loadSellNow}>{c.retry}</button></div>
@@ -590,13 +577,13 @@
   {#if !loading && !view && !errorMessage}
     <section class="empty-panel" aria-labelledby="sell-now-empty-heading">
       <h2 id="sell-now-empty-heading">{c.addSnapshot}</h2>
-      <p>{c.addSnapshotBody}</p>
+
       <InventoryAutoRefresh onBusy={(busy) => refreshingInBackground = busy} />
       <button type="button" onclick={scanWarframe} disabled={scanning || refreshingInBackground}>{scanning || refreshingInBackground ? c.scanningInventory : c.openInventory}</button>
     </section>
   {:else if view}
     {#if !view.rows.length}
-      <section class="empty-panel" aria-labelledby="sell-now-zero-heading"><h2 id="sell-now-zero-heading">{u.empty}</h2><p>{u.emptyHint}</p></section>
+      <section class="empty-panel" aria-labelledby="sell-now-zero-heading"><h2 id="sell-now-zero-heading">{u.empty}</h2></section>
     {:else}
       <div class="sell-now-layout" class:detail-open={detailOpen}>
         <section class="results-panel sell-results" aria-labelledby="sell-results-heading">
@@ -618,7 +605,7 @@
             </label>
             <label for="sell-filter">
               <span>{t("Отбор предметов", "Item filter")}</span>
-              <select id="sell-filter" bind:value={preset} aria-describedby={filterHint ? "inventory-filter-hint" : undefined}>
+              <select id="sell-filter" bind:value={preset}>
                 {#each filterOptions as option}<option value={option.value}>{option.label}</option>{/each}
               </select>
             </label>
@@ -633,7 +620,7 @@
             <span>{t("Найдено", "Found")} <strong>{visibleRows.length.toLocaleString(localeCode($locale))}</strong> {t("из", "of")} {displayRows.length.toLocaleString(localeCode($locale))} {t("позиций", "entries")}</span>
             {#if canReset}<button type="button" class="text-action" onclick={resetFilters}>{t("Сбросить всё", "Reset all")}</button>{/if}
           </div>
-          {#if filterHint}<p class="inventory-filter-hint" id="inventory-filter-hint">{filterHint}</p>{/if}
+
           {#if visibleRows.length}
             <div class="table-wrap" bind:this={listScroll}>
               <table class="sell-table">
@@ -677,7 +664,7 @@
               {/if}
             </nav>
           {:else}
-            <div class="no-results"><span class="empty-symbol" aria-hidden="true">⌕</span><h3>{c.noFiltered}</h3><p>{t("Измените поиск или выбранные условия выше.", "Change the search or the conditions above.")}</p></div>
+            <div class="no-results"><span class="empty-symbol" aria-hidden="true">⌕</span><h3>{c.noFiltered}</h3></div>
           {/if}
         </section>
 
@@ -701,7 +688,7 @@
                   {#if selectedRow.inventory.equippedQuantity}<div><dt>{u.equipped}</dt><dd>{selectedRow.inventory.equippedQuantity}</dd></div>{/if}
                   <div><dt>{u.saved}</dt><dd>{view.keepCopies}</dd></div>
                   {#if selectedRow.inventory.personalReservedQuantity}<div><dt>{t("Для личных сборок", "For personal goals")}</dt><dd>{selectedRow.inventory.personalReservedQuantity}</dd></div>{/if}
-                </dl><p>{u.reserveHint}</p>
+                </dl>
               </details>
             </section>
 
@@ -775,14 +762,10 @@
       </div>
     {/if}
   {/if}
-{/if}
 
 <style>
   .reserve-warning { padding:.75rem; border:1px solid var(--warning, #956422); border-radius:.5rem; background:var(--surface-2); color:var(--text); }
   .inventory-topbar { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:.75rem; margin:0 0 1.15rem; border-bottom:1px solid var(--border); padding:0 0 .75rem; }
-  .item-mode-switch { display:flex; gap:.25rem; align-items:center; }
-  .item-mode-switch button { border:0; background:transparent; color:var(--text-muted); border-radius:.45rem; padding:.55rem .9rem; box-shadow:none; }
-  .item-mode-switch button[aria-pressed="true"] { background:var(--surface-1); color:var(--text); box-shadow:0 1px 3px #3b251718; }
   .inventory-sync { display:flex; flex-wrap:wrap; align-items:center; gap:.6rem 1rem; font-size:.78rem; }
   .inventory-sync time { color:var(--text-muted); font-size:.73rem; }
   .refresh-inventory { display:flex; gap:.4rem; align-items:center; justify-content:center; white-space:nowrap; }
@@ -800,7 +783,7 @@
   .inventory-search input:focus-visible { outline:none; }
   .inventory-result-bar { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:.5rem; padding:0 1rem .75rem; color:var(--text-muted); font-size:.78rem; min-height:1.7rem; }
   .inventory-result-bar strong { color:var(--text); }
-  .inventory-filter-hint { font-size:.78rem; line-height:1.5; color:var(--text-muted); background:var(--surface-2); margin:0; padding:.65rem 1rem; border-top:1px solid var(--border); }
+
   .text-action { display:inline-flex; align-items:center; width:auto; padding:.25rem 0; border:0; background:transparent; color:var(--accent-strong); box-shadow:none; font-size:.78rem; font-weight:600; }
   .text-action:hover:not(:disabled) { background:transparent; text-decoration:underline; }
   .sell-results > .table-wrap { max-height:min(70vh,52rem); overflow:auto; overscroll-behavior:contain; scrollbar-gutter:stable; border-top:1px solid var(--border); }
@@ -883,7 +866,7 @@
   .seller-empty { font-size:.75rem; color:var(--text-muted); margin:.5rem 0; }
   .no-results { padding:3rem 1rem; text-align:center; }
   .no-results h3 { font-size:1rem; }
-  .no-results p { font-size:.85rem; }
+
   .empty-symbol { display:block; color:var(--text-muted); font-size:2.5rem; margin-bottom:.6rem; }
   @media (max-width:90rem) {
     .sell-now-layout { grid-template-columns:minmax(0,1fr) 21rem; gap:.75rem; }

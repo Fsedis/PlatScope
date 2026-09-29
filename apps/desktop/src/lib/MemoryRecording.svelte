@@ -42,7 +42,7 @@
 </script>
 
 <section class="recording" aria-label="Запись исследования памяти">
-  <div class="heading"><div><strong>Запись исследования миссии</strong><p>Начните в Орбитере, дождитесь снимка и отправляйтесь на миссию. После возвращения сохраните ещё один снимок.</p></div>
+  <div class="heading"><div><strong>Запись исследования миссии</strong></div>
     <div class="options"><label>Что записывать<select bind:value={mode} disabled={active || busy}><option value="binary">Двоичные снимки памяти</option><option value="fields">Только игровые поля</option></select></label>
     {#if mode === "binary"}<label>Предел размера<select bind:value={limitGib} disabled={active || busy}><option value={8}>8 ГиБ</option><option value={16}>16 ГиБ</option><option value={32}>32 ГиБ</option></select></label>{/if}</div>
   </div>

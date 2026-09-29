@@ -3,6 +3,7 @@ import { makeDbwinCaptureMock } from "./dbwinCaptureMock";
 import { makeSquadMock } from "./squadMock";
 import { makeMissionResearchMock } from "./missionResearchMock";
 import { makeMasteryMock } from "./masteryMock";
+import { makeMasteryPlanMock } from "./masteryPlanMock";
 import { makeWorldActivityMock } from "./worldActivityMock";
 import { makeOpportunityPlanMock } from "./opportunityPlanMock";
 import { makePersonalGoalsMock, reserveMockGoals, type MockSavedGoal } from "./personalGoalsMock";
@@ -941,6 +942,16 @@ export async function installMarketBrowserMock(): Promise<void> {
       if (mockOptions.get("mockInventory") === "loading") return new Promise(() => {});
       if (mockOptions.get("mockInventory") === "missing") return null;
       return makeSellNowView();
+    }
+    if (command === "load_mastery_plan" || command === "save_mastery_plan") {
+      const scenario = mockOptions.get("mockMasteryPlan");
+      if (scenario === "error" || (command === "save_mastery_plan" && scenario === "save-error")) throw new Error("plan unavailable");
+      if (scenario === "loading") return new Promise(() => undefined);
+      const key = "platscope.mock.mastery-plan";
+      let refs: string[] | null = null;
+      try { const stored = JSON.parse(localStorage.getItem(key) ?? "null"); if (Array.isArray(stored) && stored.every(ref => typeof ref === "string")) refs = stored; } catch { /* Независимый экран предпросмотра. */ }
+      if (command === "save_mastery_plan") { refs = (args as {gameRefs:string[]}).gameRefs;localStorage.setItem(key,JSON.stringify(refs)); }
+      return makeMasteryPlanMock(refs,scenario);
     }
     if (command === "load_mastery") {
       if (mockOptions.get("mockMastery") === "error") throw new Error("test mastery unavailable");

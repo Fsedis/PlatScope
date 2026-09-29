@@ -34,9 +34,9 @@
   <div class="selling-price"><span>Ориентир для продажи</span><strong>{money(recommendation.listPrice)}</strong><small>за одну штуку</small></div>
   <div class="buying-price"><span>Лучшая заявка покупателя</span><strong>{live ? (recommendation.quickSell === null ? "Нет заявок" : money(recommendation.quickSell)) : "Нужно проверить"}</strong><small>{live && recommendation.quickSell === null ? "Подходящих заявок нет" : "за одну штуку"}</small></div>
 </section>
-<p class="price-explanation">Оценка помогает выбрать цену. Реальная продажа зависит от покупателя и доступных предложений.</p>
+
 <button class="check-price" disabled={liveLoading} onclick={onRefresh}>{liveLoading ? "Проверяем предложения…" : "Проверить текущие цены"}</button>
-<p class="quote-status" class:error={!!liveError} role="status">{liveError || (live ? (live.quoteState === "stale_cache" ? "Сохранённые предложения могли устареть" : "Предложения проверены") + " · " + new Date(live.fetchedAt).toLocaleString("ru-RU", {day:"numeric", month:"short", hour:"2-digit", minute:"2-digit"}) : "Сохранённая оценка от " + recommendation.sourceDate + ". Проверка запросит предложения игроков в игре.")}</p>
+<p class="quote-status" class:error={!!liveError} role="status">{liveError || (live ? (live.quoteState === "stale_cache" ? "Сохранённые предложения могли устареть" : "Предложения проверены") + " · " + new Date(live.fetchedAt).toLocaleString("ru-RU", {day:"numeric", month:"short", hour:"2-digit", minute:"2-digit"}) : "Сохранённая оценка от " + recommendation.sourceDate)}</p>
 {#if live?.warning}<p class="quote-status error">Часть предложений недоступна. Перед сделкой проверьте цену на Warframe Market.</p>{/if}
 <MarketCreateOrder {row}/>
 <div class="item-actions"><button class="secondary" onclick={onMarket}>Открыть Warframe Market ↗</button><button class="text-button" onclick={onInventory}>Найти в моих предметах</button></div>
@@ -48,8 +48,8 @@
   <summary>Как менялась цена</summary>
   <div class="history-content"><div class="range" role="group" aria-label="Период истории">{#each [7,30,90] as days}<button class="secondary" aria-pressed={historyRange === days} onclick={() => onHistory(days as 7 | 30 | 90)}>{days} дней</button>{/each}</div>
     {#if historyLoading}<p role="status">Загружаем историю…</p>{:else if historyError}<p class="error" role="alert">{historyError}</p><button class="secondary" onclick={() => onHistory(historyRange)}>Повторить загрузку истории</button>{:else if history}
-      <dl class="history-stats"><div><dt>Типичная цена*</dt><dd>{money(median)}</dd></div><div><dt>Изменение</dt><dd>{formatChange(historyRange === 7 ? trend?.change7d ?? null : historyRange === 30 ? trend?.change30d ?? null : trend?.change90d ?? null)}</dd></div><div><dt>Объём / день</dt><dd>{volume == null ? "Нет данных" : volume.toLocaleString("ru-RU", {maximumFractionDigits:1})}</dd></div></dl>
-      {#if history.points.length >= 2}<HistoryChart points={history.points} />{:else}<p>Для графика пока недостаточно данных.</p>{/if}<p class="offer-hint">* Медиана за выбранный период. В истории есть данные за {history.points.length} дней.</p>
+      <dl class="history-stats"><div><dt>Медиана цены</dt><dd>{money(median)}</dd></div><div><dt>Изменение</dt><dd>{formatChange(historyRange === 7 ? trend?.change7d ?? null : historyRange === 30 ? trend?.change30d ?? null : trend?.change90d ?? null)}</dd></div><div><dt>Объём / день</dt><dd>{volume == null ? "Нет данных" : volume.toLocaleString("ru-RU", {maximumFractionDigits:1})}</dd></div></dl>
+      {#if history.points.length >= 2}<HistoryChart points={history.points} />{:else}<p>Для графика пока недостаточно данных.</p>{/if}<p class="offer-hint">Дней с данными: {history.points.length}</p>
     {/if}
   </div>
 </details>
@@ -71,7 +71,7 @@
   .price-overview span { display:block; font-size:.8125rem; }
   .price-overview strong { display:block; font-size:1.4rem; color:var(--accent); line-height:1.3; margin:.5rem 0 .2rem; }
   .price-overview small { display:block; font-size:.75rem; color:var(--text-muted); }
-  .price-explanation { margin:.75rem 0 1rem; }
+
   .check-price { width:100%; }
   .quote-status { margin-top:.65rem; font-size:.75rem; }
   .error { color:var(--danger); }

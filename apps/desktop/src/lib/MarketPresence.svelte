@@ -21,7 +21,7 @@
     : presence?.connection === "reconnecting" ? presence.error ?? "Восстанавливаем связь с Warframe Market…"
     : !connected ? "Получаем статус с Warframe Market…"
     : presence?.statusUntil ? `Статус действует до ${new Date(presence.statusUntil).toLocaleTimeString("ru-RU", {hour:"2-digit",minute:"2-digit"})}.`
-    : "Статус поддерживается, пока PlatScope открыт.";
+    : "";
 
   async function refresh(): Promise<void> {
     if (reading || saving || disabled) return;
@@ -79,7 +79,7 @@
       <option value="ingame">В игре</option><option value="online">В сети</option><option value="invisible">Не в сети</option>
     </select>
   </label>
-  <p class:error={Boolean(error)} role={error ? "alert" : "status"}>{error || hint}</p>
+  {#if error || hint}<p class:error={Boolean(error)} role={error ? "alert" : "status"}>{error || hint}</p>{/if}
   {#if error}<button class="secondary" disabled={saving || reading || disabled} on:click={() => { error = ""; void refresh(); }}>Проверить статус</button>{/if}
   <span class="sr-only" role="status">{message}</span>
 </div>

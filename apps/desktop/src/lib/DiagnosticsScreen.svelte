@@ -151,7 +151,7 @@
         <div>
           <p class="section-kicker">{c.providerHealth}</p><h2 id="providers-heading">{c.sources}</h2>
         </div>
-        <p>{c.savedAttempt}</p>
+
       </div>
       <div class="provider-grid">
         {#each providers as provider (provider.provider)}

@@ -50,7 +50,7 @@
 <div class="outcomes" class:seeking>
 <section class="estimate" aria-label="Оценка наград">
   <div class="estimate-line"><span>Средняя стоимость наград<br /><small>{period}</small></span><strong>{estimate.value === null ? (!job.rewards.length ? "Нет данных" : estimate.total ? "Нет оценки" : "Не для продажи") : platinum(estimate.value)}</strong></div>
-  <p>Платина от продажи выпавших предметов. Выпадение и продажа не гарантированы.</p>
+
   {#if estimate.total > 0}
     {#if estimate.priced < estimate.total}<p class="partial">Неполная оценка: учтено цен {estimate.priced} из {estimate.total}.</p>{/if}
     <button type="button" onclick={onCheck} disabled={anyBusy}>{busy ? "Проверяем цены…" : "Проверить цены на рынке"}</button>
@@ -60,7 +60,7 @@
 
 <section class="reward-section" aria-label="Награды заказа">
 <div class="rewards-heading"><h3>{seeking ? "Искомая награда и другая добыча" : "Что может выпасть"}</h3><span>Наград: {job.rewards.length}</span></div>
-<p class="chance-help">Шанс получить награду хотя бы один раз {period}.</p>
+
 <div class="rewards">
   {#each rewards as reward (reward.trackingKey)}
     <article class="reward" class:target={seeking && reward === featured}>
@@ -88,7 +88,7 @@
   <p>Для каждой продаваемой награды учитываем цену и среднее количество выпадений за этапы. Складываем известные оценки; награды без надёжной цены в сумму не входят.</p>
   <p>Среднее количество учитывает повторные выпадения и может отличаться от шанса получить предмет хотя бы один раз. При ненадёжных данных оценка может быть снижена.</p>
   <dl>{#each job.rewards.filter(reward => reward.marketKey) as reward}<div><dt>{reward.displayName}<small>В среднем {num(reward.expectedQuantity)} шт.</small></dt><dd>{platinum(reward.expectedPlatinum)}</dd></div>{/each}</dl>
-  {#if priceDate}<p>Сохранённые цены от {priceDate}. Кнопка проверки запрашивает текущие предложения игроков.</p>{/if}
+  {#if priceDate}<p>Сохранённые цены от {priceDate}.</p>{/if}
 </details>
 
 <style>
@@ -125,7 +125,7 @@
   .estimate .check-message { color:var(--text); }
   .rewards-heading { margin-top:1.5rem; }
   .rewards-heading span { font-size:.75rem; color:var(--text-muted); white-space:nowrap; }
-  .chance-help { margin:.45rem 0 1rem; }
+
   .reward { border-top:1px solid var(--border); padding:1rem 0; }
   .reward.target { border-radius:.5rem; background:var(--accent-soft); padding:1rem .75rem; }
   .reward-heading img { width:2.2rem; height:2.75rem; object-fit:contain; flex:none; }

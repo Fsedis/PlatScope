@@ -25,11 +25,8 @@
       eyebrow: "Конвертер ресурсов",
       title: "Что превратить в платину сегодня",
       confirmed: "Оценка продажи",
-      confirmedHint: "Оценка доступных покупок и продаж. Итоговая выручка зависит от спроса и цены сделки.",
       expected: "Дополнительно через Восфор",
-      expectedHint: "в среднем через Восфор; награды случайны, результат может отличаться",
       noConfirmed: "Подтверждённых обменов пока нет",
-      noConfirmedHint: "Ни один доступный маршрут сейчас не имеет одновременно баланса, товара и свежей цены.",
       loading: "Сверяем валюты, продавцов и цены…",
       loadError: "Не удалось рассчитать конвертацию. Инвентарь и цены не изменились.",
       noData: "Сначала обновите инвентарь и данные предметов.",
@@ -70,7 +67,6 @@
         steel_essence: "стальной эссенции",
       } satisfies Record<ResourceCurrency, string>,
       arcanes: "Мистификаторы",
-      arcanesHint: "Лишние копии после вашего резерва",
       bestPack: "Лучший набор Лойда сейчас",
       packExpected: "в среднем за набор",
       sell: "Продать",
@@ -93,11 +89,8 @@
       eyebrow: "Resource converter",
       title: "What to convert into platinum today",
       confirmed: "Estimated direct value",
-      confirmedHint: "Includes affordable purchases and sales with fresh prices; weaker price signals are discounted conservatively.",
       expected: "plus about",
-      expectedHint: "in Vosfor expected value — random, not guaranteed",
       noConfirmed: "No confirmed conversion is available",
-      noConfirmedHint: "No route currently has a balance, an available item, and a fresh price together.",
       loading: "Checking balances, vendors, and prices…",
       loadError: "Unable to calculate conversions. Inventory and prices were not changed.",
       noData: "Refresh inventory and item data first.",
@@ -117,7 +110,6 @@
       status: { ready: "Ready", conditional: "Check first", waiting: "Waiting", unavailable: "No action", needs_data: "Data needed" } satisfies Record<ResourceRouteStatus, string>,
       currency: { standing: "standing", nightwave_cred: "Nora Cred", ducat: "ducats", steel_essence: "Steel Essence" } satisfies Record<ResourceCurrency, string>,
       arcanes: "Arcanes",
-      arcanesHint: "Spare copies after your reserve",
       bestPack: "Best Loid pack now",
       packExpected: "expected per pack",
       sell: "Sell",
@@ -184,7 +176,7 @@
       rotation_inactive: "Данные недельной ротации ещё не обновились.",
       worldstate_unavailable: "Источник продавца временно недоступен.",
     };
-    if ($locale === "ru") return ru[route.reason] ?? "Сейчас нет подтверждённого действия.";
+    if ($locale === "ru") return ru[route.reason] ?? "";
     return route.reason.replaceAll("_", " ");
   }
 
@@ -273,17 +265,17 @@
         <p class="summary-note" role="status">{c.loading}</p>
       {:else if view && view.confirmedPlatinum > 0}
         <p class="headline"><span>{c.confirmed}</span><strong>≈ {formatPlatinum(view.confirmedPlatinum, $locale)}</strong></p>
-        <p class="summary-note">{c.confirmedHint}</p>
+
       {:else}
         <p class="headline headline--empty"><strong>{c.noConfirmed}</strong></p>
-        <p class="summary-note">{c.noConfirmedHint}</p>
+
       {/if}
     </div>
     {#if view && view.expectedVosforPlatinum > 0}
       <div class="expected-value">
         <span>{c.expected}</span>
         <strong>≈ {formatPlatinum(view.expectedVosforPlatinum, $locale)}</strong>
-        <small>{c.expectedHint}</small>
+
       </div>
     {/if}
   </header>
@@ -303,11 +295,12 @@
   {:else if view}
     <div class="route-grid">
       {#each view.routes as route (route.source)}
+        {@const reason = route.status === "ready" ? "" : reasonText(route)}
         <article class:route--ready={route.status === "ready"} class:route--conditional={route.status === "conditional"} class="route-card">
           <header>
             <div>
               <h3>{c.source[route.source]}</h3>
-              <p>{c.sourceHint[route.source]}</p>
+
             </div>
             <span class={`status status--${route.status}`}>{c.status[route.status]}</span>
           </header>
@@ -337,9 +330,9 @@
               {/each}
             </div>
           {/if}
-          <p class="route-reason">
-            {reasonText(route)}{#if route.location} · {route.location}{/if}{#if route.source === "nightwave" && route.status === "ready" && route.availableUntil} · {$locale === "ru" ? "До" : "Until"} {formatDate(route.availableUntil, $locale)}{/if}
-          </p>
+          {#if reason || route.location || route.source === "nightwave" && route.status === "ready" && route.availableUntil}<p class="route-reason">
+            {reason}{#if route.location}{reason ? " · " : ""}{route.location}{/if}{#if route.source === "nightwave" && route.status === "ready" && route.availableUntil}{reason || route.location ? " · " : ""}{$locale === "ru" ? "До" : "Until"} {formatDate(route.availableUntil, $locale)}{/if}
+          </p>{/if}
           {#if route.status === "waiting" && route.availableAt}<p class="route-date">{formatDate(route.availableAt, $locale)}</p>{/if}
         </article>
       {/each}
@@ -349,7 +342,7 @@
       <header class="arcane-card__header">
         <div>
           <h3>{c.arcanes}</h3>
-          <p>{c.arcanesHint}</p>
+
         </div>
         {#if view.arcanes.available && view.arcanes.bestPackName}
           <div class="pack-summary">
@@ -433,9 +426,9 @@
   .headline--empty strong { color: var(--text); font-size: .95rem; letter-spacing: 0; }
   .summary-note { max-width: 62ch; margin-block-start: .15rem; color: var(--text-muted); font-size: .7rem; line-height: 1.35; }
   .expected-value { display: grid; flex: 0 0 min(22rem, 38%); gap: .08rem; border-inline-start: 1px solid var(--border-strong); padding-inline-start: 1rem; }
-  .expected-value span, .expected-value small { color: var(--text-muted); font-size: .68rem; }
+  .expected-value span { color: var(--text-muted); font-size: .68rem; }
   .expected-value strong { color: var(--accent-strong); font-size: 1.2rem; font-variant-numeric: tabular-nums; }
-  .expected-value small { line-height: 1.3; }
+
   .converter-message { margin: .75rem; border-radius: .65rem; padding: .75rem; background: var(--surface-2); }
   .converter-message--error { background: var(--danger-soft); box-shadow: inset .2rem 0 0 var(--danger); }
   .converter-message button { margin-block-start: .55rem; }
@@ -443,7 +436,7 @@
   .route-card { min-width: 0; padding: .75rem; background: var(--surface-1); }
   .route-card > header { display: flex; align-items: start; justify-content: space-between; gap: .75rem; }
   .route-card h3 { font-size: .9rem; }
-  .route-card header p { margin-block-start: .08rem; color: var(--text-muted); font-size: .7rem; }
+
   .status { flex: none; border: 1px solid var(--border); border-radius: 999px; padding: .18rem .42rem; color: var(--text-muted); background: var(--surface-2); font-size: .68rem; font-weight: 750; white-space: nowrap; }
   .status--ready { border-color: oklch(0.68 0.08 145); background: var(--success-soft); color: oklch(0.34 0.08 145); }
   .status--conditional { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-strong); }
@@ -468,7 +461,7 @@
   .arcane-card { border-block-start: 1px solid var(--border); padding: .75rem; background: var(--surface-1); }
   .arcane-card__header { display: flex; align-items: start; justify-content: space-between; gap: 1rem; }
   .arcane-card h3 { font-size: .9rem; }
-  .arcane-card__header p { margin-block-start: .08rem; color: var(--text-muted); font-size: .7rem; }
+
   .pack-summary { display: grid; justify-items: end; gap: .02rem; text-align: end; }
   .pack-summary span, .pack-summary small { color: var(--text-muted); font-size: .68rem; }
   .pack-summary strong { color: var(--accent-strong); font-size: .78rem; }

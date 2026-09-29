@@ -33,6 +33,17 @@ struct AccountHistory {
     entries: BTreeMap<String, u64>,
     #[serde(default)]
     equipment: BTreeMap<String, EquipmentEvidence>,
+    /// Только текущие копии; накопленные доказательства освоения для этого не подходят.
+    #[serde(default)]
+    owned_equipment: BTreeMap<String, u32>,
+    #[serde(default)]
+    account_rank: Option<u8>,
+}
+
+pub(crate) struct PlannerAccount {
+    pub key: String,
+    pub owned_equipment: BTreeMap<String, u32>,
+    pub rank: Option<u8>,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -104,6 +115,9 @@ impl MasteryService {
             Utc::now(),
         );
         if let Some(history) = cache.accounts.get_mut(&cache.active_account) {
+            let (owned, rank) = parse_current_equipment(raw);
+            history.owned_equipment = owned;
+            history.account_rank = rank;
             if !equipment.is_empty() {
                 history.equipment_observed_at = Some(Utc::now());
             }
@@ -146,6 +160,87 @@ impl MasteryService {
             .and_then(|_| cache.accounts.get(&cache.active_account));
         Ok(build_view(metadata.as_ref(), history))
     }
+
+    pub(crate) fn planner_context(
+        database: &Database,
+    ) -> Result<(MasteryView, Option<PlannerAccount>), CoreError> {
+        let cache = database
+            .get_setting::<MasteryCache>(CACHE_KEY)?
+            .unwrap_or_default();
+        let metadata = database.load_current_game_metadata()?;
+        let current = database.current_inventory_snapshot()?;
+        let history = current
+            .as_ref()
+            .filter(|snapshot| snapshot.metadata.checksum_sha256 == cache.inventory_checksum)
+            .and_then(|_| cache.accounts.get(&cache.active_account));
+        let account = history
+            .filter(|history| history.observed_at.is_some())
+            .map(|history| PlannerAccount {
+                key: cache.active_account.clone(),
+                owned_equipment: history.owned_equipment.clone(),
+                rank: history.account_rank,
+            });
+        Ok((build_view(metadata.as_ref(), history), account))
+    }
+}
+
+fn parse_current_equipment(raw: &str) -> (BTreeMap<String, u32>, Option<u8>) {
+    let mut owned = BTreeMap::<String, u32>::new();
+    if raw.len() > MAX_RESPONSE_BYTES {
+        return (owned, None);
+    }
+    let Ok(value) = serde_json::from_str::<Value>(raw) else {
+        return (owned, None);
+    };
+    let root = value.get("Inventory").unwrap_or(&value);
+    let rank = root
+        .get("PlayerLevel")
+        .and_then(Value::as_u64)
+        .and_then(|rank| u8::try_from(rank).ok())
+        .filter(|rank| *rank <= 50);
+    for category in [
+        "Suits",
+        "LongGuns",
+        "Pistols",
+        "Melee",
+        "Sentinels",
+        "SentinelWeapons",
+        "SpaceSuits",
+        "SpaceGuns",
+        "SpaceMelee",
+        "MechSuits",
+        "KubrowPets",
+        "MoaPets",
+        "OperatorAmps",
+        "Hoverboards",
+    ] {
+        let Some(items) = root
+            .get(category)
+            .and_then(Value::as_array)
+            .filter(|items| items.len() <= MAX_ENTRIES)
+        else {
+            continue;
+        };
+        for item in items {
+            let Some(game_ref) = item
+                .get("ItemType")
+                .and_then(Value::as_str)
+                .filter(|name| name.starts_with("/Lotus/") && name.len() <= 256)
+            else {
+                continue;
+            };
+            let quantity = item.get("ItemCount").and_then(Value::as_u64).unwrap_or(1);
+            if let Ok(quantity) = u32::try_from(quantity) {
+                // Собранная модульная копия принадлежит определяющей детали
+                // даже до позолоты и при текущем ранге 0.
+                let count = owned
+                    .entry(equipment_mastery_ref(item, game_ref).to_owned())
+                    .or_default();
+                *count = count.saturating_add(quantity);
+            }
+        }
+    }
+    (owned, rank)
 }
 
 fn parse_equipment(raw: &str) -> BTreeMap<String, EquipmentEvidence> {
@@ -198,31 +293,12 @@ fn parse_equipment(raw: &str) -> BTreeMap<String, EquipmentEvidence> {
             if needs_gilding && item.get("Features").and_then(Value::as_u64).unwrap_or(0) & 8 == 0 {
                 continue;
             }
-            let mastery_ref = parts
-                .and_then(|parts| {
-                    parts
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .filter(|part| part.starts_with("/Lotus/") && part.len() <= 256)
-                        .find(|part| {
-                            part.contains("/Barrel/")
-                                || part.contains("/Barrels/")
-                                || part.contains("/Tip/")
-                                || part.contains("/Tips/")
-                                || part.contains("/MoaPetHead")
-                                || part.contains("/ZanukaPetPartHead")
-                                || part.ends_with("Deck")
-                                || part.ends_with("SentAmpTrainingBarrel")
-                        })
-                })
-                .unwrap_or(game_ref);
+            let mastery_ref = equipment_mastery_ref(item, game_ref);
             let Some(xp) = item.get("XP").and_then(Value::as_u64) else {
                 continue;
             };
             let polarized = item.get("Polarized").and_then(Value::as_u64).unwrap_or(0);
-            let evidence = result
-                .entry(canonical_mastery_ref(mastery_ref).into())
-                .or_default();
+            let evidence = result.entry(mastery_ref.into()).or_default();
             evidence.xp = evidence.xp.max(xp);
             evidence.polarized = evidence.polarized.max(polarized);
             if polarized >= 5 {
@@ -231,6 +307,30 @@ fn parse_equipment(raw: &str) -> BTreeMap<String, EquipmentEvidence> {
         }
     }
     result
+}
+
+fn equipment_mastery_ref<'a>(item: &'a Value, game_ref: &'a str) -> &'a str {
+    let defining_part = item
+        .get("ModularParts")
+        .and_then(Value::as_array)
+        .and_then(|parts| {
+            parts
+                .iter()
+                .filter_map(Value::as_str)
+                .filter(|part| part.starts_with("/Lotus/") && part.len() <= 256)
+                .find(|part| {
+                    part.contains("/Barrel/")
+                        || part.contains("/Barrels/")
+                        || part.contains("/Tip/")
+                        || part.contains("/Tips/")
+                        || part.contains("/MoaPetHead")
+                        || part.contains("/ZanukaPetPartHead")
+                        || part.ends_with("Deck")
+                        || part.ends_with("SentAmpTrainingBarrel")
+                })
+        })
+        .unwrap_or(game_ref);
+    canonical_mastery_ref(defining_part)
 }
 
 fn parse_history(raw: &str) -> Option<BTreeMap<String, u64>> {
@@ -813,6 +913,87 @@ mod tests {
         assert_eq!(
             mastery_status(&item, Some(406_864), parsed.get("/Lotus/Test/Barrel/Prism")).0,
             "progress"
+        );
+
+        // Ранг 0 и отсутствие позолоты не отменяют владение собранным усилителем.
+        // Отдельная призма из материалов при этом не должна стать готовой копией.
+        let raw = r#"{"PlayerLevel":12,"XPInfo":[{"ItemType":"/Lotus/Other","XP":1}],"OperatorAmps":[{"ItemType":"/Lotus/Amp","XP":0,"Features":1,"ModularParts":["/Lotus/Test/Barrel/Prism"]}],"MiscItems":[{"ItemType":"/Lotus/Test/Barrel/LoosePrism","ItemCount":1}]}"#;
+        let (owned, _) = parse_current_equipment(raw);
+        assert_eq!(owned["/Lotus/Test/Barrel/Prism"], 1);
+        assert!(!owned.contains_key("/Lotus/Test/Barrel/LoosePrism"));
+        assert!(parse_equipment(raw).is_empty());
+
+        let database = Mutex::new(Database::open_in_memory().unwrap());
+        let mut metadata = crate::tests::empty_game_metadata_fixture(Utc::now());
+        metadata.mastery_items = ["Prism", "LoosePrism"]
+            .into_iter()
+            .map(|name| MasteryItemDefinition {
+                game_ref: format!("/Lotus/Test/Barrel/{name}"),
+                display_name_en: name.into(),
+                category: "amp".into(),
+                ..weapon(Some(30))
+            })
+            .collect();
+        database
+            .lock()
+            .unwrap()
+            .promote_game_metadata(&metadata)
+            .unwrap();
+        let mut snapshot = platscope_domain::ResolvedInventorySnapshot {
+            metadata: crate::tests::empty_inventory_view(3).metadata,
+            keep_copies: 1,
+            mod_usage_scanned: false,
+            credits: Some(50000),
+            syndicates: vec![],
+            items: vec![platscope_domain::ResolvedInventoryItem {
+                canonical_game_id: "/Lotus/Test/Barrel/LoosePrism".into(),
+                display_name_en: Some("LoosePrism".into()),
+                display_name_ru: None,
+                tags: vec![],
+                key: None,
+                rank: None,
+                subtype: None,
+                owned_quantity: 1,
+                tradeable_quantity: 0,
+                untradeable_quantity: 1,
+                unknown_quantity: 0,
+                leveled_quantity: 0,
+                equipped_quantity: 0,
+                equipped_tradeable_quantity: 0,
+                equipped_placements: vec![],
+                sellable_quantity: 0,
+                resolution: platscope_domain::InventoryResolution::UnknownItem,
+            }],
+        };
+        snapshot.metadata.item_count = 1;
+        database
+            .lock()
+            .unwrap()
+            .promote_inventory_snapshot(&snapshot)
+            .unwrap();
+        MasteryService::capture(
+            &database,
+            raw,
+            "account-a",
+            &snapshot.metadata.checksum_sha256,
+        )
+        .unwrap();
+        let plan =
+            crate::MasteryPlanService::view(&database, &crate::AppSettings::default()).unwrap();
+        let assembled = plan
+            .candidates
+            .iter()
+            .find(|item| item.game_ref == "/Lotus/Test/Barrel/Prism")
+            .unwrap();
+        assert_eq!((assembled.owned_quantity, assembled.state), (1, "owned"));
+        let component = plan
+            .candidates
+            .iter()
+            .find(|item| item.game_ref == "/Lotus/Test/Barrel/LoosePrism")
+            .unwrap();
+        assert_eq!(
+            (component.owned_quantity, component.state),
+            (0, "no_recipe")
         );
     }
 

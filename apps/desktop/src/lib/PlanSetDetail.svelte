@@ -55,7 +55,7 @@
   </header>
 
   {#if mode === "ready"}
-    <div class="ready-banner"><strong>Доступно для продажи: {opportunity.sellableCompleteSets}</strong><p>Все детали уже есть. Ничего докупать не нужно.</p></div>
+    <div class="ready-banner"><strong>Доступно для продажи: {opportunity.sellableCompleteSets}</strong></div>
   {:else}
     <div class="progress-copy"><span>Есть детали: <strong>{ownedForNext} из {needed}</strong></span><span>Докупить: <strong>{opportunity.missingQuantity} шт.</strong></span></div>
     <div class="parts-progress" aria-hidden="true">{#each row.components as part}<span class:owned={componentAvailableQuantity(part) >= (opportunity.availableCompleteSets + 1) * part.definition.requiredQuantity} title={part.displayName}></span>{/each}</div>
@@ -72,28 +72,28 @@
         <div class="benefit" class:unprofitable={profit === null || profit <= 0}><dt>Выгода от сборки</dt><dd>{profit !== null && profit > 0 ? "+ " : ""}{money(profit)}</dd></div>
       {/if}
     </dl>
-    {#if mode === "complete"}<p class="muted">{profit === null ? "Для оценки выгоды не хватает надёжных цен." : profit > 0 ? "На столько сборка выгоднее продажи имеющихся деталей." : "При этой цене докупка не выгоднее продажи своих деталей."}</p>{/if}
+    {#if mode === "complete" && profit === null}<p class="muted">Для оценки выгоды не хватает надёжных цен.</p>{/if}
     <div class="price-check"><span>{checkedAt && Number.isFinite(checkedAt.getTime()) ? "Проверено в " + checkedAt.toLocaleTimeString("ru-RU",{hour:"2-digit",minute:"2-digit"}) : sale.price === null ? "Цена пока неизвестна" : "По сохранённым ценам"}</span><button type="button" class="secondary" disabled={busy || checkingOther} onclick={onCheck}>{busy ? "Проверяем цену…" : "Уточнить цену продажи"}</button></div>
     {#if error}<p class="error" role="alert">{error}</p>{/if}
     <details class="demand"><summary>На чём основана оценка</summary><p>{sale.price === null ? "Надёжной цены продажи пока нет. Уточните текущие предложения на рынке." : sale.buyer ? "На момент проверки найдена заявка игрока в игре на покупку одного комплекта." : "Ориентир — надёжная оценка цены продажи. Реальный покупатель может предложить меньше."}</p><p>{sale.volume !== null ? "Закрытых сделок в данных: " + sale.volume + ". Это ориентир спроса, а не срок продажи." : "Статистики завершённых сделок недостаточно для оценки спроса."}</p>{#if choice}<p>Стоимость одинаковых деталей распределена с учётом общего количества покупок в плане.</p>{/if}</details>
   </section>
 
   {#if mode === "ready"}
-    <div class="primary-action"><button type="button" disabled={opportunity.sellableCompleteSets < 1} onclick={onOpenSet}>Перейти к продаже комплекта →</button><p class="muted">Откроется раздел продажи с выбранным комплектом.</p></div>
+    <div class="primary-action"><button type="button" disabled={opportunity.sellableCompleteSets < 1} onclick={onOpenSet}>Перейти к продаже комплекта →</button></div>
     <details class="composition"><summary>Проверить состав комплекта</summary><ul>{#each row.components as part}<li><span>{part.displayName}</span><span>{part.definition.requiredQuantity} шт.</span></li>{/each}</ul></details>
   {:else}
     <section class="purchase-route" aria-label="Недостающие детали">
       <div class="route-heading"><span class="step-number" aria-hidden="true">1</span><div><h4>Купите недостающие детали</h4><p>Для одного дополнительного комплекта</p></div></div>
       <ul class="purchase-list">{#each purchases as part (part.slug)}<li><span>{part.name}<small>Количество: {part.quantity}</small></span><strong>{part.cost !== null ? "≈ " : ""}{money(part.cost)}</strong></li>{/each}</ul>
-      {#if purchases.length}<button class="buy-button" type="button" disabled={partsBusy} onclick={onOpenParts}>{partsBusy ? "Открываем рынок…" : "Найти продавцов деталей →"}</button><p class="muted market-destination">Откроются страницы деталей на Warframe Market.</p>{/if}
+      {#if purchases.length}<button class="buy-button" type="button" disabled={partsBusy} onclick={onOpenParts}>{partsBusy ? "Открываем рынок…" : "Найти продавцов деталей →"}</button>{/if}
       {#if actionStatus}<p class="action-message" role="status">{actionStatus}</p>{/if}
     </section>
-    <div class="sale-step"><span class="step-number" aria-hidden="true">2</span><div><h4>Продайте комплект целиком</h4><p>После покупки обновите инвентарь — комплект появится в разделе «Продать без докупки».</p></div></div>
+    <div class="sale-step"><span class="step-number" aria-hidden="true">2</span><div><h4>Продайте комплект целиком</h4></div></div>
 
     <details class="relic-route" bind:open={showRelics}>
       <summary><span>Можно ли обойтись своими реликвиями?</span><small>{relicCopies > 0 ? "Подходящих копий: " + relicCopies : "Подходящих реликвий пока нет"}</small></summary>
       <div class="relic-content">
-        <p>Вероятностный путь вместо покупки части деталей. Расчёт для одиночных открытий.</p>
+
         <label class="opening-limit">Открыть не больше<input type="number" min="1" max="20" step="1" bind:value={openings} aria-invalid={!validOpenings}/></label>
         {#if !validOpenings}<p class="error" role="alert">Укажите целое число от 1 до 20.</p>
         {:else if acquisition?.steps.length}
@@ -102,7 +102,7 @@
           <p class="muted">{acquisition.openings} {openingWord(acquisition.openings)} · {acquisition.traces} следов Пустоты{view.voidTraces != null ? " из " + view.voidTraces : ""}</p>
           <ol class="relic-steps">{#each acquisition.steps as step}<li><span class="relic-image"><WorldActivityArtwork kind={relicArtwork(step.source.definition.relicSlug,step.source.definition.displayNameEn)}/></span><div><strong>{step.source.displayName.replace(/^Реликвия\s+/i,"")} ×{step.quantity}</strong><small>{refinementLabel(step.source.definition.refinement)}{step.source.definition.refinement !== step.target ? " → " + refinementLabel(step.target) : " · улучшение уже есть"}{step.traceCost ? " · " + step.traceCost + " следов" : ""}</small><button type="button" class="text-button" onclick={() => onOpenRelic(step.source.definition.relicSlug)}>Посмотреть реликвию →</button></div></li>{/each}</ol>
           {#if acquisition.buy.length}<div class="remaining-buy"><strong>Эти детали всё равно нужно докупить</strong><ul>{#each acquisition.buy as part}<li><span>{part.displayName} ×{part.quantity}</span><span>{money(part.estimatedCost)}</span></li>{/each}</ul></div>{/if}
-          <p class="muted">Реликвии будут потрачены. Выпадение нужных деталей не гарантировано.</p>
+
           <details class="method"><summary>Как рассчитан этот путь</summary><p>Используем имеющиеся копии и следы. Подбор стремится к 80% вероятности и ограничен указанным числом открытий. {view.voidTraces == null ? "Баланс следов неизвестен, поэтому улучшения не предлагаются." : ""} Результаты открытий считаются независимыми.</p></details>
         {:else}<p class="muted">В ваших реликвиях нет пути к недостающим деталям. Можно найти их продавцов выше.</p>{/if}
       </div>
@@ -126,10 +126,10 @@
   .demand { margin-top:.8rem; } .demand summary { font-size:.75rem; color:var(--text-muted); font-weight:400; } .demand p,.method p { font-size:.8125rem; color:var(--text-muted); margin-top:.5rem; }
   .purchase-route { border-top:1px solid var(--border); margin-top:1.2rem; padding-top:1.15rem; } .route-heading,.sale-step { display:flex; gap:.7rem; align-items:start; }
   .step-number { display:inline-flex; flex:none; justify-content:center; align-items:center; width:1.65rem; height:1.65rem; font-size:.8125rem; font-weight:650; border-radius:50%; background:var(--accent-soft); color:var(--accent-strong); }
-  .route-heading p,.sale-step p { font-size:.75rem; color:var(--text-muted); margin-top:.2rem; }
+  .route-heading p { font-size:.75rem; color:var(--text-muted); margin-top:.2rem; }
   ul { list-style:none; padding:0; margin:.8rem 0; } ul li { display:flex; justify-content:space-between; align-items:start; gap:.7rem; border-bottom:1px solid var(--border); padding:.65rem 0; font-size:.8125rem; line-height:1.4; } ul li:last-child { border:0; } ul li>strong,ul li>span:last-child { white-space:nowrap; }
   small { display:block; font-size:.75rem; color:var(--text-muted); font-weight:400; margin-top:.2rem; line-height:1.4; }
-  .buy-button,.primary-action>button { width:100%; min-height:2.55rem; } .market-destination { text-align:center; } .action-message { font-size:.8125rem; margin-top:.65rem; color:var(--text-muted); }
+  .buy-button,.primary-action>button { width:100%; min-height:2.55rem; }  .action-message { font-size:.8125rem; margin-top:.65rem; color:var(--text-muted); }
   .sale-step { margin-top:1.2rem; } .sale-step .step-number { background:var(--surface-2); color:var(--text-muted); }
   .relic-route { margin-top:1.2rem; border:1px solid var(--border); border-radius:.6rem; overflow:hidden; } .relic-route>summary { padding:.9rem; background:var(--surface-2); } .relic-route>summary small { margin-left:1rem; } .relic-content { padding:.9rem; }
   .relic-content>p { font-size:.8125rem; color:var(--text-muted); } .opening-limit { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:.5rem; font-size:.8125rem; margin:1rem 0; } .opening-limit input { width:5rem; padding:.45rem .6rem; border:1px solid var(--border); border-radius:.4rem; background:var(--surface-1); color:var(--text); font:inherit; }
@@ -139,6 +139,6 @@
   .remaining-buy { background:var(--surface-2); border-radius:.4rem; padding:.65rem; margin:.7rem 0; font-size:.8125rem; } .remaining-buy ul { margin:.2rem 0 0; }
   .method { margin-top:.8rem; } .method summary { font-size:.75rem; color:var(--text-muted); }
   .text-button { padding:.2rem 0; min-height:1.7rem; border:0; color:var(--accent-strong); font-size:.75rem; font-weight:500; } .text-button:hover { background:none; text-decoration:underline; }
-  .detail-footer { text-align:right; margin-top:.75rem; } .detail-footer:empty { display:none; } .ready-banner { padding:.85rem; background:var(--success-soft); border-radius:.5rem; margin-top:1rem; font-size:.875rem; } .ready-banner p { margin-top:.3rem; font-size:.8125rem; color:var(--text-muted); }
+  .detail-footer { text-align:right; margin-top:.75rem; } .detail-footer:empty { display:none; } .ready-banner { padding:.85rem; background:var(--success-soft); border-radius:.5rem; margin-top:1rem; font-size:.875rem; }
   .primary-action { margin-top:1.1rem; } .composition { margin-top:1rem; }
 </style>

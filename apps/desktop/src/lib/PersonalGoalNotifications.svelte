@@ -51,13 +51,13 @@
 
 {#if names.length}
   <div class="completion-notice" role="status" aria-live="polite">
-    <div><strong>{names.length === 1 ? "Комплект собран" : "Комплекты собраны"}: {names.slice(0,3).join(", ")}{names.length > 3 ? ` и ещё ${names.length-3}` : ""}</strong><p>{names.length === 1 ? "Цель" : "Цели"} в списке «Выполнено». Детали защищены до удаления цели.</p></div>
+    <div><strong>{names.length === 1 ? "Комплект собран" : "Комплекты собраны"}: {names.slice(0,3).join(", ")}{names.length > 3 ? ` и ещё ${names.length-3}` : ""}</strong></div>
     <button type="button" onclick={() => notices = []} aria-label="Скрыть уведомление о выполненной цели">×</button>
   </div>
 {/if}
 
 <style>
   .completion-notice { display:flex; align-items:start; justify-content:space-between; gap:1rem; padding:1rem 1.2rem; margin-bottom:1rem; border:1px solid var(--accent); background:var(--surface-2); border-radius:.7rem; font-size:.875rem; }
-  p { margin:.4rem 0 0; color:var(--text-muted); }
+
   button { flex-shrink:0; color:var(--text-muted); background:transparent; border:0; cursor:pointer; font-size:1.3rem; padding:0 .4rem; }
 </style>

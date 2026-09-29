@@ -75,7 +75,7 @@
   <div class="heading">
     <div>
       <h2 id="dbwin-heading">Сообщения Warframe</h2>
-      <p>Запишите сообщения игры через DBWIN, чтобы изучить события миссии, наград и других действий.</p>
+
     </div>
     {#if status?.active}<span class="recording">● Идёт запись</span>{/if}
   </div>
@@ -112,7 +112,7 @@
         <button type="submit" class="secondary" disabled={busy || !mark.trim()}>Добавить отметку</button>
       </div>
     </form>
-    <p class="note">Можно закрыть диагностику и играть — запись продолжится. При закрытии PlatScope она закончится.</p>
+
   {/if}
 
   {#if status?.path}
@@ -122,7 +122,7 @@
     </div>
     <label for="dbwin-search">Поиск по последним 100 записям</label>
     <input id="dbwin-search" type="search" bind:value={search} placeholder="Например: reward, inventory, error" />
-    <p class="note">Новые записи сверху. {paused ? "Просмотр приостановлен; сохранение файла продолжается, пока идёт запись." : "Просмотр обновляется раз в секунду."} Полный текст всех принятых сообщений — в файле JSONL.</p>
+
     <!-- svelte-ignore a11y_no_noninteractive_tabindex (Область прокручивается с клавиатуры.) -->
     <div class="entries" tabindex="0" role="region" aria-label="Предпросмотр сообщений Warframe">
       {#each visibleEntries as entry (entry.sequence)}
@@ -143,7 +143,7 @@
   h2 { margin: 0 0 .35rem; font-size: 1.2rem; }
   h3 { margin: 0; font-size: 1rem; }
   p { margin: .55rem 0; line-height: 1.5; }
-  .heading p, .note, .entry-meta { color: var(--text-muted); }
+  .note, .entry-meta { color: var(--text-muted); }
   .note { font-size: .82rem; }
   .actions { margin: .85rem 0; }
   button { min-height: 2.35rem; }

@@ -17,6 +17,7 @@
   import InsightsScreen from "./lib/InsightsScreen.svelte";
   import MarketTradingShift from "./lib/MarketTradingShift.svelte";
   import SellNowScreen from "./lib/SellNowScreen.svelte";
+  import MasteryScreen from "./lib/MasteryScreen.svelte";
   import SettingsScreen from "./lib/SettingsScreen.svelte";
   import { revealCompactDetail, revealElement } from "./lib/detailNavigation";
   import { startAutomaticUpdateChecks } from "./lib/appUpdate";
@@ -61,18 +62,12 @@
       navLabel: "Разделы приложения",
       market: "Рынок",
       worldActivity: "Сейчас в игре",
-      worldActivityLede: "Что доступно сейчас, что скоро сменится и куда отправиться.",
       inventory: "Мои предметы",
+      mastery: "Освоение",
       equippedMods: "Надетые моды",
       insights: "Возможности",
       bountyHunter: "Охотник за наградами",
       settings: "Настройки",
-      marketLede: "Управляйте объявлениями и находите цены на предметы.",
-      inventoryLede: "Торговый инвентарь, момент продажи и ордера Warframe Market в одном месте.",
-      equippedModsLede: "На каком предмете и в какой конфигурации стоит каждый мод.",
-      insightsLede: "Лучшие способы превратить инвентарь и ресурсы в платину.",
-      bountyHunterLede: "Найдите нужную награду и выберите активный заказ по шансу выпадения, сложности и стоимости добычи.",
-      settingsLede: "Язык, платформа и обновление данных.",
       searching: "Ищем в сохранённых данных…", shown: (visible: number, total: number) => `${visible} из ${total} вариантов показано`,
       storageError: (_reason: string) => "Не удалось открыть сохранённые данные. Перезапустите PlatScope.",
       refreshError: (_reason: string) => "Не удалось обновить рынок. Старые данные сохранены. Проверьте подключение и повторите попытку.",
@@ -80,33 +75,26 @@
       noBulk: "Для этого варианта пока нет сохранённой оценки.", liveError: (_reason: string) => "Не удалось получить текущие цены. Сохранённая оценка не изменилась.",
       historyError: (_reason: string) => "Не удалось загрузить историю. Текущая цена по-прежнему доступна.",
       refreshing: "Обновляем данные…", refresh: "Обновить данные", openingStorage: "Открываем сохранённые данные…", validatingSnapshot: "Загружаем и проверяем новые цены…", providersUnavailable: "Источники временно недоступны. Показываем последние сохранённые данные.", checkStorage: "Проверить данные",
-      noSnapshot: "Данные рынка ещё не загружены", loadMarket: "Загрузите цены рынка", loadMarketBody: "Обновление цен и 90-дневной истории находится в настройках.", loadingMarket: "Загружаем данные…", loadData: "Открыть настройки обновления",
+      noSnapshot: "Данные рынка ещё не загружены", loadMarket: "Загрузите цены рынка", loadingMarket: "Загружаем данные…", loadData: "Открыть настройки обновления",
       marketFilters: "Поиск и фильтры рынка", searchItem: "Поиск предмета", searchExample: "Например, Никс Прайм или nyx prime", clear: "Очистить", shortcut: "Быстрый доступ:", priceAvailability: "Наличие оценки", allVariants: "Все варианты", priced: "Есть оценка", unpriced: "Оценки пока нет",
       results: "Результаты", snapshot: "Данные от", marketCaption: "Предметы, цены, продажи и актуальность данных", item: "Предмет", trades: "Объём", freshness: "Актуальность",
-      first60: "Поиск ограничен первыми 60 вариантами. Уточните название предмета, чтобы найти нужный.", noQuery: (query: string) => `По запросу «${query}» ничего не найдено`, noFilter: "Для этого фильтра ничего не найдено", checkSpelling: "Проверьте название предмета.", choosePriceFilter: "Выберите другой фильтр цены.", clearSearch: "Очистить поиск",
+      first60: "Поиск ограничен первыми 60 вариантами. Уточните название предмета, чтобы найти нужный.", noQuery: (query: string) => `По запросу «${query}» ничего не найдено`, noFilter: "Для этого фильтра ничего не найдено", choosePriceFilter: "Выберите другой фильтр цены.", clearSearch: "Очистить поиск",
       relic: "Реликвия", riven: "Мод разлома", marketItem: "Предмет рынка", gettingLive: "Получаем текущие цены…", updateLive: "Обновить текущие цены", getLive: "Проверить текущие цены", liveHint: "Покажет ордера игроков, которые сейчас в игре.", dataDate: "Цена рассчитана по данным от", masteryRequirement: "Ранг мастерства", whyPrice: "Как рассчитана цена?",
       marketData: "Данные рынка", dataReady: "Загружены", dataMissing: "Не загружены",
       fair: "Цена", fairPrice: "Оценка рынка", listPrice: "Ориентир размещения", closedVolume: "Закрытые сделки", lowestAsk: "Минимальная цена продажи", depthThree: "Средняя цена до 3 шт.", depthPrice: "Средняя цена до 5 шт.", quickSell: "Лучшая заявка на покупку", sell: "продажа", buy: "покупка", currentOrders: "Ордера игроков в игре", side: "Тип", price: "Цена", quantityLot: "Количество · лот", playerStatus: "Статус", sellOrder: "Продажа", buyOrder: "Покупка", noActiveOrders: "Сейчас в игре нет ордеров для этого варианта.",
-      priceHistory: "История цены", historyRange: "Период", dayShort: "д", loadingHistory: "Загружаем историю…", historyCoverage: (points: number, coverage: number) => `${points} дней · доступно ${coverage} дней истории`, selectForHistory: "Выберите строку, чтобы посмотреть историю цены.", median: "Медиана", change: "Изменение", averageVolume: "Средний объём", insufficientChart: "Пока недостаточно данных для графика. История накопится после обновлений рынка.", itemDetails: "Подробности предмета", selectItem: "Выберите предмет в таблице, чтобы увидеть цену и расчёт.",
-      marketModeLabel: "Режим рынка", mySales: "Мои объявления", marketSearch: "Найти предмет",
+      priceHistory: "История цены", historyRange: "Период", dayShort: "д", loadingHistory: "Загружаем историю…", historyCoverage: (points: number, coverage: number) => `${points} дней · доступно ${coverage} дней истории`, selectForHistory: "Выберите строку, чтобы посмотреть историю цены.", median: "Медиана", change: "Изменение", averageVolume: "Средний объём", insufficientChart: "Пока недостаточно данных для графика. История накопится после обновлений рынка.", itemDetails: "Подробности предмета", marketModeLabel: "Режим рынка", mySales: "Мои объявления", marketSearch: "Найти предмет",
     },
     en: {
       skip: "Skip to content",
       navLabel: "Application sections",
       market: "Market",
       worldActivity: "Now in game",
-      worldActivityLede: "Current activities, world cycles and upcoming rotations.",
       inventory: "My items",
+      mastery: "Mastery",
       equippedMods: "Equipped mods",
       insights: "Opportunities",
       bountyHunter: "Bounty hunter",
       settings: "Settings",
-      marketLede: "Your sales, order health, and price research in one workspace.",
-      inventoryLede: "Market inventory, sell timing, and Warframe Market orders in one place.",
-      equippedModsLede: "See the item and configuration using each mod.",
-      insightsLede: "The best ways to turn inventory and resources into platinum.",
-      bountyHunterLede: "Find rewards and compare active bounties by drop chance, difficulty and estimated reward value.",
-      settingsLede: "Language, market platform, and data refresh controls.",
       searching: "Searching saved data…", shown: (visible: number, total: number) => `${visible} of ${total} variants shown`,
       storageError: (_reason: string) => "Unable to open saved data. Restart PlatScope.",
       refreshError: (_reason: string) => "Unable to refresh the market. Saved data was preserved. Check the connection and try again.",
@@ -114,21 +102,20 @@
       noBulk: "No saved estimate exists for this variant.", liveError: (_reason: string) => "Unable to retrieve current prices. The saved estimate was preserved.",
       historyError: (_reason: string) => "Unable to load history. The current price remains available.",
       refreshing: "Refreshing data…", refresh: "Refresh data", openingStorage: "Opening saved data…", validatingSnapshot: "Downloading and checking new prices…", providersUnavailable: "Sources are temporarily unavailable. Showing the latest saved data.", checkStorage: "Check data",
-      noSnapshot: "Market data has not been loaded", loadMarket: "Load market prices", loadMarketBody: "Price and 90-day history updates are available in Settings.", loadingMarket: "Loading data…", loadData: "Open update settings",
+      noSnapshot: "Market data has not been loaded", loadMarket: "Load market prices", loadingMarket: "Loading data…", loadData: "Open update settings",
       marketFilters: "Market search and filters", searchItem: "Search items", searchExample: "For example, Nyx Prime or nyx prime", clear: "Clear", shortcut: "Shortcut:", priceAvailability: "Price availability", allVariants: "All variants", priced: "Has an estimate", unpriced: "No estimate yet",
       results: "Results", snapshot: "Data from", marketCaption: "Market items, prices, sales, and data freshness", item: "Item", trades: "Trades", freshness: "Freshness",
-      first60: "Showing the first 60 variants. Refine the query to narrow the list.", noQuery: (query: string) => `No results for “${query}”`, noFilter: "No variants match this filter", checkSpelling: "Check the spelling or use a canonical slug.", choosePriceFilter: "Choose a different price filter.", clearSearch: "Clear search",
+      first60: "Showing the first 60 variants. Refine the query to narrow the list.", noQuery: (query: string) => `No results for “${query}”`, noFilter: "No variants match this filter", choosePriceFilter: "Choose a different price filter.", clearSearch: "Clear search",
       relic: "Relic", riven: "Riven mod", marketItem: "Market item", gettingLive: "Getting current prices…", updateLive: "Refresh current prices", getLive: "Check current prices", liveHint: "Shows orders from players who are currently in game.", dataDate: "Price data from", masteryRequirement: "Mastery rank", whyPrice: "How is this price calculated?",
       marketData: "Market data", dataReady: "Loaded", dataMissing: "Not loaded",
       fair: "Fair", fairPrice: "Fair price", listPrice: "List price", closedVolume: "Closed volume", lowestAsk: "Lowest ask", depthThree: "Up to 3 units average", depthPrice: "Up to 5 units average", quickSell: "Quick Sell", sell: "sell", buy: "buy", currentOrders: "Orders from players in game", side: "Side", price: "Price", quantityLot: "Quantity · lot", playerStatus: "Player status", sellOrder: "Sell", buyOrder: "Buy", noActiveOrders: "No players in game have orders for this exact variant.",
-      priceHistory: "Price history", historyRange: "History range", dayShort: "d", loadingHistory: "Loading local aggregates…", historyCoverage: (points: number, coverage: number) => `${points} days for this variant · ${coverage} local days covered`, selectForHistory: "Select a row to open compact history for the exact variant.", median: "Median", change: "Change", averageVolume: "Average volume", insufficientChart: "Not enough points for a chart. Background bootstrap adds up to seven days per launch.", itemDetails: "Item details", selectItem: "Select an item in the table to see its calculation and explanation.",
-      marketModeLabel: "Market mode", mySales: "My orders", marketSearch: "Find an item",
+      priceHistory: "Price history", historyRange: "History range", dayShort: "d", loadingHistory: "Loading local aggregates…", historyCoverage: (points: number, coverage: number) => `${points} days for this variant · ${coverage} local days covered`, selectForHistory: "Select a row to open compact history for the exact variant.", median: "Median", change: "Change", averageVolume: "Average volume", insufficientChart: "Not enough points for a chart. Background bootstrap adds up to seven days per launch.", itemDetails: "Item details", marketModeLabel: "Market mode", mySales: "My orders", marketSearch: "Find an item",
     },
   } as const;
 
   $: shell = shellCopy[$locale];
   $: navigationLabels = { world_activity: shell.worldActivity, market: shell.market, inventory: shell.inventory,
-    equipped_mods: shell.equippedMods, squad: "Отряд и билды", mission: "Миссия", insights: shell.insights, bounty_hunter: shell.bountyHunter, settings: shell.settings };
+    mastery: shell.mastery, equipped_mods: shell.equippedMods, squad: "Отряд и билды", mission: "Миссия", insights: shell.insights, bounty_hunter: shell.bountyHunter, settings: shell.settings };
 
   let status: FoundationStatus | null = null;
   let refreshOutcome: MarketRefreshOutcome | null = null;
@@ -422,6 +409,7 @@
       world_activity: selectedCopy.worldActivity,
       market: selectedCopy.market,
       inventory: selectedCopy.inventory,
+      mastery: selectedCopy.mastery,
       equipped_mods: selectedCopy.equippedMods,
       squad: "Отряд и билды",
       mission: "Миссия",
@@ -431,19 +419,6 @@
     }[screen];
   }
 
-  function screenLede(screen: AppScreen, selectedCopy: typeof shell): string {
-    return {
-      world_activity: selectedCopy.worldActivityLede,
-      market: selectedCopy.marketLede,
-      inventory: selectedCopy.inventoryLede,
-      equipped_mods: selectedCopy.equippedModsLede,
-      squad: "Посмотрите экипировку сопартийцев и сохраните идеи для своих билдов.",
-      mission: "Находите предметы на карте и объединяйте их в свои фильтры.",
-      insights: selectedCopy.insightsLede,
-      bounty_hunter: selectedCopy.bountyHunterLede,
-      settings: selectedCopy.settingsLede,
-    }[screen];
-  }
 
   async function loadUiSettings(): Promise<void> {
     try {
@@ -538,7 +513,7 @@
   <header class="app-header">
     <div class="page-heading">
       <h1 bind:this={pageHeading} tabindex="-1">{screenTitle(activeScreen, shell)}</h1>
-      <p class="lede" class:sr-only={["world_activity", "market", "inventory", "insights", "bounty_hunter"].includes(activeScreen)}>{screenLede(activeScreen, shell)}</p>
+
     </div>
   </header>
 
@@ -598,13 +573,13 @@
     <section class="empty-panel" aria-labelledby="empty-heading">
       <p class="empty-panel__label">{shell.noSnapshot}</p>
       <h2 id="empty-heading">{shell.loadMarket}</h2>
-      <p>{shell.loadMarketBody}</p>
+
       <button type="button" onclick={() => navigateTo("settings")}>
         {shell.loadData}
       </button>
     </section>
   {:else if status?.marketSnapshot}
-    <div class="market-search-intro"><h2>Узнайте цену нужного предмета</h2><p>Найдите предмет, выберите ранг и сравните цены продавцов и покупателей.</p></div>
+
     <section class="market-toolbar" aria-labelledby="search-heading">
       <h2 id="search-heading" class="sr-only">{shell.marketFilters}</h2>
       <div class="search-field">
@@ -714,10 +689,10 @@
               <p>Предметы найдены, но скрыты фильтром наличия оценки.</p>
               <button type="button" onclick={() => priceFilter = "all"}>Показать все варианты</button>
             {:else if query}
-              <h3>{shell.noQuery(query)}</h3><p>{shell.checkSpelling}</p>
+              <h3>{shell.noQuery(query)}</h3>
               <button type="button" onclick={clearSearch}>{shell.clearSearch}</button>
             {:else}
-              <h3>Предметы пока не загружены</h3><p>Обновите данные рынка, чтобы начать поиск.</p>
+              <h3>Предметы пока не загружены</h3>
               <button type="button" onclick={() => navigateTo("settings")}>{shell.loadData}</button>
             {/if}
           </div>
@@ -743,7 +718,7 @@
               onBack={() => revealElement(detailTrigger?.isConnected ? detailTrigger : document.getElementById("results-heading"))} />
           {/key}
         {:else}
-          <div class="detail-placeholder"><h2 id="detail-heading">{shell.itemDetails}</h2><p>{shell.selectItem}</p></div>
+          <div class="detail-placeholder"><h2 id="detail-heading">{shell.itemDetails}</h2></div>
         {/if}
       </aside>
     </div>
@@ -753,6 +728,8 @@
       onInventoryChange={() => void loadStatus()}
       onOpenMarketSales={openMarketSales}
     />
+  {:else if activeScreen === "mastery"}
+    <MasteryScreen onInventoryChange={() => void loadStatus()} onOpenSettings={() => navigateTo("settings")} />
   {:else if activeScreen === "equipped_mods"}
     <EquippedModsScreen onInventoryChange={() => void loadStatus()} />
   {:else if activeScreen === "squad"}

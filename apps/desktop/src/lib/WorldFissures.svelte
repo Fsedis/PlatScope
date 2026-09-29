@@ -118,7 +118,7 @@
   <header class="fissures-heading">
     <div>
       <h2 id="fissures-heading">Разломы для моих реликвий</h2>
-      <p>Куда идти и какую реликвию взять</p>
+
     </div>
     {#if !loadingPersonal && !delayed && insights?.inventoryAvailable && hasOwnedRelics}
       <span class="result-count">Найдено: {matches.length}</span>
@@ -128,7 +128,7 @@
   <details class="fissure-settings">
     <summary>Настроить разломы <span>{fissureFilterSummary(rules)}</span></summary>
     <div class="settings-body">
-      <p>Разлом подходит, если совпадает хотя бы одно условие. Внутри условия учитываются все выбранные поля.</p>
+
       {#if !rules.length}<p class="hidden-note">Условий нет. Все разломы скрыты.</p>{/if}
       <div class="rule-list">
         {#each rules as rule, index (rule.id)}
@@ -180,25 +180,25 @@
   {/if}
 
   {#if loadingPersonal}
-    <div class="empty-state" role="status" aria-busy="true"><h3>Сверяем разломы с вашими реликвиями…</h3><p>Загружаем инвентарь, цели и оценку наград.</p></div>
+    <div class="empty-state" role="status" aria-busy="true"><h3>Сверяем разломы с вашими реликвиями…</h3></div>
   {:else if personalError && !insights}
-    <div class="empty-state" role="status"><h3>Не удалось загрузить мои реликвии</h3><p>Проверьте подключение и повторите загрузку.</p><button type="button" onclick={onRetryPersonal}>Повторить загрузку</button></div>
+    <div class="empty-state" role="status"><h3>Не удалось загрузить мои реликвии</h3><button type="button" onclick={onRetryPersonal}>Повторить загрузку</button></div>
   {:else if !insights}
-    <div class="empty-state"><h3>Нужны данные предметов и инвентаря</h3><p>Загрузите игровые данные и обновите инвентарь, чтобы сопоставить реликвии с разломами.</p><button type="button" onclick={onOpenSettings}>Открыть настройки данных</button></div>
+    <div class="empty-state"><h3>Нужны данные предметов и инвентаря</h3><button type="button" onclick={onOpenSettings}>Открыть настройки данных</button></div>
   {:else if !insights.inventoryAvailable}
-    <div class="empty-state"><h3>Сначала загрузите инвентарь</h3><p>После чтения инвентаря покажем только разломы для ваших реликвий.</p><button type="button" onclick={onOpenSettings}>Открыть настройки данных</button></div>
+    <div class="empty-state"><h3>Сначала загрузите инвентарь</h3><button type="button" onclick={onOpenSettings}>Открыть настройки данных</button></div>
   {:else if !hasOwnedRelics}
-    <div class="empty-state"><h3>Реликвий в инвентаре пока нет</h3><p>Обновите инвентарь после получения реликвий.</p><button type="button" onclick={onOpenSettings}>Обновить данные инвентаря</button></div>
+    <div class="empty-state"><h3>Реликвий в инвентаре пока нет</h3><button type="button" onclick={onOpenSettings}>Обновить данные инвентаря</button></div>
   {:else if delayed}
     <div class="empty-state" role="status"><h3>Не удалось подтвердить текущие разломы</h3><p>{unavailable
       ? "Источник пока не передал свежий список миссий. Проверим его автоматически."
       : "Данные о разломах задерживаются. Проверим их автоматически, прежде чем предложить миссию."}</p></div>
   {:else if !rules.length}
-    <div class="empty-state"><h3>Все разломы скрыты</h3><p>Добавьте условие отбора, чтобы увидеть подходящие миссии.</p><button type="button" onclick={() => saveRules([defaultRule])}>Показывать все</button></div>
+    <div class="empty-state"><h3>Все разломы скрыты</h3><button type="button" onclick={() => saveRules([defaultRule])}>Показывать все</button></div>
   {:else if !liveCount}
-    <div class="empty-state"><h3>Активных разломов сейчас нет</h3><p>Проверим список автоматически, когда источник обновится.</p></div>
+    <div class="empty-state"><h3>Активных разломов сейчас нет</h3></div>
   {:else if !matches.length}
-    <div class="empty-state"><h3>Подходящих разломов сейчас нет</h3><p>Среди действующих миссий нет совпадений с вашими реликвиями и условиями отбора.</p></div>
+    <div class="empty-state"><h3>Подходящих разломов сейчас нет</h3></div>
   {:else}
     <div class="match-list">
       {#each visibleMatches as match (match.fissure.id)}
@@ -246,7 +246,7 @@
       {/each}
     </div>
     {#if matches.length > visibleLimit}<button type="button" class="show-more secondary" onclick={() => visibleLimit += initialLimit}>Показать ещё {Math.min(initialLimit, matches.length - visibleLimit)}</button>{/if}
-    <p class="estimate-note">Цена относится к возможной награде, шанс — к одному открытию. Выпадение не гарантировано. Выбор миссии и реликвии выполняется в игре.</p>
+
   {/if}
 </section>
 
@@ -255,7 +255,7 @@
   h2,h3,p { margin:0; }
   .fissures-heading { display:flex; align-items:start; justify-content:space-between; flex-wrap:wrap; gap:.45rem 1rem; }
   .fissures-heading h2 { font-size:1.15rem; line-height:1.35; }
-  .fissures-heading p { margin-top:.15rem; color:var(--text-muted); font-size:.8rem; line-height:1.45; }
+
   .result-count { flex:none; border-radius:999px; padding:.25rem .55rem; background:var(--accent-soft); color:var(--accent-strong); font-size:.75rem; font-weight:700; }
   .fissure-settings { justify-self:start; min-width:0; max-width:100%; border-radius:.58rem; }
   .fissure-settings[open] { justify-self:stretch; border:1px solid var(--border); background:var(--surface-2); }
@@ -325,7 +325,7 @@
   .match-details summary:hover { color:var(--accent-strong); }
   .match-detail-content { display:flex; flex-wrap:wrap; gap:.25rem 1.3rem; padding:0 .85rem .55rem; }
   .match-detail-content p { color:var(--text-muted); font-size:.75rem; line-height:1.45; }
-  .estimate-note { color:var(--text-muted); font-size:.75rem; line-height:1.45; }
+
   .show-more { justify-self:center; font-size:.78rem; }
   @container (max-width:54rem) { .rule-row { grid-template-columns:repeat(3,minmax(0,1fr)) auto; } .rule-number { grid-column:1/-1; } .recommendation { grid-template-columns:2.75rem minmax(0,1fr) minmax(9rem,.7fr); } .relic-link { grid-column:2/-1; justify-self:start; } }
   @container (max-width:38rem) { .recommendation { grid-template-columns:2.75rem minmax(0,1fr); } .reason { grid-column:1/-1; border-left:0; border-top:1px solid var(--border); padding:.5rem 0 0; } .relic-link { grid-column:1/-1; justify-self:stretch; white-space:normal; } .rule-row { grid-template-columns:repeat(2,minmax(0,1fr)); } .rule-number { grid-column:1/-1; } .remove-rule { justify-self:start; } }

@@ -2990,6 +2990,7 @@ mod tests {
                 mastery_requirement: 8,
             }],
             mastery_items: Vec::new(),
+            crafting_recipes: Vec::new(),
             item_localizations: Vec::new(),
             syndicate_offers: Vec::new(),
             nightwave_offers: Vec::new(),

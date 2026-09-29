@@ -111,11 +111,11 @@
   {:else if duplicate}<div class="dialog-state"><strong>Заявка на этот вариант уже размещена</strong><p>{duplicate.quantity} шт. по {money(duplicate.platinum)} · {duplicate.visible ? "видна продавцам" : "скрыта"}.</p><p>Изменить цену, количество и показ можно в «Мои объявления» → «Покупка».</p><button class="secondary" onclick={close}>Понятно</button></div>
   {:else}
     <form onsubmit={event => { event.preventDefault(); void save(); }}>
-      <p class="dialog-intro">Продавцы увидят, какой предмет вы ищете и сколько готовы заплатить.</p>
+
       <div class="order-fields"><label>Цена за штуку, платина<input type="number" min="1" max="900000" step="1" required bind:value={price} disabled={saving} inputmode="numeric" /></label><label>Сколько хотите купить<input type="number" min="1" max="9999" step="1" required bind:value={quantity} disabled={saving} inputmode="numeric" /></label></div>
       <label class="visible-option"><input type="checkbox" bind:checked={visible} disabled={saving} />Показывать заявку продавцам</label>
       <div class="order-review" aria-live="polite"><div><span>Общая сумма</span><strong>{total === null ? "Укажите цену и количество" : money(total)}</strong></div><p>Аккаунт: <strong>{account.profile.ingameName}</strong> · {visible ? "Заявка будет видна" : "Заявка будет скрыта"}</p></div>
-      <p class="no-payment">Размещение заявки не списывает платину. Покупку вы завершаете с продавцом в игре.</p>
+
       {#if error}<p class="error" role="alert">{error}</p>{/if}
       {#if validation && price !== undefined && quantity !== undefined}<p class="error" role="status">{validation}</p>{/if}
       <div class="dialog-actions"><button type="submit" disabled={!canCreate}>{saving ? "Размещаем заявку…" : "Разместить заявку"}</button><button type="button" class="secondary" disabled={saving} onclick={close}>Отмена</button></div>
@@ -136,7 +136,7 @@
   .buy-item img { width: 2.8rem; height: 3.3rem; object-fit: contain; flex: 0 0 auto; }
   .buy-item strong { font-size: .95rem; overflow-wrap: anywhere; }
   .english, .variant { display: block; color: var(--text-muted); font-size: .75rem; margin-top: .15rem; }
-  .dialog-intro, .dialog-state p { margin: .5rem 0 .85rem; color: var(--text-muted); font-size: .8125rem; line-height: 1.5; }
+  .dialog-state p { margin: .5rem 0 .85rem; color: var(--text-muted); font-size: .8125rem; line-height: 1.5; }
   .dialog-state { padding: .6rem 0; font-size: .85rem; }
   .order-fields { display: grid; grid-template-columns: 1fr 1fr; gap: .7rem; }
   .order-fields label { display: grid; gap: .35rem; min-width: 0; font-size: .75rem; color: var(--text-muted); font-weight: 650; }
@@ -148,7 +148,7 @@
   .order-review > div > span { font-size: .8rem; color: var(--text-muted); }
   .order-review > div > strong { font-size: 1rem; text-align: right; font-variant-numeric: tabular-nums; }
   .order-review p { margin: .45rem 0 0; color: var(--text-muted); font-size: .75rem; }
-  .no-payment { color: var(--text-muted); font-size: .75rem; line-height: 1.45; margin: .65rem 0 1rem; }
+
   .error { color: var(--danger); font-size: .8rem; line-height: 1.45; }
   .dialog-actions { display: flex; flex-wrap: wrap; gap: .5rem; }
   .dialog-actions button { font-size: .8rem; }

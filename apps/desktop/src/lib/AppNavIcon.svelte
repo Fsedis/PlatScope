@@ -3,6 +3,7 @@
     | "world_activity"
     | "market"
     | "inventory"
+    | "mastery"
     | "equipped_mods"
     | "squad"
     | "mission"
@@ -22,6 +23,8 @@
     <path d="M4 17V9m5 8V5m5 12v-6m5 6V3M3 20h18" />
   {:else if screen === "inventory"}
     <path d="M4 7h16v13H4zM3 4h18v3H3zM9 11h6" />
+  {:else if screen === "mastery"}
+    <path d="M8 3h8v5a4 4 0 0 1-8 0V3ZM8 5H4v2a4 4 0 0 0 4 4m8-6h4v2a4 4 0 0 1-4 4M12 12v5m-4 4h8M9 17h6v4H9z" />
   {:else if screen === "equipped_mods"}
     <path d="M8 3h8l4 4v13H4V7zM8 17h8M8 7h8" /><path d="m12 9 3 3-3 3-3-3z" />
   {:else if screen === "insights"}

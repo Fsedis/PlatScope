@@ -45,15 +45,13 @@
     ru: {
       kicker: "Интерфейс",
       heading: "Язык приложения",
-      description: "Названия предметов останутся такими, как они указаны на рынке.",
       label: "Язык",
       russian: "Русский",
       english: "English",
       dataKicker: "Рынок",
       dataHeading: "Обновление рыночных данных",
-      dataDescription: "Выберите платформу, на которой вы торгуете.",
       platform: "Платформа",
-      platformHint: "Полная история цен доступна для PC. На других платформах PlatScope получает текущие ордера по запросу.",
+      platformHint: "История цен — только для PC.",
       platforms: {
         pc: "PC",
         playstation: "PlayStation",
@@ -65,14 +63,12 @@
       crossplayHint: "Включите, если в игре у вас включена кроссплатформенная торговля.",
       overlayKicker: "Оверлей",
       overlayHeading: "Размер и положение",
-      overlayDescription: "Настройте карточки наград поверх окна Warframe. Оверлей всегда остаётся внутри игрового окна.",
       overlayScale: "Масштаб",
       overlayOffsetX: "Смещение по горизонтали",
       overlayOffsetY: "Смещение по вертикали",
-      overlayHint: "Выберите размер и положение, затем проверьте результат прямо поверх Warframe.",
       overlayReset: "Сбросить положение",
       overlayPreviewTitle: "Проверка в игре",
-      overlayPreviewDescription: "Warframe должен быть открыт. Покажем до четырёх тестовых наград из прайм-сетов, части которых уже есть в вашем инвентаре.",
+      overlayPreviewDescription: "Warframe должен быть открыт.",
       overlayPreviewAction: "Показать в Warframe",
       overlayPreviewRefresh: "Обновить предпросмотр",
       overlayPreviewing: "Открываем оверлей…",
@@ -94,13 +90,10 @@
       retry: "Повторить",
       refreshKicker: "Данные",
       refreshHeading: "Обновление данных",
-      refreshDescription: "Все ручные обновления собраны здесь. Во время обновления сохранённые данные остаются доступными.",
       marketData: "Цены и история рынка",
-      marketDataBody: "Загружает свежие цены и все недостающие дни 90-дневной истории relics.run. Первое обновление может занять несколько минут.",
       updateMarket: "Обновить цены рынка",
       updatingMarket: "Проверяем цены и историю…",
       itemData: "Данные предметов",
-      itemDataBody: "Обновляет каталог предметов, реликвии, дукаты и данные модов разлома.",
       updateItems: "Обновить данные предметов",
       updatingItems: "Обновляем предметы…",
       dataFrom: (date: string) => `Данные от ${date}`,
@@ -117,15 +110,13 @@
     en: {
       kicker: "Interface",
       heading: "Application language",
-      description: "Item names stay as they appear on the market.",
       label: "Language",
       russian: "Русский",
       english: "English",
       dataKicker: "Market",
       dataHeading: "Market data refresh",
-      dataDescription: "Choose the platform where you trade.",
       platform: "Platform",
-      platformHint: "Full price history is available for PC. On other platforms PlatScope retrieves current orders on demand.",
+      platformHint: "Price history is available for PC only.",
       platforms: {
         pc: "PC",
         playstation: "PlayStation",
@@ -137,14 +128,12 @@
       crossplayHint: "Enable this if cross-platform trading is enabled in the game.",
       overlayKicker: "Overlay",
       overlayHeading: "Size and position",
-      overlayDescription: "Adjust reward cards over the Warframe window. The overlay always stays inside the game window.",
       overlayScale: "Scale",
       overlayOffsetX: "Horizontal offset",
       overlayOffsetY: "Vertical offset",
-      overlayHint: "Choose the size and position, then verify the result directly over Warframe.",
       overlayReset: "Reset position",
       overlayPreviewTitle: "Test in game",
-      overlayPreviewDescription: "Warframe must be open. PlatScope will show up to four test rewards from Prime sets already represented in your inventory.",
+      overlayPreviewDescription: "Warframe must be open.",
       overlayPreviewAction: "Show in Warframe",
       overlayPreviewRefresh: "Refresh preview",
       overlayPreviewing: "Opening overlay…",
@@ -166,13 +155,10 @@
       retry: "Try again",
       refreshKicker: "Data",
       refreshHeading: "Data updates",
-      refreshDescription: "All manual updates are kept here. Saved data remains available while an update is running.",
       marketData: "Market prices and history",
-      marketDataBody: "Downloads current prices and every missing day of the 90-day relics.run history. The first update may take several minutes.",
       updateMarket: "Update market prices",
       updatingMarket: "Checking prices and history…",
       itemData: "Item data",
-      itemDataBody: "Updates the item catalog, relics, ducats, and Riven data.",
       updateItems: "Update item data",
       updatingItems: "Updating items…",
       dataFrom: (date: string) => `Data from ${date}`,
@@ -452,7 +438,7 @@
 
 <dialog class="diagnostics-dialog" bind:this={diagnosticsDialog} onclose={() => diagnosticsOpen = false} aria-labelledby="diagnostics-heading">
   <header class="diagnostics-dialog__header">
-    <div><h2 id="diagnostics-heading">{$locale === "ru" ? "Диагностика" : "Diagnostics"}</h2><p>{$locale === "ru" ? "Состояние источников и сохранённых данных." : "Data sources and saved data status."}</p></div>
+    <div><h2 id="diagnostics-heading">{$locale === "ru" ? "Диагностика" : "Diagnostics"}</h2></div>
     <button type="button" class="secondary" onclick={() => diagnosticsDialog.close()}>{$locale === "ru" ? "Закрыть" : "Close"}</button>
   </header>
   <div class="diagnostics-dialog__body">
@@ -486,7 +472,7 @@
   <div>
     <p class="eyebrow">{c.kicker}</p>
     <h2 id="language-settings-heading">{c.heading}</h2>
-    <p>{c.description}</p>
+
   </div>
   <div class="settings-control">
     <label for="interface-language">{c.label}</label>
@@ -501,7 +487,7 @@
   <div>
     <p class="eyebrow">{c.dataKicker}</p>
     <h2 id="market-settings-heading">{c.dataHeading}</h2>
-    <p>{c.dataDescription}</p>
+
   </div>
   <div class="settings-control-grid">
     <div class="settings-control platform-control">
@@ -550,7 +536,7 @@
   <div>
     <p class="eyebrow">{c.overlayKicker}</p>
     <h2 id="overlay-settings-heading">{c.overlayHeading}</h2>
-    <p>{c.overlayDescription}</p>
+
   </div>
   <div class="overlay-settings-controls">
     <div class="overlay-slider-grid">
@@ -565,7 +551,7 @@
           bind:value={overlayScalePercent}
           oninput={scheduleOverlayPreview}
           disabled={loading || saving || !settings}
-          aria-describedby="overlay-settings-hint"
+
         />
       </div>
       <div class="overlay-slider">
@@ -579,7 +565,7 @@
           bind:value={overlayOffsetXPercent}
           oninput={scheduleOverlayPreview}
           disabled={loading || saving || !settings}
-          aria-describedby="overlay-settings-hint"
+
         />
       </div>
       <div class="overlay-slider">
@@ -593,13 +579,13 @@
           bind:value={overlayOffsetYPercent}
           oninput={scheduleOverlayPreview}
           disabled={loading || saving || !settings}
-          aria-describedby="overlay-settings-hint"
+
         />
       </div>
     </div>
 
     <div class="overlay-settings-footer">
-      <p id="overlay-settings-hint" class="field-hint">{c.overlayHint}</p>
+
       <div class="overlay-settings-actions">
         <button
           type="button"
@@ -635,13 +621,13 @@
   <div>
     <p class="eyebrow">{c.refreshKicker}</p>
     <h2 id="data-refresh-heading" bind:this={dataRefreshHeading} tabindex="-1">{c.refreshHeading}</h2>
-    <p>{c.refreshDescription}</p>
+
   </div>
   <div class="refresh-controls">
     <article class="refresh-option">
       <div>
         <h3>{c.marketData}</h3>
-        <p>{c.marketDataBody}</p>
+
         <small>{marketDataDate ? c.dataFrom(marketDataDate) : c.dataMissing}</small>
         <small>{c.historyCoverage(historyCoverageDays)}</small>
       </div>
@@ -656,7 +642,7 @@
     <article class="refresh-option">
       <div>
         <h3>{c.itemData}</h3>
-        <p>{c.itemDataBody}</p>
+
         <small>{itemDataDate ? c.dataFrom(itemDataDate) : c.dataMissing}</small>
       </div>
       <button
@@ -677,20 +663,20 @@
 <AppUpdatePanel mode="settings" />
 
 <section class="diagnostics-entry" aria-labelledby="diagnostics-entry-heading">
-  <div><h2 id="diagnostics-entry-heading">{$locale === "ru" ? "Диагностика" : "Diagnostics"}</h2><p>{$locale === "ru" ? "Если что-то работает неправильно, здесь можно проверить данные и сохранить отчёт." : "Check data and save a report when something is not working correctly."}</p></div>
+  <div><h2 id="diagnostics-entry-heading">{$locale === "ru" ? "Диагностика" : "Diagnostics"}</h2></div>
   <button type="button" class="secondary" aria-haspopup="dialog" onclick={openDiagnostics}>{$locale === "ru" ? "Открыть диагностику" : "Open diagnostics"}</button>
 </section>
 
 <style>
   .diagnostics-entry { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:.8rem 1.5rem; margin-top:.7rem; padding:.9rem; border:1px solid var(--border); border-radius:.75rem; background:var(--surface-1); }
   .diagnostics-entry h2 { font-size:1.1rem; margin:0 0 .35rem; }
-  .diagnostics-entry p { margin:0; color:var(--text-muted); font-size:.875rem; line-height:1.5; }
+
   .diagnostics-entry button { flex:none; min-height:2.25rem; }
   .diagnostics-dialog { width:min(76rem,calc(100vw - 2rem)); max-height:calc(100dvh - 2rem); padding:0; border:1px solid var(--border); border-radius:.9rem; background:var(--app-bg); color:var(--text); box-shadow:var(--shadow-md); overscroll-behavior:contain; }
   .diagnostics-dialog::backdrop { background:rgb(0 0 0 / .45); }
   .diagnostics-dialog__header { position:sticky; top:0; z-index:1; display:flex; align-items:start; justify-content:space-between; gap:1rem; padding:1.1rem 1.25rem; border-bottom:1px solid var(--border); background:var(--surface-1); }
   .diagnostics-dialog__header h2 { margin:0; font-size:1.35rem; }
-  .diagnostics-dialog__header p { margin:.3rem 0 0; color:var(--text-muted); font-size:.875rem; line-height:1.4; }
+
   .diagnostics-dialog__header button { flex:none; min-height:2.25rem; }
   .diagnostics-dialog__body { padding:1.25rem; }
   #data-refresh-heading { scroll-margin-top:5rem; }
@@ -724,7 +710,7 @@
   .overlay-slider input { width: 100%; min-height: 1.5rem; margin: 0; accent-color: var(--accent); cursor: pointer; }
   .overlay-slider input:disabled { cursor: default; }
   .overlay-settings-footer { display: flex; align-items: center; justify-content: space-between; gap: .75rem; }
-  .overlay-settings-footer .field-hint { max-width: none; }
+
   .overlay-settings-footer button { flex: 0 0 auto; min-height: 2.125rem; }
   .overlay-settings-actions { display: flex; flex: 0 0 auto; gap: .5rem; }
   .overlay-preview-action { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 1rem; padding: .65rem; border-radius: .65rem; background: var(--surface-2); box-shadow: var(--shadow-sm); }
@@ -737,7 +723,7 @@
   .refresh-controls { display: grid; gap: .55rem; min-width: 0; }
   .refresh-option { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: .7rem; padding: .65rem; border: 1px solid var(--border); border-radius: .55rem; background: var(--surface-2); }
   .refresh-option h3 { margin: 0 0 .25rem; font-size: 1rem; }
-  .refresh-option p { font-size: .9rem; }
+
   .refresh-option small { display: block; margin-block-start: .45rem; color: var(--text-muted); font-weight: 700; }
   .refresh-option button { min-width: 11rem; min-height: 2.125rem; }
   .refresh-message { min-height: 1.35rem; color: var(--success); font-weight: 700; }

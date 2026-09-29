@@ -83,7 +83,7 @@
 
 <section class="personal-goals" aria-label="Личные цели сборки">
   <header class="goal-heading">
-    <div><h2>Собрать для себя</h2><p>Выберите комплект. Нужные детали останутся у вас.</p></div>
+    <div><h2>Собрать для себя</h2></div>
     {#if view?.goals.length}<button type="button" onclick={() => { adding = !adding; query = ""; }} aria-expanded={adding}>{adding ? "Закрыть поиск" : "Добавить цель"}</button>{/if}
   </header>
   <div class="sr-only" role="status">{announcement}</div>
@@ -95,11 +95,11 @@
         <label for="personal-set-search">Какой комплект хотите собрать?</label>
         <input id="personal-set-search" type="search" bind:value={query} placeholder="Например, Эш Прайм или Ash Prime" />
         {#if !view.catalog.length}<p>Обновите данные предметов, чтобы выбрать комплект.</p><button type="button" onclick={onOpenSettings}>Открыть настройки</button>
-        {:else if !results.length}<p>Новых комплектов с таким названием нет. Попробуйте другое название.</p>
+        {:else if !results.length}<p>Новых комплектов с таким названием нет.</p>
         {:else}<ul class="search-results">{#each results.slice(0,8) as set (set.setSlug)}
           <li><div class="item-identity"><PersonalGoalImage src={set.imageUrl} /><span><strong>{name(set.displayName)}</strong>{#if name(set.displayName) !== name(set.displayNameEn)}<small>{name(set.displayNameEn)}</small>{/if}</span></div>
             <button type="button" onclick={() => change(set.setSlug,true)} disabled={!!busy} aria-label={`Собирать ${name(set.displayName)} для себя`}>{busy === set.setSlug ? "Сохраняем…" : "Собирать для себя"}</button></li>
-        {/each}</ul>{#if results.length > 8}<p class="muted">Найдено {results.length} комплектов. Уточните название.</p>{/if}{/if}
+        {/each}</ul>{#if results.length > 8}<p class="muted">Найдено: {results.length}</p>{/if}{/if}
       </section>
     {/if}
     {#if !view.inventoryAvailable}<div class="goal-note"><p>Цели сохранены. Прочитайте инвентарь, чтобы увидеть имеющиеся детали и реликвии.</p><button type="button" onclick={onOpenSettings}>Открыть настройки</button></div>{/if}
@@ -122,7 +122,7 @@
             <div class="goal-note order-note"><p>Этот комплект или его детали есть в ваших ордерах на продажу. Цель сохраняет копии в приложении; существующие ордера нужно проверить на рынке.</p><button type="button" onclick={onOpenMarketSales}>Открыть мои ордера</button></div>
           {/if}
           {#if selected.completedAt}
-            <section class="completed-state"><h4>Выполнено · {new Date(selected.completedAt).toLocaleDateString("ru-RU")}</h4><p>Полный комплект деталей собран. Один комплект остаётся защищённым до удаления цели; лишние копии доступны с учётом остальных правил.</p></section>
+            <section class="completed-state"><h4>Выполнено · {new Date(selected.completedAt).toLocaleDateString("ru-RU")}</h4></section>
           {/if}
           {#if view.inventoryAvailable}
             <p class="progress-count"><strong>{progress.owned}<span> / {progress.required}</span></strong> {selected.completedAt ? "деталей сохранено сейчас" : "деталей уже есть"}</p>
@@ -132,9 +132,9 @@
               {#if next}<h4>Откройте: {next.source.displayName}</h4>{#if next.source.displayName !== next.source.definition.displayNameEn}<small>{next.source.definition.displayNameEn}</small>{/if}<p>{refinementLabel(next.target, "ru")} · есть {next.source.ownedQuantity} шт.</p>
                 <p>{next.source.rewards.filter(reward => selected!.parts.some(part => part.slug === reward.definition.rewardSlug && part.allocatedQuantity < part.requiredQuantity)).map(reward => `${selected!.parts.find(part => part.slug === reward.definition.rewardSlug)!.displayName} — ${reward.definition.chancePercent}%`).join("; ")}</p>
                 <button class="primary" type="button" onclick={() => onOpenRelic(next.source.definition.relicSlug)}>Посмотреть реликвию</button>
-                <small>Шанс за одно одиночное открытие, без гарантии выпадения.</small>
+
               {:else if !view.metadataAvailable}<h4>Обновите данные реликвий</h4><p>Сохранённого каталога реликвий нет. Цель и резерв деталей продолжают действовать.</p><button type="button" onclick={onOpenSettings}>Открыть настройки</button>
-              {:else}<h4>Найдите реликвии для недостающих деталей</h4><p>Подходящих реликвий в инвентаре нет. Раскройте нужную деталь ниже, чтобы посмотреть варианты.</p>{/if}
+              {:else}<h4>Найдите реликвии для недостающих деталей</h4><p>Подходящих реликвий в инвентаре нет.</p>{/if}
             </section>
             {:else if !progress.complete}<p class="muted">Состав инвентаря изменился. Цель остаётся выполненной; приложение не предлагает собирать её заново.</p>{/if}
           {/if}
@@ -147,13 +147,13 @@
                 <details><summary><span class="item-identity"><PersonalGoalImage src={part.imageUrl} /><span><strong>{part.displayName}</strong>{#if part.displayName !== part.displayNameEn}<small>{part.displayNameEn}</small>{/if}</span></span><span class="part-count">Есть {part.allocatedQuantity} из {part.requiredQuantity}<small>Получить ещё {missing}</small></span></summary>
                   <div class="part-sources"><h5>Реликвии с этой деталью</h5>
                     {#if !options.length}<p>В сохранённых данных реликвии не найдены. Обновите данные предметов или найдите деталь на рынке.</p>
-                    {:else}<ul>{#each options.slice(0,6) as relic}<li><div><strong>{relic.displayName}</strong>{#if relic.displayName !== relic.definition.displayNameEn}<small>{relic.definition.displayNameEn}</small>{/if}<small>{refinementLabel(relic.definition.refinement,"ru")} · шанс {relic.chance}%</small></div><span>{relic.ownedQuantity > 0 ? `Есть ${relic.ownedQuantity}` : relic.definition.vaultStatus === "vaulted" ? "В хранилище" : relic.definition.vaultStatus === "available" ? "Можно добыть" : "Доступность неизвестна"}</span></li>{/each}</ul><p class="muted">Вероятность за одно одиночное открытие. Реликвии из хранилища можно открыть, если они у вас есть, или получить у других игроков.</p>{/if}
+                    {:else}<ul>{#each options.slice(0,6) as relic}<li><div><strong>{relic.displayName}</strong>{#if relic.displayName !== relic.definition.displayNameEn}<small>{relic.definition.displayNameEn}</small>{/if}<small>{refinementLabel(relic.definition.refinement,"ru")} · шанс {relic.chance}%</small></div><span>{relic.ownedQuantity > 0 ? `Есть ${relic.ownedQuantity}` : relic.definition.vaultStatus === "vaulted" ? "В хранилище" : relic.definition.vaultStatus === "available" ? "Можно добыть" : "Доступность неизвестна"}</span></li>{/each}</ul>{/if}
                   </div>
                 </details>
               {:else}<div class="owned-part"><span class="item-identity"><PersonalGoalImage src={part.imageUrl} /><span><strong>{part.displayName}</strong>{#if part.displayName !== part.displayNameEn}<small>{part.displayNameEn}</small>{/if}</span></span><span class="part-count">{view.inventoryAvailable ? `Есть ${part.allocatedQuantity} из ${part.requiredQuantity}` : `На комплект ${part.requiredQuantity}`}<small>{view.inventoryAvailable ? part.allocatedQuantity > 0 ? "Сохранено для цели" : "Для цели нет копий" : ""}</small></span></div>{/if}
             {/each}
           </div>
-          <footer><p class="muted">{view.observedAt ? `Инвентарь от ${new Date(view.observedAt).toLocaleString("ru-RU")}. ` : ""}Прогресс обновляется при чтении инвентаря. Общие детали сначала выделяются ранее добавленной цели.</p>
+          <footer><p class="muted">{view.observedAt ? `Инвентарь от ${new Date(view.observedAt).toLocaleString("ru-RU")}` : ""}</p>
             <button type="button" onclick={() => change(selected!.setSlug,false)} disabled={!!busy}>{busy === selected.setSlug ? "Сохраняем…" : "Удалить цель"}</button></footer>
         </article>
       </div>
@@ -165,7 +165,7 @@
   .personal-goals { container-type:inline-size; }
   .goal-heading { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:1rem; margin:1rem 0 1.25rem; }
   h2,h3,h4,h5,p { margin:0; } h2 { font-size:1.4rem; } h3 { font-size:1.3rem; } h4 { font-size:1rem; } h5 { font-size:.875rem; }
-  .goal-heading p { margin-top:.4rem; color:var(--text-muted); }
+
   button { border:1px solid var(--border); border-radius:.5rem; background:var(--surface-2); color:var(--text); padding:.65rem .9rem; font:inherit; cursor:pointer; }
   button:disabled { cursor:wait; opacity:.6; } button:hover:not(:disabled) { border-color:var(--accent); } button:focus-visible,input:focus-visible,summary:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
   .primary { background:var(--accent); color:var(--accent-contrast,#fff); }
@@ -181,7 +181,7 @@
   .item-identity { display:flex; align-items:center; gap:.8rem; min-width:0; } .item-identity>span,.item-identity>div { min-width:0; overflow-wrap:anywhere; }
   .goal-purpose { font-size:.8rem; color:var(--text-muted); margin-top:.6rem; }
   .completed-state { margin-top:1rem; padding:1rem; background:var(--surface-2); border-left:3px solid var(--accent); border-radius:.5rem; }
-  .completed-state h4 { color:var(--accent-strong); } .completed-state p { margin-top:.5rem; font-size:.875rem; line-height:1.5; }
+  .completed-state h4 { color:var(--accent-strong); }
   .progress-count { margin-top:1.3rem; font-size:.875rem; } .progress-count strong { font-size:1.6rem; margin-right:.5rem; } .progress-count strong span { color:var(--text-muted); font-weight:400; }
   progress { width:100%; height:.5rem; accent-color:var(--accent); margin:.7rem 0 1rem; }
   .next-step,.goal-note { background:var(--surface-2); padding:1rem; border-radius:.5rem; } .next-step p { margin:.5rem 0; font-size:.875rem; line-height:1.5; } .next-step>small { margin-top:.6rem; } .goal-note { margin-bottom:1rem; } .goal-note button { margin-top:.6rem; }

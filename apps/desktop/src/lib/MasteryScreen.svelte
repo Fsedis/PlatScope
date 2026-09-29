@@ -1,10 +1,17 @@
 <script lang="ts">
-  import { tick } from "svelte";
+  import { invoke } from "@tauri-apps/api/core";
+  import { onMount, tick } from "svelte";
+  import { inventoryScanErrorMessage } from "./inventoryRefresh";
   import { localeCode, useLocale } from "./i18n";
   import { filterMasteryItems, masteryCategoryLabel, masteryExplanation, masteryStore, type MasteryStatus } from "./mastery";
   import MasteryStatusMark from "./MasteryStatus.svelte";
-  export let scanning = false;
-  export let onScan: () => void;
+  import MasteryPlanner from "./MasteryPlanner.svelte";
+  export let onInventoryChange: (() => void) | undefined = undefined;
+  export let onOpenSettings: () => void;
+  let scanning = false;
+  let scanError = "";
+  let disposed = false;
+  let mode: "plan" | "history" = "plan";
   const locale = useLocale();
   let query = "";
   let category = "all";
@@ -23,6 +30,19 @@
   $: observed = view?.observedAt ? new Date(view.observedAt).toLocaleString(localeCode($locale)) : null;
   $: stale = $masteryStore.error || view?.refreshFailed;
   function resetFilters() { query = ""; category = "all"; status = "all"; page = 1; }
+  async function onScan() {
+    if (scanning) return;
+    scanning = true;
+    scanError = "";
+    try {
+      await invoke("scan_read_only_inventory");
+      await masteryStore.refresh();
+      if (!disposed) onInventoryChange?.();
+    } catch (error) {
+      if (!disposed) scanError = inventoryScanErrorMessage(error, t("Не удалось обновить данные. Запустите Warframe, войдите в игру и повторите.", "Could not update account data. Start Warframe, sign in and try again."), $locale === "ru");
+    } finally { if (!disposed) scanning = false; }
+  }
+  onMount(() => () => { disposed = true; });
   async function changePage(next: number) {
     page = next;
     await tick();
@@ -31,14 +51,18 @@
   }
 </script>
 
+<nav class="mastery-modes" aria-label="Освоение аккаунта"><button type="button" class:active={mode === "plan"} aria-pressed={mode === "plan"} onclick={() => mode = "plan"}>План прокачки</button><button type="button" class:active={mode === "history"} aria-pressed={mode === "history"} onclick={() => mode = "history"}>История освоения</button></nav>
+{#if scanError}<div class="notice" role="alert"><p>{scanError}</p></div>{/if}
+{#if mode === "plan"}
+  <MasteryPlanner {scanning} {onScan} {onOpenSettings} />
+{:else}
 <section class="mastery-screen" aria-labelledby="mastery-title">
   <header class="mastery-header">
-    <div><h2 id="mastery-title">{t("Освоение аккаунта", "Account mastery")}</h2><p>{t("История снаряжения, включая предметы, которых уже нет в инвентаре.", "Equipment history, including items no longer in your inventory.")}</p></div>
+    <div><h2 id="mastery-title">{t("Освоение аккаунта", "Account mastery")}</h2></div>
     <button type="button" onclick={onScan} disabled={scanning}>{scanning ? t("Обновляем…", "Updating…") : t("Обновить из Warframe", "Update from Warframe")}</button>
     {#if view && view.catalogAvailable}
       <div class="history-status">
         <p>{observed ? t(`История от ${observed}`, `History from ${observed}`) : t("История ещё не получена. Запустите Warframe и обновите данные.", "History has not been received yet. Start Warframe and update the data.")}</p>
-        <details><summary>{t("Что означают отметки", "About these labels")}</summary><p>{t("«Освоено» с игровым венком — достигнут максимальный ранг. «Не освоено» — предмет отсутствует в загруженной истории или ещё не достиг максимального ранга; при наличии прогресса он указан рядом. «Нет данных» — история недоступна либо правило пока не поддерживается. Продажа, применение Формы и настройка «Оставлять копий» не сбрасывают освоение. Для модульного снаряжения учитывается определяющая деталь, например призма усилителя, а не каждая сборка.", "Mastered with the in-game laurel means the maximum rank was reached. Not mastered means the item is absent from loaded history or below its maximum rank; recorded progress is shown alongside it. Unknown means unavailable history or an unsupported rule. Selling, Forma and Keep copies do not reset mastery. Modular equipment is tracked by its mastery-bearing part, such as an amp prism, not each build.")}</p></details>
       </div>
     {/if}
   </header>
@@ -49,7 +73,7 @@
   {#if $masteryStore.loading && !view}
     <p class="empty" role="status">{t("Загружаем историю освоения…", "Loading mastery history…")}</p>
   {:else if view && !view.catalogAvailable}
-    <div class="empty"><h3>{t("Каталог снаряжения ещё не загружен", "Equipment catalog is not loaded yet")}</h3><p>{t("Обновите данные предметов в настройках. История аккаунта сохранится независимо от каталога.", "Update item data in Settings. Account history is retained independently of the catalog.")}</p></div>
+    <div class="empty"><h3>{t("Каталог снаряжения ещё не загружен", "Equipment catalog is not loaded yet")}</h3></div>
   {:else if view}
     <div class="mastery-filters">
       <label class="search">{t("Найти снаряжение", "Find equipment")}<input type="search" bind:value={query} oninput={() => page = 1} placeholder={t("Например, Никс Прайм или Nyx Prime", "For example, Nyx Prime")} /></label>
@@ -68,14 +92,16 @@
           <details class="item-details"><summary>{t("Почему такой статус", "Why this status")}</summary><p>{masteryExplanation(item, $locale)}</p>{#if item.xp !== null}<p>{t("Накопленный опыт в истории аккаунта", "Accumulated XP in account history")}: {item.xp.toLocaleString(localeCode($locale))}</p>{/if}{#if view.source && observed}<p>{t("Источник: данные аккаунта Warframe", "Source: Warframe account data")} · {observed}</p>{/if}</details>
         </article>
       {:else}
-        <div class="empty"><h3>{t("Ничего не найдено", "No matches")}</h3><p>{t("Измените название, тип снаряжения или состояние.", "Change the name, equipment type or status.")}</p><button type="button" class="secondary" onclick={resetFilters}>{t("Сбросить фильтры", "Reset filters")}</button></div>
+        <div class="empty"><h3>{t("Ничего не найдено", "No matches")}</h3><button type="button" class="secondary" onclick={resetFilters}>{t("Сбросить фильтры", "Reset filters")}</button></div>
       {/each}
     </div>
     {#if pageCount > 1}<nav class="pagination" aria-label={t("Страницы снаряжения", "Equipment pages")}><button type="button" class="secondary" disabled={currentPage === 1} onclick={() => changePage(currentPage - 1)}>{t("Назад", "Previous")}</button><span>{t(`Страница ${currentPage} из ${pageCount}`, `Page ${currentPage} of ${pageCount}`)}</span><button type="button" class="secondary" disabled={currentPage === pageCount} onclick={() => changePage(currentPage + 1)}>{t("Дальше", "Next")}</button></nav>{/if}
   {/if}
 </section>
+{/if}
 
 <style>
-  .mastery-screen{display:grid;gap:.8rem;min-width:0}.mastery-header,.mastery-filters,.mastery-list{border:1px solid var(--border);background:var(--surface-1);border-radius:.8rem}.mastery-header{padding:1rem;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:.7rem 1rem;align-items:center}.mastery-header button{flex-shrink:0}h2,h3,p{margin:0}h2{font-size:1.15rem}h3{font-size:.95rem}.mastery-header p,.history-status p,.notice p,.empty p{font-size:.85rem;color:var(--text-muted);line-height:1.5;margin-top:.4rem}.history-status{grid-column:1/-1;display:flex;gap:.6rem 1.5rem;align-items:start;justify-content:space-between}.history-status>p{margin:0;flex:1;font-size:.78rem}.history-status details{max-width:36rem;flex:1}.history-status summary{width:fit-content;margin-left:auto}.history-status details[open] summary{margin-left:0}summary{font-size:.8rem;cursor:pointer;font-weight:600}.mastery-filters{padding:.8rem 1rem;display:flex;gap:1rem;align-items:end;flex-wrap:wrap}label{display:grid;gap:.4rem;font-size:.8rem}label.search{flex:1;min-width:16rem}input,select{width:100%;min-width:0;background:var(--surface-1);border:1px solid var(--border);border-radius:.45rem;color:var(--text);font:inherit;padding:.6rem}.mastery-result-count{color:var(--text-muted);font-size:.8rem}.mastery-list{overflow:hidden}.mastery-item{padding:.8rem 1rem;border-bottom:1px solid var(--border)}.mastery-item:last-child{border:0}.item-main{display:flex;align-items:center;gap:.8rem}.item-main img,.image-placeholder{width:42px;height:42px;object-fit:contain;flex-shrink:0}.image-placeholder{display:grid;place-items:center;font-size:1.5rem;color:var(--text-muted);border:1px solid var(--border);border-radius:.4rem}.item-name{flex:1;min-width:0}.item-name h3{overflow-wrap:anywhere}.item-name p{margin-top:.25rem;color:var(--text-muted);font-size:.76rem;line-height:1.4}.item-status{font-size:.8rem;color:var(--text-muted);text-align:right;max-width:15rem;flex-shrink:0}.item-details{margin:.4rem 0 0 3.4rem}.item-details summary{color:var(--text-muted);font-weight:400;width:fit-content}.item-details p{font-size:.8rem;line-height:1.5;margin-top:.5rem;max-width:60rem;color:var(--text-muted)}.empty{padding:1.5rem}.empty button,.notice button{margin-top:.6rem}.notice{padding:.8rem 1rem;border:1px solid var(--border);border-radius:.6rem;background:var(--surface-2)}.pagination{display:flex;align-items:center;justify-content:center;gap:1rem}.pagination span{font-size:.8rem;color:var(--text-muted)}
-  @media(max-width:800px){.mastery-header{grid-template-columns:minmax(0,1fr)}.mastery-header button{justify-self:start}.history-status{flex-wrap:wrap}.history-status details{min-width:100%}.history-status summary{margin-left:0}.item-status{max-width:11rem}.mastery-filters>label{flex:1;min-width:12rem}}
+  .mastery-modes{display:flex;gap:.4rem;margin-bottom:1rem;border-bottom:1px solid var(--border);padding-bottom:.6rem}.mastery-modes button{font-size:.82rem;background:transparent;color:var(--text-muted);border-color:transparent;box-shadow:none;padding:.5rem .8rem}.mastery-modes button.active{background:var(--accent-soft);color:var(--accent-strong);border-color:var(--border)}
+  .mastery-screen{display:grid;gap:.8rem;min-width:0}.mastery-header,.mastery-filters,.mastery-list{border:1px solid var(--border);background:var(--surface-1);border-radius:.8rem}.mastery-header{padding:1rem;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:.7rem 1rem;align-items:center}.mastery-header button{flex-shrink:0}h2,h3,p{margin:0}h2{font-size:1.15rem}h3{font-size:.95rem}.mastery-header p, .history-status p, .notice p{font-size:.85rem;color:var(--text-muted);line-height:1.5;margin-top:.4rem}.history-status{grid-column:1/-1;display:flex;gap:.6rem 1.5rem;align-items:start;justify-content:space-between}.history-status>p{margin:0;flex:1;font-size:.78rem}summary{font-size:.8rem;cursor:pointer;font-weight:600}.mastery-filters{padding:.8rem 1rem;display:flex;gap:1rem;align-items:end;flex-wrap:wrap}label{display:grid;gap:.4rem;font-size:.8rem}label.search{flex:1;min-width:16rem}input,select{width:100%;min-width:0;background:var(--surface-1);border:1px solid var(--border);border-radius:.45rem;color:var(--text);font:inherit;padding:.6rem}.mastery-result-count{color:var(--text-muted);font-size:.8rem}.mastery-list{overflow:hidden}.mastery-item{padding:.8rem 1rem;border-bottom:1px solid var(--border)}.mastery-item:last-child{border:0}.item-main{display:flex;align-items:center;gap:.8rem}.item-main img,.image-placeholder{width:42px;height:42px;object-fit:contain;flex-shrink:0}.image-placeholder{display:grid;place-items:center;font-size:1.5rem;color:var(--text-muted);border:1px solid var(--border);border-radius:.4rem}.item-name{flex:1;min-width:0}.item-name h3{overflow-wrap:anywhere}.item-name p{margin-top:.25rem;color:var(--text-muted);font-size:.76rem;line-height:1.4}.item-status{font-size:.8rem;color:var(--text-muted);text-align:right;max-width:15rem;flex-shrink:0}.item-details{margin:.4rem 0 0 3.4rem}.item-details summary{color:var(--text-muted);font-weight:400;width:fit-content}.item-details p{font-size:.8rem;line-height:1.5;margin-top:.5rem;max-width:60rem;color:var(--text-muted)}.empty{padding:1.5rem}.empty button,.notice button{margin-top:.6rem}.notice{padding:.8rem 1rem;border:1px solid var(--border);border-radius:.6rem;background:var(--surface-2)}.pagination{display:flex;align-items:center;justify-content:center;gap:1rem}.pagination span{font-size:.8rem;color:var(--text-muted)}
+  @media(max-width:800px){.mastery-header{grid-template-columns:minmax(0,1fr)}.mastery-header button{justify-self:start}.history-status{flex-wrap:wrap}.item-status{max-width:11rem}.mastery-filters>label{flex:1;min-width:12rem}}
 </style>

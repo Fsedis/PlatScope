@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod crafting_metadata;
 mod frameforge;
 mod http;
 mod parser;

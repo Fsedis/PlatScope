@@ -1,5 +1,5 @@
 <script context="module" lang="ts">
-  export type AppScreen = "world_activity" | "market" | "inventory" | "equipped_mods" | "squad" | "mission" | "insights" | "bounty_hunter" | "settings";
+  export type AppScreen = "world_activity" | "market" | "inventory" | "mastery" | "equipped_mods" | "squad" | "mission" | "insights" | "bounty_hunter" | "settings";
 </script>
 
 <script lang="ts">
@@ -21,7 +21,7 @@
   const preferenceKey = "platscope.sidebar.compact.v1";
   const groups: { ru: string; en: string; screens: AppScreen[] }[] = [
     { ru: "Игра", en: "Play", screens: ["world_activity", "bounty_hunter", "mission", "squad"] },
-    { ru: "Коллекция", en: "Collection", screens: ["inventory", "equipped_mods"] },
+    { ru: "Коллекция", en: "Collection", screens: ["inventory", "mastery", "equipped_mods"] },
     { ru: "Торговля", en: "Trading", screens: ["market", "insights"] },
   ];
   $: copy = locale === "ru" ? {
