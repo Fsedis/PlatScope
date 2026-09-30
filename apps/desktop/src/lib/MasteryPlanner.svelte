@@ -4,7 +4,7 @@
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { masteryCategoryLabel } from "./mastery";
   import PersonalGoalImage from "./PersonalGoalImage.svelte";
-  import { planStatusLabel, planNextStep, planDuration, type MasteryPlanItem, type MasteryPlanView, type MasteryPlanState } from "./masteryPlan";
+  import { planStatusLabel, planNextStep, planDuration, matchesBlueprintSource, type BlueprintSourceFilter, type MasteryPlanItem, type MasteryPlanView, type MasteryPlanState } from "./masteryPlan";
 
   export let scanning = false;
   export let onScan: () => void;
@@ -15,6 +15,7 @@
   let busy = false;
   let query = "";
   let category = "all";
+  let blueprintSource: BlueprintSourceFilter = "all";
   let filter = "all";
   let selectedRef = "";
   let visibleCount = 24;
@@ -25,20 +26,26 @@
   let announcement = "";
   const number = (value: number) => value.toLocaleString("ru-RU");
   const filters = [{ key:"all",label:"Все варианты" },{ key:"owned",label:"Уже есть" },
-    { key:"craft",label:"Можно изготовить" },{ key:"buy_blueprint",label:"Купить чертёж" },
+    { key:"craft",label:"Можно изготовить" },{ key:"buy_blueprint",label:"Купить и изготовить" },
     { key:"one_short",label:"Не хватает одного" },{ key:"plan",label:"Мой план" }];
   $: categories = [...new Set(view?.candidates.map(item => item.category) ?? [])];
   $: search = query.toLocaleLowerCase("ru").replaceAll("ё","е").trim().split(/\s+/).filter(Boolean);
-  $: filtered = (view?.candidates ?? []).filter(item => (category === "all" || item.category === category)
-    && (filter === "all" || filter === "plan" ? filter !== "plan" || view?.savedRefs.includes(item.gameRef) : item.state === filter)
+  const matchesFilter = (item: MasteryPlanItem, key: string, savedRefs: string[]) => key === "all"
+    || (key === "plan" ? savedRefs.includes(item.gameRef) : item.state === key);
+  $: scoped = (view?.candidates ?? []).filter(item => (category === "all" || item.category === category)
+    && matchesBlueprintSource(item,blueprintSource)
     && search.every(term => `${item.displayName} ${item.displayNameEn}`.toLocaleLowerCase("ru").replaceAll("ё","е").includes(term)));
+  $: filterCounts = Object.fromEntries(filters.map(({key}) => [key,
+    scoped.filter(item => matchesFilter(item,key,view?.savedRefs ?? [])).length]));
+  $: filtered = scoped.filter(item => matchesFilter(item,filter,view?.savedRefs ?? []));
   $: visible = filtered.slice(0,visibleCount);
-  $: selected = view?.queue.find(item => item.gameRef === selectedRef) ?? view?.candidates.find(item => item.gameRef === selectedRef) ?? filtered[0] ?? null;
+  $: selected = filtered.find(item => item.gameRef === selectedRef)
+    ?? (filter === "plan" && category === "all" && blueprintSource === "all" && !search.length
+      ? view?.queue.find(item => item.gameRef === selectedRef) : null) ?? filtered[0] ?? null;
   $: inPlan = Boolean(selected && view?.savedRefs.includes(selected.gameRef));
   $: planPoints = view?.queue.reduce((sum,item) => sum + (item.remainingMasteryPoints ?? 0),0) ?? 0;
   $: nextInPlan = view?.queue.find(item => item.state !== "mastered") ?? null;
   const goodState = (state: MasteryPlanState) => ["owned","craft","buy_blueprint","mastered"].includes(state);
-  const countFor = (key: string) => key === "all" ? view?.candidates.length ?? 0 : key === "plan" ? view?.savedRefs.length ?? 0 : view?.candidates.filter(item => item.state === key).length ?? 0;
 
   async function load() {
     if (busy) { refreshPending = true; return; }
@@ -70,7 +77,8 @@
     [refs[index],refs[other]] = [refs[other],refs[index]];
     void save(refs,"Порядок обновлён. Материалы пересчитаны.");
   }
-  async function select(item: MasteryPlanItem) {
+  async function select(item: MasteryPlanItem, fromPlan = false) {
+    if (fromPlan) { query = "";category = "all";blueprintSource = "all";filter = "plan";visibleCount = 24; }
     selectedRef = item.gameRef;
     await tick();
     if ((detail?.closest(".planner")?.clientWidth ?? window.innerWidth) <= 1050) { detail?.scrollIntoView({block:"start",behavior:"smooth"}); detail?.focus({preventScroll:true}); }
@@ -98,8 +106,14 @@
     <div class="planner-empty"><span class="empty-symbol">◇</span><h3>Инвентарь и история освоения ещё не загружены</h3><button type="button" class="primary" onclick={onScan} disabled={scanning}>{scanning ? "Обновляем…" : "Обновить из Warframe"}</button></div>
   {:else if view}
     {#if !view.recipesAvailable}<div class="planner-notice"><p>Рецепты ещё не загружены. Можно выбрать имеющееся снаряжение; для остальных вариантов обновите данные предметов.</p><button type="button" onclick={onOpenSettings}>Открыть настройки</button></div>{/if}
-    <div class="planner-toolbar"><label class="search-field"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></svg><input aria-label="Найти снаряжение для освоения" type="search" bind:value={query} oninput={() => visibleCount = 24} placeholder="Найти снаряжение" /></label><select aria-label="Тип снаряжения" bind:value={category} onchange={() => visibleCount = 24}><option value="all">Все типы снаряжения</option>{#each categories as value}<option value={value}>{masteryCategoryLabel(value)}</option>{/each}</select></div>
-    <nav class="plan-filters" aria-label="Варианты получения">{#each filters as item}<button type="button" class:active={filter === item.key} aria-pressed={filter === item.key} onclick={() => { filter = item.key; visibleCount = 24; }}><span>{item.label}</span><small>{number(countFor(item.key))}</small></button>{/each}</nav>
+    <div class="planner-toolbar">
+      <label class="search-field"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></svg><input aria-label="Найти снаряжение для освоения" type="search" bind:value={query} oninput={() => visibleCount = 24} placeholder="Найти снаряжение" /></label>
+      <select aria-label="Тип снаряжения" bind:value={category} onchange={() => visibleCount = 24}><option value="all">Все типы снаряжения</option>{#each categories as value}<option value={value}>{masteryCategoryLabel(value)}</option>{/each}</select>
+      <select aria-label="Источник чертежа" bind:value={blueprintSource} onchange={() => visibleCount = 24}>
+        <option value="all">Все источники чертежей</option><option value="market">Магазин за кредиты</option><option value="dojo">Додзё</option><option value="drops">Выпадение чертежа</option><option value="unknown">Источник неизвестен</option>
+      </select>
+    </div>
+    <nav class="plan-filters" aria-label="Готовность снаряжения">{#each filters as item}<button type="button" class:active={filter === item.key} aria-pressed={filter === item.key} onclick={() => { filter = item.key; visibleCount = 24; }}><span>{item.label}</span><small>{number(filterCounts[item.key] ?? 0)}</small></button>{/each}</nav>
     <div class="planner-workspace">
       <section class="candidate-panel" aria-label="Рекомендации снаряжения">
         <header class="panel-heading"><div><h3>{filter === "plan" ? "Выбранное снаряжение" : "С чего начать"}</h3></div><span>{number(filtered.length)}</span></header>
@@ -110,7 +124,7 @@
               <span class="candidate-copy"><strong>{item.displayName}</strong>{#if item.displayName !== item.displayNameEn}<small class="english">{item.displayNameEn}</small>{/if}<span class="candidate-state" class:positive={goodState(item.state)}><i></i>{planStatusLabel(item)}</span></span>
               <span class="candidate-tail">{#if view.savedRefs.includes(item.gameRef)}<span class="saved-mark">В плане</span>{/if}{#if item.remainingMasteryPoints !== null}<strong>+{number(item.remainingMasteryPoints)}</strong><small>освоения</small>{/if}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg></span>
             </button>
-          {:else}<div class="list-empty"><h4>Подходящих предметов нет</h4><button type="button" onclick={() => { query = "";category = "all";filter = "all"; }}>Все варианты</button></div>{/each}
+          {:else}<div class="list-empty"><h4>Подходящих предметов нет</h4><button type="button" onclick={() => { query = "";category = "all";blueprintSource = "all";filter = "all"; }}>Все варианты</button></div>{/each}
         </div>
         {#if filtered.length > visibleCount}<button type="button" class="show-more" onclick={() => visibleCount += 24}>Показать ещё {Math.min(24,filtered.length-visibleCount)}</button>{/if}
       </section>
@@ -133,7 +147,7 @@
           </article>
         {/if}
         <section class="saved-plan" aria-labelledby="saved-plan-title"><header class="panel-heading"><div><h3 id="saved-plan-title">Мой план <small>{view.savedRefs.length} / 24</small></h3></div>{#if planPoints}<span class="plan-points">+{number(planPoints)}<small>очков освоения</small></span>{/if}</header>
-          {#if view.queue.length}<ol class="queue-list">{#each view.queue as item,index (item.gameRef)}<li class:next={item.gameRef === nextInPlan?.gameRef}><span class="queue-position">{String(index+1).padStart(2,"0")}</span><button type="button" class="queue-item" onclick={() => select(item)}><strong>{item.displayName}</strong><small>{planStatusLabel(item)}</small></button><div class="queue-controls"><button type="button" title="Поднять в плане" aria-label={`Поднять ${item.displayName} в плане`} disabled={busy || index === 0} onclick={() => move(index,-1)}>↑</button><button type="button" title="Опустить в плане" aria-label={`Опустить ${item.displayName} в плане`} disabled={busy || index === view!.queue.length-1} onclick={() => move(index,1)}>↓</button><button type="button" title="Убрать из плана" aria-label={`Убрать ${item.displayName} из плана`} disabled={busy} onclick={() => remove(item.gameRef)}>×</button></div></li>{/each}</ol>
+          {#if view.queue.length}<ol class="queue-list">{#each view.queue as item,index (item.gameRef)}<li class:next={item.gameRef === nextInPlan?.gameRef}><span class="queue-position">{String(index+1).padStart(2,"0")}</span><button type="button" class="queue-item" onclick={() => select(item,true)}><strong>{item.displayName}</strong><small>{planStatusLabel(item)}</small></button><div class="queue-controls"><button type="button" title="Поднять в плане" aria-label={`Поднять ${item.displayName} в плане`} disabled={busy || index === 0} onclick={() => move(index,-1)}>↑</button><button type="button" title="Опустить в плане" aria-label={`Опустить ${item.displayName} в плане`} disabled={busy || index === view!.queue.length-1} onclick={() => move(index,1)}>↓</button><button type="button" title="Убрать из плана" aria-label={`Убрать ${item.displayName} из плана`} disabled={busy} onclick={() => remove(item.gameRef)}>×</button></div></li>{/each}</ol>
           {:else}<div class="plan-empty"><span class="empty-plan-mark">＋</span><div><h4>Выберите несколько предметов</h4></div></div>{/if}
         </section>
       </div>

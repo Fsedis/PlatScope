@@ -26,6 +26,14 @@ export interface MasteryPlanView {
   observedAt: string | null; metadataAt: string | null; credits: number | null; accountRank: number | null;
   savedRefs: string[]; candidates: MasteryPlanItem[]; queue: MasteryPlanItem[];
 }
+export type BlueprintSourceFilter = "all" | "market" | "dojo" | "drops" | "unknown";
+export function matchesBlueprintSource(item: MasteryPlanItem, source: BlueprintSourceFilter): boolean {
+  if (source === "all") return true;
+  if (source === "drops") return Boolean(item.recipe?.blueprintDrops.length);
+  if (source === "unknown") return !item.recipe
+    || (item.recipe.blueprintSource === "unknown" && item.recipe.blueprintDrops.length === 0);
+  return item.recipe?.blueprintSource === source;
+}
 export const planLabels: Record<MasteryPlanState,string> = {
   owned: "Уже есть · осталось освоить", craft: "Можно изготовить", buy_blueprint: "Купить чертёж · материалы есть",
   one_short: "Не хватает одного материала", gather: "Нужно подготовить материалы", rank_locked: "Нужен ранг мастерства",

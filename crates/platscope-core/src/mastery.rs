@@ -1,9 +1,9 @@
 //! История аккаунта хранится отдельно от текущих копий и торговых резервов.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
 
 use chrono::{DateTime, Utc};
-use platscope_domain::{GameMetadataSnapshot, MasteryItemDefinition};
+use platscope_domain::{GameMetadataSnapshot, MasteryItemDefinition, ResolvedInventorySnapshot};
 use platscope_storage::Database;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -35,7 +35,7 @@ struct AccountHistory {
     equipment: BTreeMap<String, EquipmentEvidence>,
     /// Только текущие копии; накопленные доказательства освоения для этого не подходят.
     #[serde(default)]
-    owned_equipment: BTreeMap<String, u32>,
+    owned_equipment: Option<BTreeMap<String, u32>>,
     #[serde(default)]
     account_rank: Option<u8>,
 }
@@ -116,7 +116,7 @@ impl MasteryService {
         );
         if let Some(history) = cache.accounts.get_mut(&cache.active_account) {
             let (owned, rank) = parse_current_equipment(raw);
-            history.owned_equipment = owned;
+            history.owned_equipment = Some(owned);
             history.account_rank = rank;
             if !equipment.is_empty() {
                 history.equipment_observed_at = Some(Utc::now());
@@ -177,11 +177,40 @@ impl MasteryService {
             .filter(|history| history.observed_at.is_some())
             .map(|history| PlannerAccount {
                 key: cache.active_account.clone(),
-                owned_equipment: history.owned_equipment.clone(),
+                owned_equipment: history
+                    .owned_equipment
+                    .clone()
+                    .unwrap_or_else(|| legacy_owned_equipment(metadata.as_ref(), current.as_ref())),
                 rank: history.account_rank,
             });
         Ok((build_view(metadata.as_ref(), history), account))
     }
+}
+
+/// Старый кэш не содержал текущие копии. Берём их из согласованного снимка,
+/// сохраняя отличие отсутствующего поля от подтверждённого пустого списка.
+fn legacy_owned_equipment(
+    metadata: Option<&GameMetadataSnapshot>,
+    inventory: Option<&ResolvedInventorySnapshot>,
+) -> BTreeMap<String, u32> {
+    let catalog: BTreeSet<_> = metadata
+        .into_iter()
+        .flat_map(|metadata| &metadata.mastery_items)
+        .filter(|item| {
+            !matches!(item.category.as_str(), "modular" | "amp" | "kdrive")
+                && !is_modular_mastery_part(&item.game_ref)
+        })
+        .map(|item| item.game_ref.as_str())
+        .collect();
+    let mut owned = BTreeMap::<String, u32>::new();
+    for item in inventory.into_iter().flat_map(|snapshot| &snapshot.items) {
+        let game_ref = canonical_mastery_ref(&item.canonical_game_id);
+        if catalog.contains(game_ref) && item.owned_quantity > 0 {
+            let quantity = owned.entry(game_ref.to_owned()).or_default();
+            *quantity = quantity.saturating_add(item.owned_quantity);
+        }
+    }
+    owned
 }
 
 fn parse_current_equipment(raw: &str) -> (BTreeMap<String, u32>, Option<u8>) {
@@ -318,19 +347,21 @@ fn equipment_mastery_ref<'a>(item: &'a Value, game_ref: &'a str) -> &'a str {
                 .iter()
                 .filter_map(Value::as_str)
                 .filter(|part| part.starts_with("/Lotus/") && part.len() <= 256)
-                .find(|part| {
-                    part.contains("/Barrel/")
-                        || part.contains("/Barrels/")
-                        || part.contains("/Tip/")
-                        || part.contains("/Tips/")
-                        || part.contains("/MoaPetHead")
-                        || part.contains("/ZanukaPetPartHead")
-                        || part.ends_with("Deck")
-                        || part.ends_with("SentAmpTrainingBarrel")
-                })
+                .find(|part| is_modular_mastery_part(part))
         })
         .unwrap_or(game_ref);
     canonical_mastery_ref(defining_part)
+}
+
+fn is_modular_mastery_part(game_ref: &str) -> bool {
+    game_ref.contains("/Barrel/")
+        || game_ref.contains("/Barrels/")
+        || game_ref.contains("/Tip/")
+        || game_ref.contains("/Tips/")
+        || game_ref.contains("/MoaPetHead")
+        || game_ref.contains("/ZanukaPetPartHead")
+        || game_ref.ends_with("Deck")
+        || game_ref.ends_with("SentAmpTrainingBarrel")
 }
 
 fn parse_history(raw: &str) -> Option<BTreeMap<String, u64>> {
@@ -778,9 +809,110 @@ mod tests {
     #[test]
     fn database_does_not_show_old_account_when_history_write_is_missing() {
         let database = Mutex::new(Database::open_in_memory().unwrap());
-        let raw = r#"{"XPInfo":[{"ItemType":"/Lotus/Test","XP":450000}]}"#;
+        let detron = "/Lotus/Weapons/Corpus/BoardExec/Secondary/CrpBEDetron/CrpBEDetron";
+        let prism = "/Lotus/Test/Barrel/LoosePrism";
+        let mut metadata = crate::tests::empty_game_metadata_fixture(Utc::now());
+        metadata.mastery_items = vec![
+            MasteryItemDefinition {
+                game_ref: detron.into(),
+                display_name_en: "Tenet Detron".into(),
+                category: "secondary".into(),
+                ..weapon(Some(40))
+            },
+            MasteryItemDefinition {
+                game_ref: prism.into(),
+                category: "amp".into(),
+                ..weapon(Some(30))
+            },
+            MasteryItemDefinition {
+                game_ref: "/Lotus/Sold".into(),
+                ..weapon(Some(40))
+            },
+        ];
+        database
+            .lock()
+            .unwrap()
+            .promote_game_metadata(&metadata)
+            .unwrap();
+        let raw = serde_json::json!({"XPInfo":[
+            {"ItemType":detron,"XP":450000},
+            {"ItemType":prism,"XP":0},
+            {"ItemType":"/Lotus/Sold","XP":450000}
+        ]})
+        .to_string();
         publish_empty_inventory(&database, "a");
-        MasteryService::capture(&database, raw, "account-a", "a").unwrap();
+        MasteryService::capture(&database, &raw, "account-a", "a").unwrap();
+        {
+            let mut guard = database.lock().unwrap();
+            let mut snapshot = guard.current_inventory_snapshot().unwrap().unwrap();
+            let gear = platscope_domain::ResolvedInventoryItem {
+                canonical_game_id: detron.into(),
+                display_name_en: Some("Tenet Detron".into()),
+                display_name_ru: None,
+                tags: vec![],
+                key: None,
+                rank: None,
+                subtype: None,
+                owned_quantity: 1,
+                tradeable_quantity: 0,
+                untradeable_quantity: 1,
+                unknown_quantity: 0,
+                leveled_quantity: 1,
+                equipped_quantity: 0,
+                equipped_tradeable_quantity: 0,
+                equipped_placements: vec![],
+                sellable_quantity: 0,
+                resolution: platscope_domain::InventoryResolution::UnknownItem,
+            };
+            snapshot.items = vec![
+                gear.clone(),
+                platscope_domain::ResolvedInventoryItem {
+                    canonical_game_id: prism.into(),
+                    ..gear
+                },
+            ];
+            snapshot.metadata.item_count = 2;
+            guard.promote_inventory_snapshot(&snapshot).unwrap();
+        }
+        // Подтверждённый пустой список копий не заменяется торговым снимком.
+        let known_empty =
+            crate::MasteryPlanService::view(&database, &crate::AppSettings::default()).unwrap();
+        assert!(
+            known_empty
+                .candidates
+                .iter()
+                .all(|item| item.owned_quantity == 0)
+        );
+        {
+            let guard = database.lock().unwrap();
+            let mut legacy = guard.get_setting::<Value>(CACHE_KEY).unwrap().unwrap();
+            for account in legacy["accounts"].as_object_mut().unwrap().values_mut() {
+                account.as_object_mut().unwrap().remove("ownedEquipment");
+            }
+            guard.set_setting(CACHE_KEY, &legacy).unwrap();
+        }
+        let migrated =
+            crate::MasteryPlanService::view(&database, &crate::AppSettings::default()).unwrap();
+        let owned_detron = migrated
+            .candidates
+            .iter()
+            .find(|item| item.game_ref == detron)
+            .unwrap();
+        assert_eq!(
+            (
+                owned_detron.owned_quantity,
+                owned_detron.state,
+                owned_detron.mastery_rank
+            ),
+            (1, "owned", Some(30))
+        );
+        assert!(
+            migrated
+                .candidates
+                .iter()
+                .filter(|item| item.game_ref != detron)
+                .all(|item| item.owned_quantity == 0)
+        );
         assert!(
             MasteryService::view(&database)
                 .unwrap()
@@ -791,6 +923,15 @@ mod tests {
         let next = MasteryService::view(&database).unwrap();
         assert!(next.observed_at.is_none());
         assert!(next.source.is_none());
+        let switched =
+            crate::MasteryPlanService::view(&database, &crate::AppSettings::default()).unwrap();
+        assert!(!switched.history_available);
+        assert!(
+            switched
+                .candidates
+                .iter()
+                .all(|item| item.owned_quantity == 0)
+        );
     }
 
     #[test]
