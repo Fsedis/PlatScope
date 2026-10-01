@@ -25,7 +25,7 @@ export const MISSION_FILTERS: { key: MissionFilter; label: string; color: string
   { key: "dragon_doors", label: "Двери Дракона", color: "#e7b8ff" },
   { key: "caches", label: "Тайники", color: "#ffd66b" },
   { key: "decree_fragments", label: "Фрагменты декретов", color: "#dfadfa" },
-  { key: "feather", label: "Перья", color: "#f4c97e" }, { key: "pickup", label: "Предметы", color: "#78d6b0" },
+  { key: "feather", label: "Перья", color: "#abe9ce" }, { key: "pickup", label: "Предметы", color: "#78d6b0" },
   { key: "players", label: "Игроки", color: "#83cfff" }, { key: "npc", label: "NPC", color: "#e49baa" }, { key: "other", label: "Прочее", color: "#9eb9e9" },
   { key: "goals", label: "Эвакуация и терминалы", color: "#8de4bb" }, { key: "lootspots", label: "Возможные места лута", color: "#c5a6ee" },
 ];
