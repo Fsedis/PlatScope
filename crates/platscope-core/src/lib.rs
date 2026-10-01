@@ -70,7 +70,7 @@ const HISTORY_FETCH_ATTEMPTS: u8 = 3;
 pub const DEFAULT_KEEP_COPIES: u32 = 1;
 pub const DEFAULT_REWARD_OVERLAY_SCALE_PERCENT: u16 = 100;
 pub const DEFAULT_REWARD_OVERLAY_OFFSET_PERCENT: i16 = 0;
-const CURRENT_GAME_METADATA_SCHEMA_VERSION: u32 = 11;
+const CURRENT_GAME_METADATA_SCHEMA_VERSION: u32 = 12;
 const CURRENT_CATALOG_SCHEMA_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -7229,6 +7229,7 @@ mod tests {
         assert!(game_metadata_refresh_due(Some(&metadata), now, 0));
         let old_metadata = GameMetadataSnapshotMetadata {
             schema_version: CURRENT_GAME_METADATA_SCHEMA_VERSION - 1,
+            fetched_at: now,
             ..metadata
         };
         assert!(game_metadata_refresh_due(Some(&old_metadata), now, 24));

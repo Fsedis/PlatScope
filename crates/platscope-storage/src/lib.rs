@@ -382,6 +382,12 @@ impl Database {
         let catalog_json = serde_json::to_string(catalog)?;
         let promoted_at = Utc::now().to_rfc3339();
         let transaction = self.connection.transaction()?;
+        let renamed_slugs = catalog_slug_changes(&transaction, catalog)?;
+        if !renamed_slugs.is_empty() {
+            // При переименовании по стабильному item_id проверяем ссылки после
+            // переноса каталога, цен и истории; COMMIT по-прежнему требует целостности.
+            transaction.execute_batch("PRAGMA defer_foreign_keys = ON")?;
+        }
         transaction.execute(
             "UPDATE catalog_snapshots SET is_current = 0 WHERE is_current = 1",
             [],
@@ -441,6 +447,14 @@ impl Database {
                     catalog.metadata.fetched_at.to_rfc3339(),
                     search_text(item),
                 ])?;
+            }
+        }
+        for (previous, current) in &renamed_slugs {
+            for table in ["market_prices", "market_history", "inventory_items"] {
+                transaction.execute(
+                    &format!("UPDATE {table} SET item_slug = ?1 WHERE item_slug = ?2"),
+                    params![current, previous],
+                )?;
             }
         }
         transaction.execute(
@@ -1878,6 +1892,26 @@ const fn game_metadata_source_name(source: GameMetadataSource) -> &'static str {
     }
 }
 
+fn catalog_slug_changes(
+    transaction: &Transaction<'_>,
+    catalog: &ItemCatalog,
+) -> Result<Vec<(String, String)>, StorageError> {
+    let mut statement =
+        transaction.prepare_cached("SELECT slug FROM item_catalog WHERE item_id = ?1")?;
+    let mut renamed = Vec::new();
+    for item in &catalog.items {
+        let previous: Option<String> = statement
+            .query_row([&item.item_id], |row| row.get(0))
+            .optional()?;
+        if let Some(previous) = previous
+            && previous != item.slug
+        {
+            renamed.push((previous, item.slug.clone()));
+        }
+    }
+    Ok(renamed)
+}
+
 fn search_text(item: &platscope_domain::CatalogItem) -> String {
     format!(
         "{} {} {}",
@@ -2463,6 +2497,76 @@ mod tests {
             .expect("current query")
             .expect("current exists");
         assert_eq!(current.checksum_sha256, "first");
+    }
+
+    #[test]
+    fn catalog_rename_preserves_prices_and_history_and_rolls_back_conflicts() {
+        let mut database = Database::open_in_memory().expect("database opens");
+        let mut catalog = fixture_catalog();
+        database.promote_catalog(&catalog).expect("initial catalog");
+        let snapshot = fixture_snapshot("test_item", "first");
+        database
+            .promote_market_snapshot(&snapshot)
+            .expect("initial prices and history");
+
+        catalog.items[0].slug = "renamed_item".into();
+        catalog.metadata.checksum_sha256 = "renamed-catalog".into();
+        database
+            .promote_catalog(&catalog)
+            .expect("rename transfers existing references");
+        let key = MarketVariantKey::new("renamed_item", Platform::Pc, None, None::<String>)
+            .expect("renamed key");
+        let prices = database.current_market_records(&key).expect("prices");
+        assert_eq!(prices.len(), 1);
+        assert_eq!(prices[0].median, Some(10.0));
+        assert_eq!(prices[0].volume.to_bits(), 3.0_f64.to_bits());
+        let history = database
+            .market_history(&key, 90, snapshot.metadata.source_date)
+            .expect("history");
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].closed_median, Some(10.0));
+        assert_eq!(history[0].closed_volume.to_bits(), 3.0_f64.to_bits());
+
+        let mut conflicting = catalog.clone();
+        conflicting.items[0].slug = "second_rename".into();
+        let mut other = conflicting.items[0].clone();
+        other.item_id = "other-id".into();
+        conflicting.items.push(other);
+        conflicting.metadata.item_count = 2;
+        assert!(database.promote_catalog(&conflicting).is_err());
+        assert_eq!(
+            database.load_current_catalog().unwrap().unwrap().items[0].slug,
+            "renamed_item"
+        );
+        assert_eq!(database.current_market_records(&key).unwrap().len(), 1);
+        assert_eq!(
+            database
+                .market_history(&key, 90, snapshot.metadata.source_date)
+                .unwrap()
+                .len(),
+            1
+        );
+        // Отложенная проверка не отключает FK для следующего импорта.
+        assert!(
+            database
+                .promote_market_snapshot(&fixture_snapshot("unknown_item", "invalid"))
+                .is_err()
+        );
+        assert_eq!(
+            database
+                .current_market_snapshot()
+                .unwrap()
+                .unwrap()
+                .checksum_sha256,
+            "first"
+        );
+        let violations: i64 = database
+            .connection
+            .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(violations, 0);
     }
 
     #[test]

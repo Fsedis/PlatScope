@@ -198,7 +198,19 @@ struct WfcdRelic {
     vaulted: Option<bool>,
     market_info: Option<WfcdMarketInfo>,
     #[serde(default)]
+    drops: Vec<WfcdRelicDrop>,
+    #[serde(default)]
     rewards: Vec<WfcdReward>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WfcdRelicDrop {
+    #[serde(default)]
+    location: String,
+    #[serde(default, rename = "type")]
+    item_type: String,
+    #[serde(default)]
+    chance: f64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -450,7 +462,7 @@ fn normalize_wfcd_metadata(
         metadata: GameMetadataSnapshotMetadata {
             source: GameMetadataSource::WfcdWarframeItems,
             fetched_at: dump.fetched_at,
-            schema_version: 11,
+            schema_version: 12,
             set_count: u64::try_from(prime_sets.len()).unwrap_or(u64::MAX),
             relic_count: u64::try_from(relics.len()).unwrap_or(u64::MAX),
             prime_part_count: u64::try_from(prime_parts.len()).unwrap_or(u64::MAX),
@@ -1180,6 +1192,7 @@ fn parse_relics(
     let items: Vec<WfcdRelic> = serde_json::from_slice(body).map_err(|error| {
         ProviderError::schema_changed(format!("invalid WFCD relic JSON: {error}"))
     })?;
+    let mut availability = HashMap::<String, (bool, VaultStatus)>::new();
     for item in items {
         let Some((display_name, refinement)) = split_refinement(&item.name) else {
             continue;
@@ -1187,6 +1200,17 @@ fn parse_relics(
         let Some(relic_slug) = item.market_info.map(|market| market.url_name) else {
             continue;
         };
+        let hinted_status = vault_status(item.vaulted);
+        let evidence = availability
+            .entry(relic_slug.clone())
+            .or_insert((false, hinted_status));
+        evidence.0 |= item
+            .drops
+            .iter()
+            .any(|drop| valid_relic_drop(drop, display_name));
+        if evidence.1 != hinted_status {
+            evidence.1 = VaultStatus::Unknown;
+        }
         let mut rewards = Vec::new();
         let mut total_chance = 0.0;
         for reward in item.rewards {
@@ -1222,12 +1246,38 @@ fn parse_relics(
                 relic_game_ref: item.unique_name,
                 display_name_en: display_name.into(),
                 refinement,
-                vault_status: vault_status(item.vaulted),
+                vault_status: hinted_status,
                 rewards,
             },
         );
     }
+    // Улучшение меняет шанс награды, но не доступность базовой реликвии.
+    // Источник добычи важнее устаревшего vaulted; без него конфликт не угадываем.
+    for relic in relics.values_mut() {
+        if let Some(&(has_drop, hinted_status)) = availability.get(&relic.relic_slug) {
+            relic.vault_status = if has_drop {
+                VaultStatus::Available
+            } else {
+                hinted_status
+            };
+        }
+    }
     Ok(())
+}
+
+fn valid_relic_drop(drop: &WfcdRelicDrop, display_name: &str) -> bool {
+    if drop.location.trim().is_empty()
+        || !drop.chance.is_finite()
+        || !(0.0 < drop.chance && drop.chance <= 100.0)
+    {
+        return false;
+    }
+    let expected = format!("{display_name} Relic");
+    let item_type = drop.item_type.trim();
+    item_type == expected
+        || ["Intact", "Exceptional", "Flawless", "Radiant"]
+            .into_iter()
+            .any(|refinement| item_type == format!("{expected} ({refinement})"))
 }
 
 fn resolve_component<'a>(
@@ -1310,7 +1360,7 @@ mod tests {
         validate_metadata_dump(&dump).expect("production metadata stays within aggregate limit");
         let snapshot = normalize_wfcd_metadata(&dump, &catalog)
             .expect("production metadata normalizes against the current catalog");
-        assert_eq!(snapshot.metadata.schema_version, 11);
+        assert_eq!(snapshot.metadata.schema_version, 12);
         assert!(snapshot.crafting_recipes.iter().any(|recipe| {
             recipe.result_game_ref == "/Lotus/Weapons/Tenno/Rifle/BoltoRifle"
                 && recipe.blueprint_source == platscope_domain::BlueprintSource::Market
@@ -1410,6 +1460,13 @@ mod tests {
         assert_eq!(result.relics.len(), 2);
         assert_eq!(result.relics[1].refinement, RelicRefinement::Radiant);
         assert_eq!(result.relics[1].rewards.len(), 6);
+        assert!(
+            result
+                .relics
+                .iter()
+                .all(|relic| relic.vault_status == VaultStatus::Unknown)
+        );
+        verify_relic_availability_sources();
         assert_eq!(result.riven_dispositions.len(), 1);
         assert_eq!(result.metadata.riven_disposition_count, 1);
         assert_eq!(result.riven_dispositions[0].weapon_name_en, "Soma");
@@ -1443,6 +1500,87 @@ mod tests {
                 .expect("old snapshot parses")
                 .mastery_items
                 .is_empty()
+        );
+    }
+
+    fn verify_relic_availability_sources() {
+        let mut items: serde_json::Value = serde_json::from_slice(include_bytes!(
+            "../../../fixtures/metadata/wfcd_relics.json"
+        ))
+        .unwrap();
+        for item in items.as_array_mut().unwrap() {
+            item["vaulted"] = true.into();
+        }
+        let source = serde_json::json!({
+            "location": "Lua/Apollo (Disruption), Rotation A",
+            "type": "Axi T1 Relic", "chance": 14.29
+        });
+        for (drop, expected) in [
+            (source.clone(), VaultStatus::Available),
+            (
+                serde_json::json!({"location":"Lua/Apollo", "type":"Axi T1 Relic (Radiant)", "chance":1.0}),
+                VaultStatus::Available,
+            ),
+            (
+                serde_json::json!({"location":"Lua/Apollo", "type":"Neo C11 Relic", "chance":14.29}),
+                VaultStatus::Vaulted,
+            ),
+            (
+                serde_json::json!({"location":"", "type":"Axi T1 Relic", "chance":14.29}),
+                VaultStatus::Vaulted,
+            ),
+            (
+                serde_json::json!({"location":"Lua/Apollo", "type":"Axi T1 Relic", "chance":0.0}),
+                VaultStatus::Vaulted,
+            ),
+            (
+                serde_json::json!({"location":"Lua/Apollo", "type":"Axi T1 Relic", "chance":101.0}),
+                VaultStatus::Vaulted,
+            ),
+        ] {
+            // Источник есть только у нетронутой версии; статус общий для обеих.
+            items[0]["drops"] = serde_json::json!([drop]);
+            let mut relics = BTreeMap::new();
+            parse_relics(
+                &serde_json::to_vec(&items).unwrap(),
+                &HashMap::new(),
+                &mut relics,
+            )
+            .unwrap();
+            assert_eq!(relics.len(), 2);
+            assert!(relics.values().all(|relic| relic.vault_status == expected));
+        }
+        // Поздний дубль без источника не стирает положительное подтверждение.
+        items[0]["drops"] = serde_json::json!([source]);
+        let mut duplicate = items[0].clone();
+        duplicate.as_object_mut().unwrap().remove("drops");
+        items.as_array_mut().unwrap().push(duplicate);
+        let mut relics = BTreeMap::new();
+        parse_relics(
+            &serde_json::to_vec(&items).unwrap(),
+            &HashMap::new(),
+            &mut relics,
+        )
+        .unwrap();
+        assert!(
+            relics
+                .values()
+                .all(|relic| relic.vault_status == VaultStatus::Available)
+        );
+        for item in items.as_array_mut().unwrap() {
+            item.as_object_mut().unwrap().remove("drops");
+            item.as_object_mut().unwrap().remove("vaulted");
+        }
+        parse_relics(
+            &serde_json::to_vec(&items).unwrap(),
+            &HashMap::new(),
+            &mut relics,
+        )
+        .unwrap();
+        assert!(
+            relics
+                .values()
+                .all(|relic| relic.vault_status == VaultStatus::Unknown)
         );
     }
 
