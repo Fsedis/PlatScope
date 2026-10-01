@@ -120,10 +120,14 @@ impl Service {
                         )
                     }
                 };
-                let mut result = spatial::ProfilePack::latest_cached(&profile_dir)
-                    .map_err(spatial::AnalysisFailure::Other)
-                    .and_then(|pack| analyze(&pack));
-                if let Err(spatial::AnalysisFailure::UnsupportedBuild(error)) = &result
+                let mut pack = spatial::ProfilePack::latest_cached(&profile_dir);
+                let mut result = pack
+                    .as_ref()
+                    .map_err(|error| spatial::AnalysisFailure::Other(error.clone()))
+                    .and_then(analyze);
+                let mut update_error = None;
+                let mut recovered = false;
+                if matches!(result, Err(spatial::AnalysisFailure::UnsupportedBuild(_)))
                     && !cancel.load(Ordering::Relaxed)
                 {
                     report(AnalysisProgress {
@@ -131,14 +135,32 @@ impl Service {
                         ..Default::default()
                     });
                     match spatial::ProfilePack::download_newer(&profile_dir) {
-                        Ok(Some(pack)) => result = analyze(&pack),
-                        Ok(None) => {}
-                        Err(update_error) => {
-                            result = Err(spatial::AnalysisFailure::Other(format!(
-                                "{error}. Обновление профиля недоступно: {update_error}"
-                            )));
+                        Ok(Some(new_pack)) => {
+                            result = analyze(&new_pack);
+                            pack = Ok(new_pack);
                         }
+                        Ok(None) => {}
+                        Err(error) => update_error = Some(error),
                     }
+                }
+                if matches!(result, Err(spatial::AnalysisFailure::UnsupportedBuild(_)))
+                    && let Some(pid) = pid
+                    && let Ok(pack) = &pack
+                    && !cancel.load(Ordering::Relaxed)
+                {
+                    result = spatial::analyze_live_recovering_detailed(
+                        pid,
+                        pack,
+                        &profile_dir,
+                        &cancel,
+                        &report,
+                    );
+                    recovered = result.is_ok();
+                }
+                if let (Err(error), Some(update_error)) = (&result, update_error) {
+                    result = Err(spatial::AnalysisFailure::Other(format!(
+                        "{error}. Обновление профиля недоступно: {update_error}"
+                    )));
                 }
                 if let Ok(mut inner) = shared.lock()
                     && inner.generation == generation
@@ -159,7 +181,12 @@ impl Service {
                                 inner.scene = Some(scene);
                                 inner.live_pid = pid;
                                 inner.status.revision += 1;
-                                inner.status.phase = "Чтение завершено".into();
+                                inner.status.phase = if recovered {
+                                    "Карта восстановлена автоматически"
+                                } else {
+                                    "Чтение завершено"
+                                }
+                                .into();
                             }
                             Err(error) => {
                                 inner.desired_live = false;

@@ -7,6 +7,7 @@ mod dragon_door;
 mod filter_discovery;
 mod geometry;
 mod profile;
+mod recovery_image;
 mod registry_discovery;
 mod source;
 mod types;
@@ -14,8 +15,8 @@ mod types;
 pub use analyze::refresh_live_filtered;
 pub use analyze::{
     AnalysisFailure, LocalPose, LocalPoseReader, analyze_archive, analyze_archive_with_profiles,
-    analyze_archive_with_profiles_detailed, analyze_live, analyze_live_with_profiles,
-    analyze_live_with_profiles_detailed, refresh_live,
+    analyze_archive_with_profiles_detailed, analyze_live, analyze_live_recovering_detailed,
+    analyze_live_with_profiles, analyze_live_with_profiles_detailed, refresh_live,
 };
 pub use archive::ArchiveMemory;
 pub use filter_discovery::DiscoveryRules;

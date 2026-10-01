@@ -25,6 +25,9 @@ const EXPECTED_RVAS: [u64; 38] = [
 const DECREE_FRAGMENT_RVA: u64 = 0x2317cc8;
 const DECREE_FRAGMENT_PROFILE_ID: &str = "warframe-2026-09-26-validated";
 
+#[path = "recovery.rs"]
+mod recovery;
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProfilePack {
@@ -33,7 +36,7 @@ pub struct ProfilePack {
     profiles: Vec<ProfileSpec>,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ProfileSpec {
     id: String,
@@ -47,21 +50,21 @@ struct ProfileSpec {
     offsets: ProfileOffsets,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct CodeFingerprint {
     rva: u64,
     hex: String,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RvaEntry {
     key: u64,
     current: u64,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ProfileOffsets {
     dictionary_context: u64,

@@ -516,6 +516,26 @@ fn run(
             AnalysisFailure::UnsupportedBuild(error)
         }
     })?;
+    run_with_profile(
+        m,
+        profile,
+        source,
+        started_at,
+        input_complete,
+        cancel,
+        progress,
+    )
+}
+
+pub(super) fn run_with_profile(
+    m: &mut dyn Memory,
+    profile: Profile,
+    source: &str,
+    started_at: String,
+    input_complete: bool,
+    cancel: &AtomicBool,
+    progress: &impl Fn(AnalysisProgress),
+) -> std::result::Result<Scene, AnalysisFailure> {
     let mut decoder = Decoder::new(profile.clone())?;
     let targets = profile.targets()?;
     let ranges = m.ranges();
@@ -761,6 +781,82 @@ pub fn analyze_live_with_profiles_detailed(
     }
     scene.process = Some((pid, created));
     Ok(scene)
+}
+
+/// Восстанавливает только подтверждённую прежнюю схему при неизвестной сборке.
+/// Подписанный канал профилей остаётся отдельным и имеет приоритет в desktop-сервисе.
+pub fn analyze_live_recovering_detailed(
+    pid: u32,
+    pack: &ProfilePack,
+    cache_dir: &Path,
+    cancel: &AtomicBool,
+    progress: impl Fn(AnalysisProgress),
+) -> std::result::Result<Scene, AnalysisFailure> {
+    let _lock = crate::squad::SCAN_LOCK
+        .try_lock()
+        .map_err(|_| "Другое чтение памяти ещё выполняется")?;
+    let mut m = LiveMemory::open(pid, cancel)?;
+    let created = m.process.created.clone();
+    let attempt = Profile::recover(&mut m, pack, cache_dir, cancel, &progress)?;
+    let result = run_with_profile(
+        &mut m,
+        attempt.profile.clone(),
+        "live",
+        stamp(),
+        true,
+        cancel,
+        &progress,
+    )
+    .and_then(|scene| {
+        validate_recovered_scene(&mut m, &scene, &attempt.profile)?;
+        Ok(scene)
+    });
+    let mut scene = match result {
+        Ok(scene) => scene,
+        Err(error) => {
+            if !cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                attempt.reject();
+            }
+            return Err(error);
+        }
+    };
+    if !m.process.alive() {
+        return Err("Игра завершилась во время восстановления карты".into());
+    }
+    cancelled(cancel)?;
+    if let Err(error) = attempt.save(cache_dir) {
+        scene.warnings.push(format!(
+            "Адреса проверены, но не сохранены локально: {error}"
+        ));
+    }
+    scene.process = Some((pid, created));
+    Ok(scene)
+}
+
+pub(super) fn validate_recovered_scene(
+    m: &mut dyn Memory,
+    scene: &Scene,
+    profile: &Profile,
+) -> Result<()> {
+    let locals: Vec<_> = scene.players.iter().filter(|p| p.local).collect();
+    let [player] = locals.as_slice() else {
+        return Err("Автоматический поиск не подтвердил единственного локального игрока".into());
+    };
+    if !scene.zones_fresh
+        || scene.zones.is_empty()
+        || scene.meshes.is_empty()
+        || !scene
+            .objects
+            .iter()
+            .any(|o| o.key == player.avatar_key && o.kind == "avatar" && o.position_fresh)
+    {
+        return Err(
+            "Автоматический поиск не подтвердил мини-карту и геометрию текущей миссии".into(),
+        );
+    }
+    let avatar = u64::from_str_radix(player.avatar_key.trim_start_matches("0x"), 16)
+        .map_err(|_| "Не подтверждён адрес игрока")?;
+    super::registry_discovery::validate_scene_schema(m, avatar, profile)
 }
 /// Компактная привязка: без геометрии, пулов, списка объектов и глобального поиска.
 #[derive(Clone)]

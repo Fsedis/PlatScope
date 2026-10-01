@@ -128,6 +128,18 @@ fn handles(m: &mut dyn Memory, r: Region) -> Result<Vec<u64>> {
         .collect())
 }
 
+pub(super) fn validate_scene_schema(
+    m: &mut dyn Memory,
+    avatar: u64,
+    profile: &Profile,
+) -> Result<()> {
+    let current = region(m, avatar, profile)?;
+    handles(m, current)?;
+    if region(m, avatar, profile)? != current {
+        return Err("Миссия сменилась во время проверки восстановленных адресов".into());
+    }
+    Ok(())
+}
 fn still_current(m: &mut dyn Memory, avatar: u64, r: Region) -> bool {
     [
         (avatar + 0x1e0, r.root),
