@@ -73,7 +73,9 @@ export interface InventoryViewItem {
   equippedPlacements: EquippedModPlacement[];
   sellableQuantity: number;
   resolution: InventoryResolution;
-  /** Предел для ордера без общего резерва, с учётом других объявлений. */
+  /** Индивидуальный резерв точного варианта; null/undefined использует общий резерв. */
+  keepCopiesOverride?: number | null;
+  /** Предел для ордера без резерва копий, с учётом других объявлений. */
   listingQuantity?: number;
   /** Передаваемые экземпляры для личных целей сборки. */
   personalReservedQuantity?: number;
@@ -82,13 +84,15 @@ export interface InventoryViewItem {
 
 export interface InventoryView {
   metadata: InventorySnapshotMetadata;
+  /** Непрозрачный ключ привязки резервов к аккаунту текущего снимка. */
+  reserveAccountKey?: string | null;
   keepCopies: number;
   modUsageScanned: boolean;
   summary: InventorySummary;
   items: InventoryViewItem[];
 }
 
-/** Общий резерв — рекомендация; защита непередаваемых копий и личных целей остаётся. */
+/** Резерв копий — рекомендация; защита непередаваемых копий и личных целей остаётся. */
 export function inventoryListingQuantity(item: InventoryViewItem | null | undefined): number {
   if (!item || item.resolution !== "resolved") return 0;
   if (item.listingQuantity !== undefined) return item.listingQuantity;
@@ -105,9 +109,12 @@ export function listingReserveWarning(
   locale: UiLocale = "ru",
 ): string | null {
   if (!item || quantity <= item.sellableQuantity || quantity > inventoryListingQuantity(item)) return null;
+  const reserveSetting = item.keepCopiesOverride != null
+    ? locale === "en" ? `the individual reserve of ${item.keepCopiesOverride} copies for this variant` : `индивидуальный резерв этого варианта: ${item.keepCopiesOverride} шт.`
+    : locale === "en" ? "your general “Keep copies” setting" : "общий резерв в «Оставлять копий»";
   return locale === "en"
-    ? `This order uses copies you wanted to keep. You can list ${item.sellableQuantity} without using that reserve; you selected ${quantity}. If everything sells, fewer copies will remain than your “Keep copies” setting. You can still continue.`
-    : `Объявление затронет копии, которые вы хотели оставить себе. Сохраняя запас, можно выставить ${item.sellableQuantity} шт., вы выбрали ${quantity}. Если всё продастся, останется меньше копий, чем указано в «Оставлять копий». Вы можете продолжить.`;
+    ? `This order uses copies you wanted to keep. You can list ${item.sellableQuantity} without using that reserve; you selected ${quantity}. If everything sells, fewer copies will remain than ${reserveSetting}. You can still continue.`
+    : `Объявление затронет копии, которые вы хотели оставить себе. Сохраняя запас, можно выставить ${item.sellableQuantity} шт., вы выбрали ${quantity}. Если всё продастся, не сохранится ${reserveSetting}. Вы можете продолжить.`;
 }
 
 export const INVENTORY_CATEGORIES = [

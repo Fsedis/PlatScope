@@ -4,6 +4,7 @@
 
   import {
     languageFromLocale,
+    DEFAULT_APP_SETTINGS,
     localeFromLanguage,
     useLocale,
     type AppSettings,
@@ -16,6 +17,7 @@
   } from "./foundation";
   import type { GameMetadataRefreshOutcome, InsightsView } from "./insights";
   import type { RelicRewardScanView } from "./relicRewards";
+  import type { RelicSelectionView } from "./relicSelection";
   import AppUpdatePanel from "./AppUpdatePanel.svelte";
   import DiagnosticsScreen from "./DiagnosticsScreen.svelte";
   import { worldActivityStore } from "./worldActivityStore";
@@ -74,6 +76,19 @@
       overlayPreviewing: "Открываем оверлей…",
       overlayPreviewShown: (count: number) => `Показано тестовых наград: ${count}. Оверлей закроется автоматически.`,
       overlayPreviewError: (error: string) => `Не удалось показать оверлей. ${error}`,
+      relicOverlayHeading: "Выбор реликвии перед миссией",
+      relicOverlayScale: "Размер миниокна",
+      relicPreviewTitle: "Предпросмотр миниокна",
+      relicPreviewDescription: "Работает и без открытой игры. Масштаб сохраняется вместе с настройками.",
+      relicPreviewAction: "Показать предпросмотр",
+      relicPreviewHide: "Скрыть предпросмотр",
+      relicPreviewing: "Открываем миниокно…",
+      relicPreviewClosing: "Скрываем…",
+      relicPreviewShown: "Предпросмотр открыт на 2 минуты. Изменяйте размер ползунком.",
+      relicPreviewNeedsData: "Предпросмотр открыт. Обновите инвентарь, чтобы увидеть свои реликвии.",
+      relicPreviewClosed: "Предпросмотр закрыт.",
+      relicPreviewError: "Не удалось показать миниокно. Повторите попытку.",
+      relicPreviewCloseError: "Не удалось скрыть миниокно. Повторите попытку.",
       signedPercent: (value: number) => `${value > 0 ? "+" : ""}${value}%`,
       advanced: "Дополнительные настройки обновления",
       bulkInterval: "Проверять историю цен каждые",
@@ -139,6 +154,19 @@
       overlayPreviewing: "Opening overlay…",
       overlayPreviewShown: (count: number) => `Showing ${count} test rewards. The overlay will close automatically.`,
       overlayPreviewError: (error: string) => `Unable to show the overlay. ${error}`,
+      relicOverlayHeading: "Relic selection before a mission",
+      relicOverlayScale: "Mini window size",
+      relicPreviewTitle: "Mini window preview",
+      relicPreviewDescription: "Works without the game running. Scale is saved with your settings.",
+      relicPreviewAction: "Show preview",
+      relicPreviewHide: "Hide preview",
+      relicPreviewing: "Opening mini window…",
+      relicPreviewClosing: "Hiding…",
+      relicPreviewShown: "Preview is open for 2 minutes. Adjust the size with the slider.",
+      relicPreviewNeedsData: "Preview is open. Refresh inventory to see your relics.",
+      relicPreviewClosed: "Preview closed.",
+      relicPreviewError: "Unable to show the mini window. Try again.",
+      relicPreviewCloseError: "Unable to hide the mini window. Try again.",
       signedPercent: (value: number) => `${value > 0 ? "+" : ""}${value}%`,
       advanced: "Advanced refresh settings",
       bulkInterval: "Check price history every",
@@ -181,6 +209,7 @@
   let bulkRefreshHours = 4;
   let liveQuoteTtlSeconds = 90;
   let overlayScalePercent = 100;
+  let relicSelectionOverlayScalePercent = 100;
   let overlayOffsetXPercent = 0;
   let overlayOffsetYPercent = 0;
   let loading = true;
@@ -200,6 +229,16 @@
   let overlayPreviewError = "";
   let overlayPreviewDebounce: ReturnType<typeof setTimeout> | undefined;
   let overlayPreviewLifetime: ReturnType<typeof setTimeout> | undefined;
+  let relicPreviewing = false;
+  let relicPreviewClosing = false;
+  let relicPreviewActive = false;
+  let relicPreviewQueued = false;
+  let relicPreviewMessage = "";
+  let relicPreviewError = "";
+  let relicPreviewDebounce: ReturnType<typeof setTimeout> | undefined;
+  let relicPreviewLifetime: ReturnType<typeof setTimeout> | undefined;
+  let relicPreviewRequest: Promise<RelicSelectionView> | null = null;
+  let destroyed = false;
   let leaveDialog: HTMLDialogElement;
   let pendingLeave: (() => void) | null = null;
 
@@ -243,6 +282,7 @@
     bulkRefreshHours !== settings.bulk_refresh_hours ||
     liveQuoteTtlSeconds !== settings.live_quote_ttl_seconds ||
     overlayScalePercent !== settings.reward_overlay_scale_percent ||
+    relicSelectionOverlayScalePercent !== settings.relic_selection_overlay_scale_percent ||
     overlayOffsetXPercent !== settings.reward_overlay_offset_x_percent ||
     overlayOffsetYPercent !== settings.reward_overlay_offset_y_percent
   );
@@ -257,6 +297,7 @@
       bulk_refresh_hours: bulkRefreshHours,
       live_quote_ttl_seconds: liveQuoteTtlSeconds,
       reward_overlay_scale_percent: overlayScalePercent,
+      relic_selection_overlay_scale_percent: relicSelectionOverlayScalePercent,
       reward_overlay_offset_x_percent: overlayOffsetXPercent,
       reward_overlay_offset_y_percent: overlayOffsetYPercent,
     };
@@ -266,13 +307,14 @@
     loading = true;
     errorMessage = "";
     try {
-      settings = await invoke<AppSettings>("load_settings");
+      settings = { ...DEFAULT_APP_SETTINGS, ...await invoke<AppSettings>("load_settings") };
       selectedLocale = localeFromLanguage(settings.language);
       selectedPlatform = settings.platform;
       crossplay = settings.crossplay;
       bulkRefreshHours = settings.bulk_refresh_hours;
       liveQuoteTtlSeconds = settings.live_quote_ttl_seconds;
       overlayScalePercent = settings.reward_overlay_scale_percent;
+      relicSelectionOverlayScalePercent = settings.relic_selection_overlay_scale_percent;
       overlayOffsetXPercent = settings.reward_overlay_offset_x_percent;
       overlayOffsetYPercent = settings.reward_overlay_offset_y_percent;
       statusMessage = c.ready;
@@ -344,6 +386,55 @@
     } finally {
       overlayPreviewing = false;
     }
+  }
+
+  function scheduleRelicPreview(): void {
+    if ((!relicPreviewActive && !relicPreviewing) || relicPreviewClosing) return;
+    clearTimeout(relicPreviewDebounce);
+    relicPreviewDebounce = setTimeout(() => void previewRelicSelection(), 140);
+  }
+
+  async function previewRelicSelection(): Promise<void> {
+    if (destroyed || relicPreviewClosing) return;
+    if (relicPreviewing) { relicPreviewQueued = true; return; }
+    const previewSettings = draftSettings();
+    if (!previewSettings) return;
+    relicPreviewing = true;
+    relicPreviewQueued = false;
+    relicPreviewError = "";
+    relicPreviewRequest = invoke<RelicSelectionView>("preview_relic_selection_overlay", {settings:previewSettings,durationSeconds:120});
+    try {
+      const result = await relicPreviewRequest;
+      if (destroyed) return;
+      relicPreviewActive = true;
+      relicPreviewMessage = result.status === "needs_data" ? c.relicPreviewNeedsData : c.relicPreviewShown;
+      clearTimeout(relicPreviewLifetime);
+      relicPreviewLifetime = setTimeout(() => { relicPreviewActive = false; relicPreviewMessage = c.relicPreviewClosed; }, 120_000);
+    } catch {
+      if (!destroyed) relicPreviewError = c.relicPreviewError;
+    } finally {
+      relicPreviewRequest = null;
+      if (!destroyed) {
+        relicPreviewing = false;
+        if (relicPreviewQueued && relicPreviewActive) void previewRelicSelection();
+      }
+    }
+  }
+
+  async function closeRelicPreview(): Promise<void> {
+    if (relicPreviewClosing || relicPreviewing) return;
+    relicPreviewClosing = true;
+    relicPreviewQueued = false;
+    clearTimeout(relicPreviewDebounce);
+    relicPreviewError = "";
+    try {
+      await invoke("close_relic_selection_preview");
+      if (destroyed) return;
+      clearTimeout(relicPreviewLifetime);
+      relicPreviewActive = false;
+      relicPreviewMessage = c.relicPreviewClosed;
+    } catch { if (!destroyed) relicPreviewError = c.relicPreviewCloseError; }
+    finally { if (!destroyed) relicPreviewClosing = false; }
   }
 
   async function loadDataDates(): Promise<void> {
@@ -418,8 +509,15 @@
   });
 
   onDestroy(() => {
+    destroyed = true;
     clearTimeout(overlayPreviewDebounce);
     clearTimeout(overlayPreviewLifetime);
+    clearTimeout(relicPreviewDebounce);
+    clearTimeout(relicPreviewLifetime);
+    if (relicPreviewActive || relicPreviewRequest) {
+      const pending = relicPreviewRequest;
+      void (pending ? pending.catch(() => null) : Promise.resolve()).then(() => invoke("close_relic_selection_preview")).catch(() => {});
+    }
   });
 </script>
 
@@ -617,6 +715,16 @@
   </div>
 </section>
 
+<section class="settings-card relic-overlay-settings-card" aria-labelledby="relic-overlay-settings-heading">
+  <div><p class="eyebrow">{c.overlayKicker}</p><h2 id="relic-overlay-settings-heading">{c.relicOverlayHeading}</h2></div>
+  <div class="overlay-settings-controls">
+    <div class="overlay-slider relic-overlay-slider"><div><label for="relic-selection-overlay-scale">{c.relicOverlayScale}</label><output for="relic-selection-overlay-scale">{relicSelectionOverlayScalePercent}%</output></div><input id="relic-selection-overlay-scale" type="range" min="70" max="140" step="1" bind:value={relicSelectionOverlayScalePercent} oninput={scheduleRelicPreview} disabled={loading || saving || relicPreviewClosing || !settings} /></div>
+    <div class="overlay-preview-action"><div><strong>{c.relicPreviewTitle}</strong><p>{c.relicPreviewDescription}</p></div><div class="relic-preview-actions"><button type="button" onclick={previewRelicSelection} disabled={loading || saving || relicPreviewing || relicPreviewClosing || !settings}>{relicPreviewing ? c.relicPreviewing : relicPreviewActive ? c.overlayPreviewRefresh : c.relicPreviewAction}</button>{#if relicPreviewActive}<button type="button" class="secondary" onclick={closeRelicPreview} disabled={relicPreviewing || relicPreviewClosing}>{relicPreviewClosing ? c.relicPreviewClosing : c.relicPreviewHide}</button>{/if}</div></div>
+    <div class="overlay-preview-message" role="status" aria-live="polite">{relicPreviewMessage}</div>
+    {#if relicPreviewError}<div class="overlay-preview-error" role="alert">{relicPreviewError}</div>{/if}
+  </div>
+</section>
+
 <section class="settings-card refresh-settings-card" aria-labelledby="data-refresh-heading">
   <div>
     <p class="eyebrow">{c.refreshKicker}</p>
@@ -689,7 +797,7 @@
   .settings-card h2 { margin-block-end: .4rem; font-size: 1.2rem; }
   .settings-card p, .settings-error p { max-width: 68ch; margin: 0; color: var(--text-muted); line-height: 1.5; }
   .settings-control { display: grid; gap: .45rem; min-width: 0; }
-  .market-settings-card, .overlay-settings-card, .refresh-settings-card, .settings-error, .settings-actions { margin-block-start: .7rem; }
+  .market-settings-card, .overlay-settings-card, .relic-overlay-settings-card, .refresh-settings-card, .settings-error, .settings-actions { margin-block-start: .7rem; }
   .settings-control-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .55rem; min-width: 0; }
   .platform-control { grid-column: 1 / -1; }
   .settings-control-grid > .check-field { grid-column: 1 / -1; }
@@ -720,6 +828,9 @@
   .overlay-preview-action button { min-height: 2.125rem; white-space: nowrap; }
   .overlay-preview-message { min-height: 1.2rem; color: var(--success); font-size: .82rem; font-weight: 700; }
   .overlay-preview-error { padding: .55rem; border-radius: .55rem; background: var(--danger-soft); color: var(--danger); font-size: .82rem; font-weight: 700; }
+  .overlay-preview-action .relic-preview-actions { display:flex; flex-wrap:wrap; gap:.5rem; justify-content:flex-end; }
+  .relic-overlay-settings-card .overlay-preview-action { grid-template-columns:minmax(0,1fr); gap:.6rem; }
+  .relic-preview-actions button { flex:1 1 10rem; white-space:normal; }
   .refresh-controls { display: grid; gap: .55rem; min-width: 0; }
   .refresh-option { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: .7rem; padding: .65rem; border: 1px solid var(--border); border-radius: .55rem; background: var(--surface-2); }
   .refresh-option h3 { margin: 0 0 .25rem; font-size: 1rem; }

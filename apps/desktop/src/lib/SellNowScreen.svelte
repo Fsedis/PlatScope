@@ -13,6 +13,7 @@
   import { localeCode, useLocale, type AppSettings } from "./i18n";
   import InventoryAutoRefresh from "./InventoryAutoRefresh.svelte";
   import KeepCopiesControl from "./KeepCopiesControl.svelte";
+  import ItemReserveControl from "./ItemReserveControl.svelte";
   import { inventoryScanErrorMessage } from "./inventoryRefresh";
   let refreshingInBackground = false;
   import { masteryStore } from "./mastery";
@@ -194,6 +195,7 @@
   let autoQuoteIdentity = "";
   let destroyed = false;
   let orderPriceEdited = false;
+  let itemReserveUpdating = false;
   $: filterSignature = JSON.stringify([query, category, preset, sortKey, sortDirection]);
   $: if (filterSignature) { page = 1; detailOpen = false; selectedIdentity = ""; liveError = ""; resetListScroll(); }
   $: hasFilters = Boolean(query.trim() || category !== "all" || preset !== "all");
@@ -268,10 +270,11 @@
     try {
       const result = await invoke<SellNowView | null>("sell_now");
       if (destroyed || request !== viewRequest) return;
-      if (pendingListingAction && !orderBusy && (result?.inventoryMetadata.checksumSha256 !== view?.inventoryMetadata.checksumSha256 || result?.keepCopies !== view?.keepCopies
-        || result?.rows.find(row => sellNowRowIdentity(row) === selectedIdentity)?.inventory.sellableQuantity !== selectedRow?.inventory.sellableQuantity)) {
-        pendingListingAction = null;
-        orderFormError = u.selectionReset;
+      const refreshedSelection = selectedRow ? result?.rows.find(row => sellNowRowIdentity(row) === sellNowRowIdentity(selectedRow)) : undefined;
+      if (pendingListingAction && !orderBusy && (result?.inventoryMetadata.checksumSha256 !== view?.inventoryMetadata.checksumSha256 || result?.reserveAccountKey !== view?.reserveAccountKey || result?.keepCopies !== view?.keepCopies
+        || refreshedSelection?.inventory.sellableQuantity !== selectedRow?.inventory.sellableQuantity
+        || (refreshedSelection?.inventory.keepCopiesOverride ?? null) !== (selectedRow?.inventory.keepCopiesOverride ?? null))) {
+        invalidateListingConfirmation();
       }
       view = result;
       cachedSellNowView = result;
@@ -340,7 +343,7 @@
 
   function prepareListingAction(event: SubmitEvent): void {
     event.preventDefault();
-    if (!selectedRow || currentOrder) return;
+    if (!selectedRow || currentOrder || itemReserveUpdating) return;
     const perTrade = selectedRow.inventory.bulkTradable ? orderPerTrade : null;
     const listingPlatinum = orderPrice * (perTrade ?? 1);
     orderFormError = validateListingNumbers(
@@ -391,6 +394,19 @@
     const trigger = listingConfirmationTrigger;
     listingConfirmationTrigger = null;
     void tick().then(() => trigger?.focus());
+  }
+
+  function invalidateListingConfirmation(): void {
+    if (!pendingListingAction || orderBusy) return;
+    pendingListingAction = null;
+    listingConfirmationError = "";
+    orderFormError = u.selectionReset;
+  }
+
+  async function reserveSaved(): Promise<void> {
+    invalidateListingConfirmation();
+    await loadSellNow();
+    onInventoryChange?.();
   }
 
   async function executeListingAction(): Promise<void> {
@@ -537,7 +553,7 @@
       if (disposed) cleanup();
       else unlistenMarket = cleanup;
     });
-    void listen("inventory-updated", () => void loadSellNow()).then((cleanup) => {
+    void listen("inventory-updated", () => { invalidateListingConfirmation(); void loadSellNow(); }).then((cleanup) => {
       if (disposed) cleanup();
       else unlistenInventory = cleanup;
     });
@@ -560,8 +576,8 @@
         {t("Обновлено", "Updated")} {new Date(view.inventoryMetadata.observedAt).toLocaleString(localeCode($locale), {day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}
       </time>
       <InventoryAutoRefresh compact onBusy={(busy) => refreshingInBackground = busy} />
-      <KeepCopiesControl value={view.keepCopies} disabled={scanning || refreshingInBackground}
-        onSaved={async () => { await loadSellNow(); onInventoryChange?.(); }} />
+      <KeepCopiesControl value={view.keepCopies} disabled={scanning || refreshingInBackground || orderBusy || itemReserveUpdating}
+        onSaved={reserveSaved} />
       <button class="secondary refresh-inventory" type="button" onclick={scanWarframe} disabled={loading || scanning || refreshingInBackground} title={c.scanInventory}>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M6 7a7 7 0 0 1 12-1l2 3M4 15l2 3a7 7 0 0 0 12-1" /></svg>
         {scanning || refreshingInBackground ? c.scanningInventory : t("Обновить", "Refresh")}
@@ -686,11 +702,15 @@
                   {#if selectedRow.inventory.untradeableQuantity}<div><dt>{u.untradeable}</dt><dd>{selectedRow.inventory.untradeableQuantity}</dd></div>{/if}
                   {#if selectedRow.inventory.unknownQuantity}<div><dt>{u.unknown}</dt><dd>{selectedRow.inventory.unknownQuantity}</dd></div>{/if}
                   {#if selectedRow.inventory.equippedQuantity}<div><dt>{u.equipped}</dt><dd>{selectedRow.inventory.equippedQuantity}</dd></div>{/if}
-                  <div><dt>{u.saved}</dt><dd>{view.keepCopies}</dd></div>
+                  <div><dt>{u.saved}</dt><dd>{selectedRow.inventory.keepCopiesOverride ?? view.keepCopies}</dd></div>
                   {#if selectedRow.inventory.personalReservedQuantity}<div><dt>{t("Для личных сборок", "For personal goals")}</dt><dd>{selectedRow.inventory.personalReservedQuantity}</dd></div>{/if}
                 </dl>
               </details>
             </section>
+
+            {#if selectedRow.inventory.key && selectedRow.inventory.resolution === "resolved"}
+              <div class="item-reserve-row"><ItemReserveControl key={selectedRow.inventory.key} value={selectedRow.inventory.keepCopiesOverride} generalReserve={view.keepCopies} expectedInventoryChecksum={view.inventoryMetadata.checksumSha256} expectedReserveAccountKey={view.reserveAccountKey ?? null} context={(accountView?.profile?.id ?? "") + "|" + sellNowRowIdentity(selectedRow)} bind:updating={itemReserveUpdating} disabled={scanning || refreshing || refreshingInBackground || orderBusy} onSaving={invalidateListingConfirmation} onSaved={reserveSaved} /></div>
+            {/if}
 
             <div class="inventory-price-line">
               <div><span>{t("Оценка за штуку", "Estimate per item")}</span><strong>{formatPlatinum(selectedRow.recommendation?.listPrice ?? selectedRow.recommendation?.fairPrice ?? null, $locale)}</strong>
@@ -752,7 +772,7 @@
                   </div>
                   <label class="wfm-order-visible"><input type="checkbox" bind:checked={orderVisible} />{t("Показывать покупателям", "Visible to buyers")}</label>
                   {#if orderFormError}<p id="sell-order-error" class="inline-error" role="alert">{orderFormError}</p>{/if}
-                  <button type="submit" disabled={orderBusy}>{orderVisible ? t("Выставить на рынок", "List on market") : t("Создать скрытый ордер", "Create hidden order")}</button>
+                  <button type="submit" disabled={orderBusy || itemReserveUpdating}>{orderVisible ? t("Выставить на рынок", "List on market") : t("Создать скрытый ордер", "Create hidden order")}</button>
                 </form>
               {/if}
             </section>
@@ -825,6 +845,7 @@
   .inventory-quantity { display:flex; flex-wrap:wrap; align-items:baseline; justify-content:space-between; gap:.3rem .6rem; border-bottom:1px solid var(--border); padding-bottom:.85rem; margin-bottom:1rem; }
   .inventory-quantity > p { margin:0; font-size:.82rem; color:var(--text-muted); }
   .inventory-quantity > p strong { font-size:1.15rem; color:var(--text); padding-right:.15rem; }
+  .item-reserve-row { margin:-.45rem 0 1rem; }
   .inventory-quantity details { font-size:.75rem; }
   .inventory-quantity summary { color:var(--text-muted); cursor:pointer; }
   .inventory-quantity details[open] { flex-basis:100%; padding-top:.4rem; }

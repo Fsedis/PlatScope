@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 
 mod account_market;
+mod item_reserves;
+pub use item_reserves::{ItemReserveService, MAX_ITEM_RESERVE_COPIES};
 mod personal_goals;
 pub use personal_goals::{PersonalGoalCompletion, PersonalGoalsService, PersonalGoalsView};
 
@@ -10,6 +12,11 @@ mod mastery_plan;
 pub use mastery_plan::{MasteryPlanService, MasteryPlanView};
 mod world_activity;
 pub use world_activity::{WorldActivityService, WorldActivityView};
+mod relic_selection;
+pub use relic_selection::{
+    RelicEra, RelicSelectionBaseConsumption, RelicSelectionConsumption, RelicSelectionRequest,
+    RelicSelectionReward, RelicSelectionRow, RelicSelectionService, RelicSelectionView,
+};
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -92,6 +99,8 @@ pub struct AppSettings {
     pub keep_inventory_copies: u32,
     #[serde(default = "default_reward_overlay_scale_percent")]
     pub reward_overlay_scale_percent: u16,
+    #[serde(default = "default_reward_overlay_scale_percent")]
+    pub relic_selection_overlay_scale_percent: u16,
     #[serde(default = "default_reward_overlay_offset_percent")]
     pub reward_overlay_offset_x_percent: i16,
     #[serde(default = "default_reward_overlay_offset_percent")]
@@ -108,6 +117,7 @@ impl Default for AppSettings {
             live_quote_ttl_seconds: DEFAULT_LIVE_QUOTE_TTL_SECONDS,
             keep_inventory_copies: DEFAULT_KEEP_COPIES,
             reward_overlay_scale_percent: DEFAULT_REWARD_OVERLAY_SCALE_PERCENT,
+            relic_selection_overlay_scale_percent: DEFAULT_REWARD_OVERLAY_SCALE_PERCENT,
             reward_overlay_offset_x_percent: DEFAULT_REWARD_OVERLAY_OFFSET_PERCENT,
             reward_overlay_offset_y_percent: DEFAULT_REWARD_OVERLAY_OFFSET_PERCENT,
         }
@@ -505,6 +515,9 @@ pub struct InventoryViewItem {
     /// Передаваемые копии, выделенные личным целям сборки.
     #[serde(default)]
     pub personal_reserved_quantity: u32,
+    /// Индивидуальный минимум вместо общего резерва; `None` использует общую настройку.
+    #[serde(default)]
+    pub keep_copies_override: Option<u32>,
     pub resolution: InventoryResolution,
     pub vault_status: VaultStatus,
 }
@@ -525,6 +538,9 @@ pub struct EquippedModPlacementView {
 pub struct InventoryView {
     pub metadata: InventorySnapshotMetadata,
     pub keep_copies: u32,
+    /// Хеш текущего игрового аккаунта, подтверждённого этим снимком.
+    #[serde(default)]
+    pub reserve_account_key: Option<String>,
     pub mod_usage_scanned: bool,
     pub summary: InventorySummary,
     pub items: Vec<InventoryViewItem>,
@@ -559,6 +575,8 @@ pub struct SellNowView {
     pub inventory_metadata: InventorySnapshotMetadata,
     pub inventory_summary: InventorySummary,
     pub keep_copies: u32,
+    #[serde(default)]
+    pub reserve_account_key: Option<String>,
     pub mod_usage_scanned: bool,
     pub market_snapshot: Option<MarketSnapshotSummary>,
     pub summary: SellNowSummary,
@@ -1165,14 +1183,18 @@ impl InventoryService {
             settings.platform,
         );
         database_guard.promote_inventory_snapshot(&resolved)?;
+        let (reserve_account_key, reserves) =
+            item_reserves::load(&database_guard, &resolved.metadata.checksum_sha256)?;
         drop(database_guard);
         enrich_inventory_view(
             database,
-            inventory_view_from_snapshot(
+            inventory_view_from_snapshot_with_reserves(
                 &resolved,
                 settings.language,
                 settings.platform,
                 settings.keep_inventory_copies,
+                reserve_account_key,
+                &reserves,
             ),
             settings.language,
         )
@@ -1187,13 +1209,21 @@ impl InventoryService {
         database: &Mutex<Database>,
         settings: &AppSettings,
     ) -> Result<Option<InventoryView>, CoreError> {
-        let (snapshot, catalog, game_metadata, variants) = {
+        let (snapshot, catalog, game_metadata, variants, reserve_account_key, reserves) = {
             let database = lock_database(database)?;
+            let snapshot = database.current_inventory_snapshot()?;
+            let (reserve_account_key, reserves) = snapshot
+                .as_ref()
+                .map(|snapshot| item_reserves::load(&database, &snapshot.metadata.checksum_sha256))
+                .transpose()?
+                .unwrap_or_default();
             (
-                database.current_inventory_snapshot()?,
+                snapshot,
                 database.load_current_catalog()?,
                 database.load_current_game_metadata()?,
                 database.current_market_variant_keys()?,
+                reserve_account_key,
+                reserves,
             )
         };
         snapshot
@@ -1216,11 +1246,13 @@ impl InventoryService {
                 );
                 enrich_inventory_view(
                     database,
-                    inventory_view_from_snapshot(
+                    inventory_view_from_snapshot_with_reserves(
                         &snapshot,
                         settings.language,
                         settings.platform,
                         settings.keep_inventory_copies,
+                        reserve_account_key,
+                        &reserves,
                     ),
                     settings.language,
                 )
@@ -3120,8 +3152,14 @@ fn build_arcane_conversion(
         .iter()
         .map(|definition| (definition.game_ref.as_str(), definition))
         .collect();
+    let (_, reserves) = {
+        let guard = lock_database(database)?;
+        item_reserves::load(&guard, &inventory.metadata.checksum_sha256)?
+    };
+    let (inventory, allocated_reserves) =
+        item_reserves::apply_to_snapshot(inventory, settings.keep_inventory_copies, &reserves);
     let mut decisions = ArcaneDecisionBuckets::default();
-    for item in &inventory.items {
+    for (item, keep_copies) in inventory.items.iter().zip(allocated_reserves) {
         let Some(definition) = definitions.get(item.canonical_game_id.as_str()).copied() else {
             continue;
         };
@@ -3144,7 +3182,7 @@ fn build_arcane_conversion(
             vosfor_each,
             equivalent_platinum_each: equivalent_each,
         };
-        append_arcane_decisions(item, inventory.keep_copies, &input, &mut decisions);
+        append_arcane_decisions(item, keep_copies, &input, &mut decisions);
     }
     for rows in [
         &mut decisions.sell,
@@ -4393,6 +4431,7 @@ impl SellNowService {
         let inventory_metadata = inventory.metadata;
         let inventory_summary = inventory.summary;
         let keep_copies = inventory.keep_copies;
+        let reserve_account_key = inventory.reserve_account_key;
         let mod_usage_scanned = inventory.mod_usage_scanned;
         let mut rows = Vec::new();
         let mut emitted_variants = HashSet::new();
@@ -4449,6 +4488,7 @@ impl SellNowService {
             inventory_metadata,
             inventory_summary,
             keep_copies,
+            reserve_account_key,
             mod_usage_scanned,
             market_snapshot,
             summary,
@@ -4727,18 +4767,42 @@ fn relink_exact_relic_inventory(
     apply_keep_copies(&repaired, repaired.keep_copies)
 }
 
+#[cfg(test)]
 fn inventory_view_from_snapshot(
     snapshot: &ResolvedInventorySnapshot,
     language: Language,
     platform: Platform,
     keep_copies: u32,
 ) -> InventoryView {
-    let mut snapshot = apply_keep_copies(snapshot, keep_copies);
+    inventory_view_from_snapshot_with_reserves(
+        snapshot,
+        language,
+        platform,
+        keep_copies,
+        None,
+        &item_reserves::ItemReserves::new(),
+    )
+}
+
+fn inventory_view_from_snapshot_with_reserves(
+    snapshot: &ResolvedInventorySnapshot,
+    language: Language,
+    platform: Platform,
+    keep_copies: u32,
+    reserve_account_key: Option<String>,
+    reserves: &item_reserves::ItemReserves,
+) -> InventoryView {
+    let mut snapshot = snapshot.clone();
     for item in &mut snapshot.items {
         if let Some(key) = &mut item.key {
             key.platform = platform;
         }
     }
+    // Копии для личных целей и индивидуальный минимум могут быть одними и теми же.
+    // Сначала сохраняем жёсткую защиту, затем цели, затем дополняем минимум всего варианта.
+    let unrestricted_overrides = reserves.keys().cloned().map(|key| (key, 0)).collect();
+    let (snapshot, _) =
+        item_reserves::apply_to_snapshot(&snapshot, keep_copies, &unrestricted_overrides);
     let mut items: Vec<InventoryViewItem> = snapshot
         .items
         .into_iter()
@@ -4783,6 +4847,7 @@ fn inventory_view_from_snapshot(
                 display_name,
                 image_url: None,
                 tags: item.tags,
+                keep_copies_override: item.key.as_ref().and_then(|key| reserves.get(key)).copied(),
                 key: item.key,
                 rank: item.rank,
                 subtype: item.subtype,
@@ -4824,6 +4889,7 @@ fn inventory_view_from_snapshot(
     InventoryView {
         metadata: snapshot.metadata,
         keep_copies,
+        reserve_account_key,
         mod_usage_scanned: snapshot.mod_usage_scanned,
         summary,
         items,
@@ -4923,6 +4989,7 @@ fn enrich_inventory_view(
             .unwrap_or(VaultStatus::Unknown);
     }
     personal_goals::apply_reservations(database, &mut view)?;
+    item_reserves::apply_to_view(&mut view);
     Ok(view)
 }
 
@@ -5750,6 +5817,7 @@ mod tests {
                 checksum_sha256: "empty-inventory".into(),
             },
             keep_copies: 1,
+            reserve_account_key: None,
             mod_usage_scanned: false,
             summary: InventorySummary {
                 owned_quantity: 0,
@@ -6299,6 +6367,46 @@ mod tests {
         assert_eq!(decisions.sell[0].quantity, 2);
         assert_eq!(decisions.dissolve[0].quantity, 1);
         assert!(decisions.hold.is_empty());
+
+        let key = MarketVariantKey::new("arcane_test", Platform::Pc, Some(0), None::<String>)
+            .expect("exact arcane key");
+        let mut reserved_item = item;
+        reserved_item.key = Some(key.clone());
+        let snapshot = ResolvedInventorySnapshot {
+            metadata: InventorySnapshotMetadata {
+                source: InventorySource::ReadOnlyScan,
+                observed_at: Utc::now(),
+                schema_version: READ_ONLY_SCHEMA_VERSION,
+                item_count: 1,
+                checksum_sha256: "reserved-arcane".into(),
+            },
+            keep_copies: 2,
+            mod_usage_scanned: true,
+            credits: None,
+            syndicates: vec![],
+            items: vec![reserved_item],
+        };
+        for (reserve, expected_sale, expected_dissolve) in [(2, 2, 1), (0, 2, 3), (5, 0, 0)] {
+            let (snapshot, allocated) = item_reserves::apply_to_snapshot(
+                &snapshot,
+                2,
+                &HashMap::from([(key.clone(), reserve)]),
+            );
+            let mut decisions = ArcaneDecisionBuckets::default();
+            append_arcane_decisions(&snapshot.items[0], allocated[0], &input, &mut decisions);
+            assert_eq!(
+                decisions.sell.iter().map(|row| row.quantity).sum::<u32>(),
+                expected_sale
+            );
+            assert_eq!(
+                decisions
+                    .dissolve
+                    .iter()
+                    .map(|row| row.quantity)
+                    .sum::<u32>(),
+                expected_dissolve
+            );
+        }
     }
 
     #[test]

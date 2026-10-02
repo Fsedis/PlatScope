@@ -10,6 +10,7 @@ mod market_presence;
 mod market_profiles;
 mod memory_recording;
 mod mission_research;
+mod relic_selection_overlay;
 mod reward_ocr;
 mod squad;
 mod trade_log;
@@ -30,10 +31,10 @@ use platscope_core::{
     AccountOrder, AccountOrderType, AccountService, AccountView, AppSettings, BountyHunterService,
     BountyHunterView, CreateListingInput, DEFAULT_MARKET_SEARCH_LIMIT, GameMetadataRefreshOutcome,
     GameMetadataService, HistoryBootstrapOutcome, HistoryService, InsightsService, InsightsView,
-    InventoryService, InventoryView, LivePricingResult, LivePricingService, LiveSellNowResult,
-    LoggingGuard, MarketBrowserService, MarketDataService, MarketHistoryView, MarketRefreshOutcome,
-    MarketSearchResult, MasteryPlanService, MasteryPlanView, MasteryService, MasteryView,
-    PersonalGoalsService, PersonalGoalsView, PriceRecommendation, PricingService,
+    InventoryService, InventoryView, ItemReserveService, LivePricingResult, LivePricingService,
+    LiveSellNowResult, LoggingGuard, MarketBrowserService, MarketDataService, MarketHistoryView,
+    MarketRefreshOutcome, MarketSearchResult, MasteryPlanService, MasteryPlanView, MasteryService,
+    MasteryView, PersonalGoalsService, PersonalGoalsView, PriceRecommendation, PricingService,
     ResourceConverterService, ResourceConverterView, SETTINGS_KEY, SellNowService, SellNowView,
     UpdateListingInput, WorldActivityService, WorldActivityView, enrich_account_view, init_logging,
 };
@@ -76,6 +77,7 @@ struct AppState {
     reward_relic_paths: Mutex<HashSet<String>>,
     latest_reward_scan: Mutex<Option<reward_ocr::RelicRewardScanView>>,
     reward_overlay_generation: AtomicU64,
+    relic_selection: Mutex<relic_selection_overlay::Runtime>,
     data_directory: PathBuf,
     _logging_guard: LoggingGuard,
 }
@@ -303,21 +305,19 @@ fn perform_inventory_scan(app: &AppHandle, pid: u32, epoch: u64) -> Result<Inven
         .get_setting::<AppSettings>(SETTINGS_KEY)
         .map_err(|error| error.to_string())?
         .unwrap_or_default();
-    let view = localize_inventory_images(
-        InventoryService::import_read_only_scan_json(
-            &state.inventory_database,
-            &raw_json,
-            &settings,
-        )
-        .map_err(|error| error.to_string())?,
-    );
+    let imported_view = InventoryService::import_read_only_scan_json(
+        &state.inventory_database,
+        &raw_json,
+        &settings,
+    )
+    .map_err(|error| error.to_string())?;
     // История не блокирует торговый инвентарь. Привязка к checksum не даст
     // показать старый аккаунт при смене снимка или неудачной записи кэша.
     if MasteryService::capture(
         &state.inventory_database,
         &raw_json,
         &scan_info.account_id,
-        &view.metadata.checksum_sha256,
+        &imported_view.metadata.checksum_sha256,
     )
     .is_err()
     {
@@ -326,6 +326,12 @@ fn perform_inventory_scan(app: &AppHandle, pid: u32, epoch: u64) -> Result<Inven
             "mastery history was not cached"
         );
     }
+    // Повторное чтение после привязки аккаунта применяет его индивидуальные резервы.
+    let view = localize_inventory_images(
+        InventoryService::view(&state.inventory_database, &settings)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "current inventory unavailable after scan".to_owned())?,
+    );
     tracing::info!(
         event = "read_only_inventory_scan_finished",
         build = scan_info.build.as_deref().unwrap_or("unknown"),
@@ -479,6 +485,39 @@ fn set_inventory_keep_copies(
             .map_err(|error| error.to_string())?;
         settings
     };
+    InventoryService::view(&state.database, &settings)
+        .map(|view| view.map(localize_inventory_images))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command(async)]
+#[allow(clippy::needless_pass_by_value)] // Tauri command extractor owns its arguments.
+fn set_inventory_item_reserve(
+    key: MarketVariantKey,
+    keep_copies: Option<u32>,
+    expected_inventory_checksum: String,
+    expected_reserve_account_key: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<InventoryView>, String> {
+    let settings = state
+        .database
+        .lock()
+        .map_err(|_| "database state is unavailable".to_owned())?
+        .get_setting::<AppSettings>(SETTINGS_KEY)
+        .map_err(|error| error.to_string())?
+        .unwrap_or_default();
+    ItemReserveService::set_reserve(
+        &state.database,
+        &settings,
+        &key,
+        keep_copies,
+        &expected_inventory_checksum,
+        &expected_reserve_account_key,
+    )
+    .map_err(|error| error.to_string())?;
+    app.emit("inventory-updated", ())
+        .map_err(|error| error.to_string())?;
     InventoryService::view(&state.database, &settings)
         .map(|view| view.map(localize_inventory_images))
         .map_err(|error| error.to_string())
@@ -1285,7 +1324,10 @@ fn reward_market_image_url(thumb: &str) -> String {
 
 fn component_image_file_name(remote_url: &str) -> Option<&str> {
     let file_name = remote_url.strip_prefix(WFCD_IMAGE_BASE_URL)?;
-    valid_image_file_name(file_name, "png").then_some(file_name)
+    ["png", "jpg", "jpeg"]
+        .iter()
+        .any(|extension| valid_image_file_name(file_name, extension))
+        .then_some(file_name)
 }
 
 fn valid_image_file_name(file_name: &str, extension: &str) -> bool {
@@ -1446,10 +1488,15 @@ fn component_image_response(
         component_image_file_name(&format!("{WFCD_IMAGE_BASE_URL}{path}"))
             .filter(|file_name| *file_name == path)
             .map(|file_name| {
+                let content_type = if file_name.to_ascii_lowercase().ends_with(".png") {
+                    "image/png"
+                } else {
+                    "image/jpeg"
+                };
                 (
                     format!("{WFCD_IMAGE_BASE_URL}{file_name}"),
                     file_name.to_owned(),
-                    "image/png",
+                    content_type,
                 )
             })
     };
@@ -1590,6 +1637,12 @@ fn valid_component_png(image: &[u8]) -> bool {
 fn valid_component_image(image: &[u8], content_type: &str) -> bool {
     match content_type {
         "image/png" => valid_component_png(image),
+        "image/jpeg" => {
+            image.len() >= 5
+                && image.len() <= MAX_COMPONENT_IMAGE_BYTES
+                && image.starts_with(&[0xFF, 0xD8, 0xFF])
+                && image.ends_with(&[0xFF, 0xD9])
+        }
         "image/webp" => {
             image.len() >= 12
                 && image.len() <= MAX_COMPONENT_IMAGE_BYTES
@@ -1640,6 +1693,9 @@ fn validate_app_settings(settings: &AppSettings) -> Result<(), &'static str> {
     }
     if !(70..=140).contains(&settings.reward_overlay_scale_percent) {
         return Err("reward overlay scale must be between 70 and 140 percent");
+    }
+    if !(70..=140).contains(&settings.relic_selection_overlay_scale_percent) {
+        return Err("relic selection overlay scale must be between 70 and 140 percent");
     }
     if !(-40..=40).contains(&settings.reward_overlay_offset_x_percent)
         || !(-40..=40).contains(&settings.reward_overlay_offset_y_percent)
@@ -2018,6 +2074,7 @@ pub fn run() {
                 reward_relic_paths: Mutex::new(HashSet::new()),
                 latest_reward_scan: Mutex::new(None),
                 reward_overlay_generation: AtomicU64::new(0),
+                relic_selection: Mutex::new(relic_selection_overlay::Runtime::default()),
                 data_directory,
                 _logging_guard: logging_guard,
             });
@@ -2028,6 +2085,7 @@ pub fn run() {
             spawn_game_log_watcher(app.handle().clone());
             inventory_refresh::spawn(app.handle().clone());
             reward_ocr::spawn_reward_realtime_watcher(app.handle().clone());
+            relic_selection_overlay::spawn(app.handle().clone());
             dbwin_capture::spawn_limit_check(app.handle().clone());
             squad::spawn(app.handle().clone());
             memory_recording::spawn(app.handle().clone());
@@ -2101,6 +2159,9 @@ pub fn run() {
             reward_ocr::scan_relic_rewards,
             reward_ocr::preview_reward_overlay,
             reward_ocr::latest_relic_rewards,
+            relic_selection_overlay::latest_relic_selection,
+            relic_selection_overlay::preview_relic_selection_overlay,
+            relic_selection_overlay::close_relic_selection_preview,
             price_current_variant,
             live_price_current_variant,
             market_history,
@@ -2114,6 +2175,7 @@ pub fn run() {
             load_mastery_plan,
             save_mastery_plan,
             set_inventory_keep_copies,
+            set_inventory_item_reserve,
             personal_goals,
             set_personal_goal,
             acknowledge_personal_goal_completions,
@@ -2142,6 +2204,7 @@ mod tests {
                 checksum_sha256: "inventory".into(),
             },
             keep_copies: 1,
+            reserve_account_key: None,
             mod_usage_scanned: true,
             summary: InventorySummary {
                 owned_quantity: 4,
@@ -2176,6 +2239,7 @@ mod tests {
                 equipped_quantity: 0,
                 equipped_placements: Vec::new(),
                 sellable_quantity,
+                keep_copies_override: None,
                 personal_reserved_quantity: 0,
                 resolution: InventoryResolution::Resolved,
                 vault_status: VaultStatus::Unknown,
@@ -2247,6 +2311,7 @@ mod tests {
             equipped_quantity: 0,
             equipped_placements: Vec::new(),
             sellable_quantity: quantity,
+            keep_copies_override: None,
             personal_reserved_quantity: 0,
             resolution: InventoryResolution::Resolved,
             vault_status: VaultStatus::Unknown,
@@ -2290,7 +2355,8 @@ mod tests {
     #[test]
     fn listing_validation_allows_keep_copies_but_protects_actual_stock() {
         let mut inventory = listing_inventory(0);
-        inventory.keep_copies = 10;
+        inventory.keep_copies = 1;
+        inventory.items[0].keep_copies_override = Some(10);
         assert!(
             validate_sell_listing_inventory(
                 &listing_intent(4, 1),

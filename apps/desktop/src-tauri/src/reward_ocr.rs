@@ -192,11 +192,11 @@ pub(crate) struct RelicRewardScanView {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct WarframeWindowRect {
-    x: i32,
-    y: i32,
-    width: u32,
-    height: u32,
+pub(crate) struct WarframeWindowRect {
+    pub(crate) x: i32,
+    pub(crate) y: i32,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1222,7 +1222,7 @@ fn reward_overlay_offset(dimension: u32, percent: i16) -> i64 {
     i64::from(dimension).saturating_mul(i64::from(percent)) / 100
 }
 
-async fn warframe_window_rect(app: &AppHandle) -> Result<WarframeWindowRect, String> {
+pub(crate) async fn warframe_window_rect(app: &AppHandle) -> Result<WarframeWindowRect, String> {
     let executable = find_reward_ocr_executable(app)?;
     let mut command = tokio::process::Command::new(&executable);
     command
@@ -1506,6 +1506,12 @@ pub(crate) fn spawn_reward_realtime_watcher(app_handle: AppHandle) {
             let Ok(event) = serde_json::from_str::<RewardTriggerEvent>(&line) else {
                 continue;
             };
+            if event.event_type == "relic_selection" {
+                if let Ok(trigger) = serde_json::from_str(&line) {
+                    crate::relic_selection_overlay::handle_trigger(&app_handle, trigger);
+                }
+                continue;
+            }
             handle_reward_trigger_event(&app_handle, event);
         }
 
@@ -1513,6 +1519,7 @@ pub(crate) fn spawn_reward_realtime_watcher(app_handle: AppHandle) {
             .state::<AppState>()
             .reward_realtime_active
             .store(false, Ordering::Release);
+        crate::relic_selection_overlay::stop(&app_handle);
         if let Ok(mut recorder) = app_handle.state::<AppState>().dbwin_capture.lock() {
             recorder.disconnected();
         }
@@ -1592,6 +1599,8 @@ fn handle_reward_trigger_event(app_handle: &AppHandle, event: RewardTriggerEvent
             }
         }
         "reward" => {
+            crate::relic_selection_overlay::close(app_handle);
+            app_handle.state::<AppState>().inventory_refresh.after_relic_round();
             tracing::info!(
                 event = "relic_reward_screen_detected_realtime",
                 source = event.source.as_deref().unwrap_or("dbwin"),

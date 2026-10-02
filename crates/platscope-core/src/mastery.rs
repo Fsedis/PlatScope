@@ -174,7 +174,7 @@ impl MasteryService {
             .filter(|snapshot| snapshot.metadata.checksum_sha256 == cache.inventory_checksum)
             .and_then(|_| cache.accounts.get(&cache.active_account));
         let account = history
-            .filter(|history| history.observed_at.is_some())
+            .filter(|history| history.observed_at.is_some() || history.owned_equipment.is_some())
             .map(|history| PlannerAccount {
                 key: cache.active_account.clone(),
                 owned_equipment: history

@@ -43,6 +43,7 @@ mod tests {
             equipped_placements: vec![],
             sellable_quantity: 2,
             personal_reserved_quantity: 0,
+            keep_copies_override: None,
             resolution: InventoryResolution::Resolved,
             vault_status: VaultStatus::Unknown,
         }

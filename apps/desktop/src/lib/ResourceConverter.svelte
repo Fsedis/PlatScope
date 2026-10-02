@@ -79,11 +79,6 @@
       showAll: "Показать весь список",
       showLess: "Свернуть список",
       noArcaneActions: "Лишних мистификаторов для сравнения не найдено.",
-      methodology: "Что вошло в расчёт",
-      methodologyBody: "Прямая продажа учитывается только при свежей цене и доступном количестве. Ассортимент Норы загружается отдельно при смене ротации и сохраняется до её окончания. Для загрузки нужна запущенная Warframe; автообновление включается в «Моих предметах». Если получить ассортимент не удалось, вариант Ночной волны не входит в итог. Восфор считается по ожидаемой цене лучшего набора Лойда. Если для мистификатора есть только ордера продавцов без завершённых сделок, их цена уменьшается на 30%, чтобы не завышать результат.",
-      inventoryDate: "Инвентарь",
-      marketDate: "Рынок",
-      worldstateDate: "Продавцы",
     },
     en: {
       eyebrow: "Resource converter",
@@ -122,11 +117,6 @@
       showAll: "Show the full list",
       showLess: "Collapse list",
       noArcaneActions: "No spare Arcanes were found for comparison.",
-      methodology: "What is included",
-      methodologyBody: "Direct sales are included only with a fresh price and available quantity. Nora’s stock is fetched separately when its rotation changes and is cached until it ends. Warframe must be running; automatic updates can be enabled in My items. If the stock cannot be retrieved, Nightwave is excluded from the total. Vosfor is based on the expected value of Loid’s best pack. Sell-only Arcane prices without completed trades receive a 30% haircut so the result is not overstated.",
-      inventoryDate: "Inventory",
-      marketDate: "Market",
-      worldstateDate: "Vendors",
     },
   } as const;
   $: c = copy[$locale];
@@ -401,15 +391,6 @@
     </article>
 
     <div class="action-status" role="status" aria-live="polite">{actionStatus}</div>
-    <details class="converter-method">
-      <summary>{c.methodology}</summary>
-      <p>{c.methodologyBody}</p>
-      <dl>
-        <div><dt>{c.inventoryDate}</dt><dd>{formatDate(view.inventoryObservedAt, $locale)}</dd></div>
-        <div><dt>{c.marketDate}</dt><dd>{view.marketSourceDate ?? "—"}</dd></div>
-        <div><dt>{c.worldstateDate}</dt><dd>{formatDate(view.fetchedAt, $locale)}</dd></div>
-      </dl>
-    </details>
   {/if}
 </section>
 
@@ -485,14 +466,6 @@
   .hold-note strong { color: var(--text); }
   .show-all { margin-block-start: .55rem; min-height: 1.9rem; padding: .3rem .55rem; font-size: .66rem; }
   .action-status { min-height: 1rem; padding-inline: .75rem; color: var(--success); font-size: .68rem; font-weight: 700; }
-  .converter-method { border-block-start: 1px solid var(--border); padding-inline: .75rem; }
-  .converter-method summary { min-height: 2rem; padding-block: .4rem; color: var(--accent-strong); cursor: pointer; font-size: .68rem; font-weight: 700; }
-  .converter-method > p { max-width: 90ch; margin-block-end: .5rem; color: var(--text-muted); font-size: .68rem; line-height: 1.4; }
-  .converter-method dl { display: flex; flex-wrap: wrap; gap: .35rem 1rem; margin: 0 0 .6rem; }
-  .converter-method dl div { display: flex; gap: .3rem; }
-  .converter-method dt, .converter-method dd { margin: 0; font-size: .68rem; }
-  .converter-method dt { color: var(--text-muted); }
-  .converter-method dd { font-weight: 700; font-variant-numeric: tabular-nums; }
   @media (max-width: 54rem) {
     .converter__summary, .arcane-card__header { align-items: stretch; flex-direction: column; }
     .expected-value { flex-basis: auto; border-inline-start: 0; border-block-start: 1px solid var(--border-strong); padding: .65rem 0 0; }

@@ -161,6 +161,14 @@ impl Queue {
         }
     }
 
+    fn after_relic_round(&mut self, now: u64) {
+        if self.enabled {
+            let due = now.saturating_add(3_000);
+            self.settle_until = self.settle_until.max(due);
+            self.pending = Some(self.pending.map_or(due, |pending| pending.min(due)));
+        }
+    }
+
     fn signal(&mut self, marker: Marker, now: u64) {
         let delay = match marker {
             Marker::Loading => {
@@ -353,6 +361,11 @@ impl InventoryRefreshService {
 
     pub(crate) fn feed(&self, chunk: &str) {
         self.queue().feed(chunk, self.now());
+    }
+    /// Свежий серверный остаток нужен также между раундами бесконечного разлома.
+    /// Сохраняем общую паузу, запрет чтения при загрузке и выключенное автообновление.
+    pub(crate) fn after_relic_round(&self) {
+        self.queue().after_relic_round(self.now());
     }
     pub(crate) fn reset_log(&self) {
         self.queue().reset_log();
@@ -584,6 +597,24 @@ mod tests {
         q.finish_inventory(true, 3_000, epoch);
         assert_eq!(next(&q, 30_999), None);
         assert_eq!(next(&q, 31_000), Some(Job::Inventory));
+
+        let mut q = queue();
+        q.set_enabled(false, 0);
+        q.after_relic_round(0);
+        assert!(q.pending.is_none());
+        assert_eq!(next(&q, 100_000), None);
+        q.set_enabled(true, 1_000);
+        q.loading = true;
+        q.after_relic_round(2_000);
+        assert!(q.pending.is_some());
+        assert_eq!(next(&q, 100_000), None);
+        q.loading = false;
+        let epoch = q.start(Job::Inventory, 6_000);
+        q.after_relic_round(7_000);
+        assert_eq!(next(&q, 100_000), None);
+        q.finish_inventory(true, 8_000, epoch);
+        assert_eq!(next(&q, 35_999), None);
+        assert_eq!(next(&q, 36_000), Some(Job::Inventory));
     }
 
     #[test]

@@ -538,6 +538,7 @@ mod tests {
             equipped_placements: vec![],
             sellable_quantity: 10,
             personal_reserved_quantity: 2,
+            keep_copies_override: None,
             resolution: platscope_domain::InventoryResolution::UnknownItem,
             vault_status: platscope_domain::VaultStatus::Unknown,
         });

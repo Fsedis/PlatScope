@@ -137,7 +137,7 @@ describe("управление продажами и заявками на по�
     expect(reviewedChanges([empty])).toEqual([]);
   });
 
-  it("разрешает выставить последнюю копию после предупреждения вместо запрета", () => {
+  it("разрешает затронуть общий или индивидуальный запас после предупреждения вместо запрета", () => {
     const stock = inventory(1);
     stock.keepCopies = 1;
     stock.items[0].sellableQuantity = 0;
@@ -147,6 +147,19 @@ describe("управление продажами и заявками на по�
     expect(listingReserveWarning(row.inventory, 1)).toContain("Оставлять копий");
     expect(row.health).not.toBe("inventory_mismatch");
     expect(row.suggestedQuantity).toBeNull();
+
+    const individual = inventory(10);
+    individual.keepCopies = 1;
+    Object.assign(individual.items[0], { keepCopiesOverride: 5, sellableQuantity: 5 });
+    individual.items.push({ ...individual.items[0], canonicalGameId: "Primary Deadhead rank 1", key: { ...key, rank: 1 }, rank: 1, keepCopiesOverride: null, ownedQuantity: 2, tradeableQuantity: 2, sellableQuantity: 1 });
+    const selected = buildTradeShiftRows(account([order("custom", "sell", { quantity: 6, perTrade: null })]), individual, quotes())[0];
+    expect(selected.inventory?.sellableQuantity).toBe(5);
+    expect(inventoryListingQuantity(selected.inventory)).toBe(10);
+    expect(listingReserveWarning(selected.inventory, 5)).toBeNull();
+    expect(listingReserveWarning(selected.inventory, 6)).not.toBeNull();
+    expect(validateListingNumbers(10, 6, null, "ru", inventoryListingQuantity(selected.inventory))).toBeNull();
+    expect(selected.health).not.toBe("inventory_mismatch");
+    expect(selected.suggestedQuantity).toBeNull();
   });
 
   it("учитывает другие объявления в пределе и предупреждает только при использовании резерва", () => {
@@ -165,7 +178,7 @@ describe("управление продажами и заявками на по�
 
   it("не снимает защиту надетых копий, личных целей и неопределённых вариантов", () => {
     const item = inventory(6).items[0];
-    Object.assign(item, { tradeableQuantity: 4, untradeableQuantity: 1, unknownQuantity: 1, equippedQuantity: 1, personalReservedQuantity: 2 });
+    Object.assign(item, { keepCopiesOverride: 0, tradeableQuantity: 4, untradeableQuantity: 1, unknownQuantity: 1, equippedQuantity: 1, personalReservedQuantity: 2 });
     expect(inventoryListingQuantity(item)).toBe(2);
     expect(inventoryListingQuantity({ ...item, resolution: "ambiguous_item" })).toBe(0);
     expect(listingReserveWarning(inventory(4).items[0], 4)).toBeNull();

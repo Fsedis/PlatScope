@@ -30,15 +30,18 @@ import type {
   LivePricingResult,
   MarketSearchResult,
   MarketSearchRow,
+  MarketVariantKey,
   PriceConfidence,
 } from "./market";
 import type { LiveSellNowResult, SellNowRow, SellNowView } from "./sellNow";
 import type { RelicRewardScanView } from "./relicRewards";
+import type { RelicSelectionView } from "./relicSelection";
 import type { ResourceConverterView } from "./resourceConverter";
 import { makeBountyHunterMock } from "./bountyHunterMock";
 import {
   isSaleTrade,
   planTradeReconciliation,
+  recommendationIdentity,
   type TradeEvent,
   type TradeReconciliationAction,
 } from "./tradeShift";
@@ -55,6 +58,7 @@ const snapshot = {
 };
 
 let inventory: InventoryView = {
+  reserveAccountKey: "mock-warframe-account",
   metadata: {
     source: "test_fixture",
     observedAt: "2026-08-27T08:30:00Z",
@@ -195,6 +199,33 @@ let tradeEvents: TradeEvent[] = [
 ];
 let nextEventListener = 1;
 let appSettings: AppSettings = { ...DEFAULT_APP_SETTINGS };
+const itemReserves = new Map<string, number>();
+
+function mockReserveKey(key: MarketVariantKey, accountKey = inventory.reserveAccountKey): string {
+  return `${accountKey ?? ""}|${recommendationIdentity(key)}`;
+}
+
+/** Один резерв на точный вариант, даже если снимок содержит несколько строк экземпляров. */
+function recalculateMockInventory(view: InventoryView): InventoryView {
+  const items = view.items.map(item => ({ ...item, keepCopiesOverride: item.key ? itemReserves.get(mockReserveKey(item.key, view.reserveAccountKey)) ?? null : null, sellableQuantity: 0 }));
+  const groups = new Map<string, InventoryViewItem[]>();
+  for (const item of items) {
+    if (!item.key || item.resolution !== "resolved" || (!view.modUsageScanned && item.tags.includes("mod"))) continue;
+    const identity = recommendationIdentity(item.key);
+    const group = groups.get(identity) ?? [];
+    group.push(item);
+    groups.set(identity, group);
+  }
+  for (const group of groups.values()) {
+    const owned = group.reduce((sum, item) => sum + item.ownedQuantity, 0);
+    const protectedQuantity = group.reduce((sum, item) => sum + item.untradeableQuantity + item.unknownQuantity + item.equippedQuantity, 0);
+    const limits = group.map(item => Math.max(0, Math.min(item.ownedQuantity - item.untradeableQuantity - item.unknownQuantity - item.equippedQuantity,
+      item.tradeableQuantity - item.equippedQuantity, item.tradeableQuantity - (item.personalReservedQuantity ?? 0))));
+    let remaining = Math.min(limits.reduce((sum, value) => sum + value, 0), Math.max(0, owned - Math.max(group[0].keepCopiesOverride ?? view.keepCopies, protectedQuantity)));
+    group.forEach((item, index) => { item.sellableQuantity = Math.min(limits[index], remaining); remaining -= item.sellableQuantity; });
+  }
+  return { ...view, items, summary: { ...view.summary, ownedQuantity: items.reduce((sum, item) => sum + item.ownedQuantity, 0), sellableQuantity: items.reduce((sum, item) => sum + item.sellableQuantity, 0), resolvedRows: items.filter(item => item.resolution === "resolved").length, attentionRows: items.filter(item => item.resolution !== "resolved").length } };
+}
 
 const englishNames: Record<string, string> = {
   nyx_prime_set: "Nyx Prime Set",
@@ -284,7 +315,7 @@ function localizeInventoryItem(item: InventoryViewItem): InventoryViewItem {
 }
 
 function localizeInventoryView(view: InventoryView): InventoryView {
-  return { ...view, items: view.items.map(localizeInventoryItem) };
+  return recalculateMockInventory({ ...view, items: view.items.map(localizeInventoryItem) });
 }
 
 function connectedDemoAccount(): AccountView {
@@ -340,6 +371,7 @@ export async function installMarketBrowserMock(): Promise<void> {
   const dbwinCaptureMock = makeDbwinCaptureMock(mockOptions.get("mockDbwin"));
   let inventoryRefreshEnabled = true;
   let inventoryPriceChecks = 0;
+  let relicPreview: RelicSelectionView | null = null;
   let accountReads = 0;
   let presenceStatus = "invisible";
   let mutationReads = 0;
@@ -449,7 +481,7 @@ export async function installMarketBrowserMock(): Promise<void> {
       if (mockOptions.get("mockSettingsError") === "1") throw new Error("test storage unavailable");
       const next = (args as { settings?: AppSettings })?.settings;
       if (!next) throw new Error("settings are required");
-      appSettings = { ...next };
+      appSettings = { ...DEFAULT_APP_SETTINGS, ...next };
       return null;
     }
     if (command === "foundation_status") {
@@ -689,6 +721,14 @@ export async function installMarketBrowserMock(): Promise<void> {
         reconciliationJson: null,
       } : event);
       return true;
+    }
+    if (command === "close_relic_selection_preview") { relicPreview = null; return true; }
+    if (command === "latest_relic_selection" || command === "preview_relic_selection_overlay") {
+      if (command === "preview_relic_selection_overlay") {
+        const previewSettings = (args as {settings?:AppSettings})?.settings ?? appSettings;
+        relicPreview = {status:"needs_data",message:null,missionName:null,era:null,inventoryAvailable:false,selected:null,selectedRelicName:null,selectedRemainingQuantity:null,selectedRefinementKnown:false,recommendations:[],openedThisSession:0,lastOpenedRelicName:null,overlayScale:previewSettings.relic_selection_overlay_scale_percent / 100,preview:true};
+      }
+      return relicPreview;
     }
     if (
       command === "scan_relic_rewards"
@@ -1149,25 +1189,17 @@ export async function installMarketBrowserMock(): Promise<void> {
     }
     if (command === "set_inventory_keep_copies") {
       const keepCopies = Number((args as { keepCopies?: number })?.keepCopies ?? 1);
-      const items = inventory.items.map((item) => ({
-        ...item,
-        sellableQuantity:
-          item.resolution === "resolved" && item.unknownQuantity === 0
-            ? Math.min(
-                Math.max(0, item.tradeableQuantity - item.equippedQuantity),
-                Math.max(0, item.ownedQuantity - Math.max(keepCopies, item.untradeableQuantity + item.equippedQuantity)),
-              )
-            : 0,
-      }));
-      inventory = {
-        ...inventory,
-        keepCopies,
-        items,
-        summary: {
-          ...inventory.summary,
-          sellableQuantity: items.reduce((sum, item) => sum + item.sellableQuantity, 0),
-        },
-      };
+      if (!Number.isInteger(keepCopies) || keepCopies < 0 || keepCopies > 10) throw new Error("invalid reserve");
+      inventory = { ...inventory, keepCopies };
+      return localizeInventoryView(inventory);
+    }
+    if (command === "set_inventory_item_reserve") {
+      const {key,keepCopies,expectedInventoryChecksum,expectedReserveAccountKey} = args as {key:MarketVariantKey;keepCopies:number|null;expectedInventoryChecksum:string;expectedReserveAccountKey:string|null};
+      if (!key || expectedInventoryChecksum !== inventory.metadata.checksumSha256 || !expectedReserveAccountKey || expectedReserveAccountKey !== inventory.reserveAccountKey) throw new Error("inventory account changed");
+      if (keepCopies !== null && (!Number.isInteger(keepCopies) || keepCopies < 0 || keepCopies > 9999)) throw new Error("invalid reserve");
+      if (!localizeInventoryView(inventory).items.some(item => item.key && item.resolution === "resolved" && recommendationIdentity(item.key) === recommendationIdentity(key))) throw new Error("exact variant unavailable");
+      if (keepCopies === null) itemReserves.delete(mockReserveKey(key));
+      else itemReserves.set(mockReserveKey(key), keepCopies);
       return localizeInventoryView(inventory);
     }
     throw new Error(`Unknown mock command: ${command}`);
@@ -1470,7 +1502,7 @@ function makeInsightsView(): InsightsView {
 }
 
 function makeSellNowView(): SellNowView {
-  const scopedInventory = localizeInventoryView(inventory);
+  let scopedInventory = localizeInventoryView(inventory);
   // Изолированные сценарии проверки длинного списка; настоящие данные пользователя не используются.
   const scenario = new URLSearchParams(window.location.search).get("mockInventory");
   if (scenario === "empty") scopedInventory.items = [];
@@ -1490,11 +1522,12 @@ function makeSellNowView(): SellNowView {
       if (item.untradeableQuantity + item.unknownQuantity > item.ownedQuantity) item.unknownQuantity = 0;
       item.tradeableQuantity = Math.max(0, item.ownedQuantity - item.untradeableQuantity - item.unknownQuantity);
       item.equippedQuantity = Math.min(item.equippedQuantity, item.tradeableQuantity);
-      item.sellableQuantity = Math.max(0, Math.min(item.tradeableQuantity - item.equippedQuantity, item.ownedQuantity - Math.max(inventory.keepCopies, item.untradeableQuantity + item.unknownQuantity + item.equippedQuantity)));
+      item.sellableQuantity = Math.max(0, Math.min(item.tradeableQuantity - item.equippedQuantity, item.ownedQuantity - Math.max(item.keepCopiesOverride ?? inventory.keepCopies, item.untradeableQuantity + item.unknownQuantity + item.equippedQuantity)));
       if (index % 17 === 0) { item.key = null; item.resolution = "exact_variant_unavailable"; item.sellableQuantity = 0; }
       return item;
     });
   }
+  if (scenario === "reserved" || scenario === "large") scopedInventory = recalculateMockInventory(scopedInventory);
   const sellRows = scopedInventory.items
     .map((item): SellNowRow => {
       const marketRow = rows.find((candidate) => candidate.recommendation.key.slug === item.key?.slug);
@@ -1557,6 +1590,7 @@ function makeSellNowView(): SellNowView {
   }
   return {
     inventoryMetadata: scopedInventory.metadata,
+    reserveAccountKey: scopedInventory.reserveAccountKey,
     inventorySummary: scopedInventory.summary,
     keepCopies: scopedInventory.keepCopies,
     modUsageScanned: scopedInventory.modUsageScanned,

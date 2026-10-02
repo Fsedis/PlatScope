@@ -289,14 +289,20 @@ fn normalize_read_only_payload(
 }
 
 fn read_only_credits(root: &serde_json::Map<String, Value>) -> Result<Option<u64>, InventoryError> {
-    let Some(value) = root.get("Credits") else {
+    // В ответе DE баланс кредитов хранится в RegularCredits. Credits оставлен
+    // только для старых ответов: неверный новый баланс нельзя заменить старым.
+    let (field, value) = if let Some(value) = root.get("RegularCredits") {
+        ("RegularCredits", value)
+    } else if let Some(value) = root.get("Credits") {
+        ("Credits", value)
+    } else {
         return Ok(None);
     };
     let credits = value
         .as_u64()
-        .ok_or(InventoryError::InvalidInventoryField("Credits"))?;
+        .ok_or(InventoryError::InvalidInventoryField(field))?;
     if credits > MAX_WALLET_AMOUNT {
-        return Err(InventoryError::InvalidInventoryField("Credits"));
+        return Err(InventoryError::InvalidInventoryField(field));
     }
     Ok(Some(credits))
 }
@@ -2182,7 +2188,10 @@ mod tests {
                 ],
                 "Suits": [{"ItemType":"/Lotus/Test/LeveledSuit","XP":15}],
                 "LoadOutPresets": [{"ItemType":"/Lotus/Interface/Graphics/CustomUI/StalkerStyle"}],
-                "Credits": 1234567,
+                "RegularCredits": 1234567,
+                "Credits": 999,
+                "PremiumCredits": 888,
+                "PremiumCreditsFree": 777,
                 "Affiliations": [
                     {"Tag":"CephalonSudaSyndicate","Standing":42000,"Title":"Genius"},
                     {"Tag":"RedVeilSyndicate","Standing":-5000}
@@ -2217,6 +2226,49 @@ mod tests {
         assert_eq!(parsed.syndicates.len(), 2);
         assert_eq!(parsed.syndicates[0].tag, "CephalonSudaSyndicate");
         assert_eq!(parsed.syndicates[0].title.as_deref(), Some("Genius"));
+
+        let mut response: Value = serde_json::from_str(raw).unwrap();
+        response["Inventory"]["RegularCredits"] = serde_json::json!(0);
+        assert_eq!(
+            parse_read_only_scan_json(&response.to_string())
+                .unwrap()
+                .credits,
+            Some(0)
+        );
+        for invalid in [
+            Value::Null,
+            serde_json::json!(-1),
+            serde_json::json!(1.5),
+            serde_json::json!("1234567"),
+            serde_json::json!(MAX_WALLET_AMOUNT + 1),
+        ] {
+            response["Inventory"]["RegularCredits"] = invalid;
+            // Остальной инвентарь пригоден, но покупки нельзя рассчитывать
+            // по неизвестному балансу или запасному устаревшему полю Credits.
+            let parsed = parse_read_only_scan_json(&response.to_string()).unwrap();
+            assert_eq!(parsed.items.len(), 5);
+            assert_eq!(parsed.credits, None);
+        }
+        response["Inventory"]
+            .as_object_mut()
+            .unwrap()
+            .remove("RegularCredits");
+        assert_eq!(
+            parse_read_only_scan_json(&response.to_string())
+                .unwrap()
+                .credits,
+            Some(999)
+        );
+        response["Inventory"]
+            .as_object_mut()
+            .unwrap()
+            .remove("Credits");
+        assert_eq!(
+            parse_read_only_scan_json(&response.to_string())
+                .unwrap()
+                .credits,
+            None
+        );
     }
 
     #[test]

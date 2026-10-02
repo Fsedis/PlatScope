@@ -78,6 +78,11 @@ internal static partial class Program
                 }, JsonOptions));
                 return 0;
             }
+            if (args.FirstOrDefault() == "--scan-relic-preparation")
+            {
+                return RunRelicPreparationImageScan(args.ElementAtOrDefault(1)
+                    ?? throw new InvalidDataException("Screenshot path is missing."));
+            }
             if (args.FirstOrDefault() == "--self-test-trigger")
             {
                 return RunRewardTriggerRegression() ? 0 : 3;
@@ -432,6 +437,45 @@ internal static partial class Program
         }
     }
 
+    internal static void RunRelicPreparationFallback(int parentProcessId, RelicSelectionWatcher selection)
+    {
+        RelicPreparationOcr? scanner = null;
+        var nextRecoveryAt = DateTimeOffset.MinValue;
+        try
+        {
+            while (IsProcessRunning(parentProcessId))
+            {
+                Thread.Sleep(700);
+                if (!NativeMethods.TryGetWarframeForegroundProcessId(out var foregroundProcessId)) continue;
+                var recovery = false;
+                if (!selection.TryGetPreparationContext(out var processId, out var generation)
+                    || processId != foregroundProcessId)
+                {
+                    if (DateTimeOffset.UtcNow < nextRecoveryAt) continue;
+                    nextRecoveryAt = DateTimeOffset.UtcNow.AddSeconds(2);
+                    if (!selection.TryGetPreparationRecoveryContext(foregroundProcessId, out generation)) continue;
+                    processId = foregroundProcessId;
+                    recovery = true;
+                }
+                try
+                {
+                    scanner ??= new RelicPreparationOcr();
+                    using var screenshot = CaptureWarframeWindow();
+                    var reading = scanner.Scan(screenshot);
+                    if (reading is not null)
+                        selection.ObservePreparation(processId, generation, reading, recovery);
+                    else if (!recovery) selection.ObservePreparationNotVisible(processId, generation);
+                }
+                catch (Exception)
+                {
+                    // Изменение разрешения, сворачивание и закрытие игры между
+                    // проверкой и кадром не останавливают основной DBWIN-слушатель.
+                }
+            }
+        }
+        finally { scanner?.Dispose(); }
+    }
+
     private static IReadOnlyList<CatalogCandidate> BuildCandidates(IEnumerable<CatalogItem> catalog) =>
         catalog
             .Where(item => !string.IsNullOrWhiteSpace(item.Name))
@@ -542,7 +586,7 @@ internal static partial class Program
         return 1.0;
     }
 
-    private static Bitmap CaptureWarframeWindow()
+    internal static Bitmap CaptureWarframeWindow()
     {
         var bounds = FindWarframeWindowBounds();
         var bitmap = new Bitmap(bounds.Width, bounds.Height, PixelFormat.Format32bppArgb);
@@ -1065,8 +1109,11 @@ internal static class NativeMethods
 
     internal static void EmitDebugLine(string line) => OutputDebugStringW(line);
 
-    internal static bool IsWarframeForeground()
+    internal static bool IsWarframeForeground() => TryGetWarframeForegroundProcessId(out _);
+
+    internal static bool TryGetWarframeForegroundProcessId(out int sourceProcessId)
     {
+        sourceProcessId = 0;
         var handle = GetForegroundWindow();
         if (handle == IntPtr.Zero) return false;
         _ = GetWindowThreadProcessId(handle, out var processId);
@@ -1074,13 +1121,19 @@ internal static class NativeMethods
         try
         {
             using var process = Process.GetProcessById((int)processId);
-            return process.ProcessName.Contains("Warframe", StringComparison.OrdinalIgnoreCase);
+            if (!process.ProcessName.Contains("Warframe", StringComparison.OrdinalIgnoreCase)) return false;
+            sourceProcessId = process.Id;
+            return true;
         }
         catch (ArgumentException)
         {
             return false;
         }
         catch (InvalidOperationException)
+        {
+            return false;
+        }
+        catch (System.ComponentModel.Win32Exception)
         {
             return false;
         }
@@ -1206,6 +1259,14 @@ internal static class DbwinRewardWatcher
         }
 
         var watcherState = new RewardWatcherState();
+        var relicSelection = new RelicSelectionWatcher(watcherState.Emit);
+        var preparationThread = new Thread(() => Program.RunRelicPreparationFallback(parentProcessId, relicSelection))
+        {
+            IsBackground = true,
+            Name = "PlatScope relic preparation OCR",
+            Priority = ThreadPriority.BelowNormal,
+        };
+        preparationThread.Start();
         Thread? visualThread = null;
         if (watcherRequest is { Catalog.Count: > 0 })
         {
@@ -1235,6 +1296,7 @@ internal static class DbwinRewardWatcher
         {
             while (ParentIsRunning(parentProcessId))
             {
+                relicSelection.ObserveVisibility(NativeMethods.IsWarframeForeground());
                 if (WaitForSingleObject(data, WaitTimeoutMs) != WaitObject0)
                 {
                     continue;
@@ -1251,6 +1313,7 @@ internal static class DbwinRewardWatcher
                 var length = Array.IndexOf(bytes, (byte)0);
                 if (length <= 0) continue;
                 var line = Encoding.UTF8.GetString(bytes, 0, length);
+                relicSelection.Observe(sourceProcessId, line);
                 // Передаём только сообщения разрешённого процесса. Родитель сохраняет их
                 // исключительно во время явно запущенной диагностической сессии.
                 if (forwardDebugLines)

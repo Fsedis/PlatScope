@@ -49,6 +49,7 @@ export interface SellNowSummary {
 
 export interface SellNowView {
   inventoryMetadata: InventorySnapshotMetadata;
+  reserveAccountKey?: string | null;
   inventorySummary: InventorySummary;
   keepCopies: number;
   modUsageScanned: boolean;

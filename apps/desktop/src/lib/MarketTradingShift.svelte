@@ -2,6 +2,7 @@
   import MarketOrderTable from "./MarketOrderTable.svelte";
   import MarketPresence from "./MarketPresence.svelte";
   import KeepCopiesControl from "./KeepCopiesControl.svelte";
+  import ItemReserveControl from "./ItemReserveControl.svelte";
   import MarketOrderPrices from "./MarketOrderPrices.svelte";
   import MarketOrderInsight from "./MarketOrderInsight.svelte";
   import MarketTradeHistory from "./MarketTradeHistory.svelte";
@@ -54,6 +55,8 @@
   let account: AccountView | null = null;
   let inventory: InventoryView | null = null;
   let reserveUpdating = false;
+  let itemReserveUpdating = false;
+  let inventoryRevision = 0;
   let events: TradeEvent[] = [];
   let tradeSales: TradeSalesSummary = { saleCount: 0, platinumReceived: 0 };
   let recommendations = new Map<string, PriceRecommendation | null>();
@@ -119,6 +122,7 @@
     } finally { clearTimeout(timer!); }
   }
   async function openBatch(event: MouseEvent): Promise<void> {
+    if (reserveUpdating || itemReserveUpdating) return;
     batchTrigger = event.currentTarget as HTMLElement;
     errorMessage = "";
     reviewed = reviewedChanges(selectedRows);
@@ -127,6 +131,7 @@
     batchDialog.showModal();
   }
   async function confirmVisibility(visible: boolean, scope: "all" | "selected" = "selected"): Promise<void> {
+    if (reserveUpdating || itemReserveUpdating) return;
     errorMessage = "";
     visibilityIntent = visible;
     visibilityScope = scope;
@@ -150,6 +155,7 @@
   }
   function changeError(error: unknown): string {
     const message = String(error);
+    if (message.includes("Резерв или инвентарь изменились")) return "Резерв или инвентарь изменились. Проверьте количество и подтвердите действие заново.";
     if (message.includes("Объявления изменились") || message.includes("Объявление уже изменилось")) return "Объявления изменились. Закройте окно и проверьте новые данные перед сохранением.";
     if (message.includes("Остатки изменились")) return "Остатки изменились или недоступны. Закройте окно и обновите список перед сохранением.";
     return accountActionErrorMessage(message);
@@ -168,6 +174,32 @@
     batchTrigger?.focus({ preventScroll: true });
   }
 
+  function invalidateInventoryConfirmations(): void {
+    ++inventoryRevision;
+    if (applying) return;
+    const pending = reviewOpen || visibilityIntent !== null || !!reserveDialog?.open;
+    if (reviewOpen) closeBatchReview();
+    if (visibilityIntent !== null) { visibilityDialog?.close(); visibilityIntent = null; }
+    reserveDialog?.close();
+    reserveWarning = "";
+    if (pending) editError = "Резерв или инвентарь изменились. Проверьте количество и подтвердите действие заново.";
+  }
+
+  function inventoryRevisionKey(value: InventoryView | null): string {
+    return JSON.stringify(value && [value.reserveAccountKey, value.metadata.checksumSha256, value.keepCopies,
+      value.items.map(item => [item.key, item.keepCopiesOverride ?? null, item.sellableQuantity, item.listingQuantity, item.personalReservedQuantity])]);
+  }
+
+  function replaceInventory(value: InventoryView | null): void {
+    if (inventoryRevisionKey(value) !== inventoryRevisionKey(inventory)) invalidateInventoryConfirmations();
+    inventory = value;
+  }
+
+  async function reserveSaved(): Promise<void> {
+    invalidateInventoryConfirmations();
+    await loadInventoryAndPrices();
+  }
+
   $: rows = account
     ? applyPriceCheckFailures(
         buildTradeShiftRows(account, inventory, recommendations, new Date(), orderType),
@@ -177,6 +209,9 @@
     : [];
   $: visibleRows = sortSalesRows(salesFilterRows(filterTradeShiftRows(rows, orderQuery), orderFilter), orderSort, analytics);
   $: editingRow = rows.find(row => row.order.id === editingOrder?.id) ?? null;
+  $: editableReserveItem = editingRow?.key && inventory
+    ? inventory.items.find(item => item.resolution === "resolved" && item.key && recommendationIdentity(item.key) === recommendationIdentity(editingRow.key!)) ?? null
+    : null;
   $: editorDirty = !!editingOrder && (editPlatinum !== editingOrder.platinum || editQuantity !== editingOrder.quantity || editVisible !== editingOrder.visible || editPerTrade !== editOriginalPerTrade);
   $: if (!applying && !loading && !editorDirty && !reviewOpen && !orderToRemove && view === "orders") synchronizeEditor(visibleRows, editingOrder);
 
@@ -248,7 +283,7 @@
         void loadAll();
       }),
       listen("trade-reconciliation-failed", () => void loadEvents()),
-      listen("inventory-updated", () => void loadInventoryAndPrices()),
+      listen("inventory-updated", () => { invalidateInventoryConfirmations(); void loadInventoryAndPrices(); }),
       listen("market-data-updated", () => void loadSavedPrices()),
     ]).then((items) => {
       if (disposed) items.forEach((unlisten) => unlisten());
@@ -290,7 +325,7 @@
         if (account) setAccountView(account);
         errorMessage = "Не удалось обновить объявления Warframe Market. Повторите загрузку.";
       }
-      inventory = inventoryResult.status === "fulfilled" ? inventoryResult.value : null;
+      replaceInventory(inventoryResult.status === "fulfilled" ? inventoryResult.value : null);
       if (eventsResult.status === "fulfilled") events = eventsResult.value;
       if (summaryResult.status === "fulfilled") tradeSales = summaryResult.value;
       if (inventoryResult.status === "rejected") dataMessage = "Не удалось проверить остатки. Количество в объявлениях пока не сравниваем.";
@@ -302,8 +337,12 @@
   }
 
   async function loadInventoryAndPrices(): Promise<void> {
+    const requestedRevision = ++dataRevision;
+    const requestedContext = priceContext;
     try {
-      inventory = await read<InventoryView | null>("load_inventory");
+      const updated = await read<InventoryView | null>("load_inventory");
+      if (disposed || requestedRevision !== dataRevision || requestedContext !== priceContext) return;
+      replaceInventory(updated);
       await loadSavedPrices();
     } catch {
       actionMessage = "Инвентарь обновился, но сверить ордера не удалось.";
@@ -434,7 +473,8 @@
   }
 
   async function applySelectedChanges(): Promise<void> {
-    if (!account || !reviewed.length || applying) return;
+    if (!account || !reviewed.length || applying || reserveUpdating || itemReserveUpdating) return;
+    const expectedInventoryRevision = inventoryRevision;
     applying = true;
     errorMessage = "";
     let completed = 0;
@@ -442,14 +482,16 @@
       const latest = await validateCurrentOrders(reviewed.map(item => item.before));
       if (reviewed.some(item => item.change.quantity !== null)) {
         const currentInventory = await read<InventoryView | null>("load_inventory");
-        inventory = currentInventory;
+        replaceInventory(currentInventory);
         if (!currentInventory || !reviewedQuantitiesMatch(reviewed, buildTradeShiftRows(latest, currentInventory, recommendations))) {
           throw new Error("Остатки изменились");
         }
       }
+      if (expectedInventoryRevision !== inventoryRevision) throw new Error("Резерв или инвентарь изменились");
     }
     catch (error) { errorMessage = changeError(error); applying = false; return; }
     for (const proposal of reviewed) {
+      if (expectedInventoryRevision !== inventoryRevision) { errorMessage = changeError("Резерв или инвентарь изменились"); break; }
       const { before, change, name } = proposal;
       applyProgress = (completed + 1) + " из " + reviewed.length + ": " + name;
       try {
@@ -519,6 +561,7 @@
 
   function reviewManualEdit(event: SubmitEvent): void {
     event.preventDefault();
+    if (itemReserveUpdating || reserveUpdating) return;
     editError = validateListingNumbers(
       editPlatinum,
       editQuantity,
@@ -534,11 +577,13 @@
   }
 
   async function applyManualEdit(): Promise<void> {
-    if (!editingOrder || applying || !account?.profile?.verification) return;
+    if (!editingOrder || applying || reserveUpdating || itemReserveUpdating || !account?.profile?.verification) return;
+    const expectedInventoryRevision = inventoryRevision;
     applying = true;
     errorMessage = "";
     try {
       await validateCurrentOrders([editingOrder]);
+      if (expectedInventoryRevision !== inventoryRevision) throw new Error("Резерв или инвентарь изменились");
       const updated = await invoke<AccountOrder>("account_update_listing", {
         id: editingOrder.id,
         expectedOrder: editingOrder,
@@ -592,11 +637,12 @@
   }
 
   async function applyVisibility(): Promise<void> {
-    if (!account || visibilityIntent === null || applying) return;
+    if (!account || visibilityIntent === null || applying || reserveUpdating || itemReserveUpdating) return;
+    const expectedInventoryRevision = inventoryRevision;
     const targets = visibilityTargets;
     applying = true;
     errorMessage = "";
-    try { await validateCurrentOrders(targets); } catch (error) { errorMessage = changeError(error); applying = false; return; }
+    try { await validateCurrentOrders(targets); if (expectedInventoryRevision !== inventoryRevision) throw new Error("Резерв или инвентарь изменились"); } catch (error) { errorMessage = changeError(error); applying = false; return; }
     let completed = 0;
     if (visibilityScope === "all") {
       try {
@@ -875,7 +921,7 @@
       <h3 class="sr-only" id="orders-heading">{orderType === "sell" ? "Объявления на продажу" : "Заявки на покупку"}</h3>
       <div class="orders-controls">
         <div class="orders-meta">
-          {#if orderType === "sell" && inventory}<KeepCopiesControl value={inventory.keepCopies} bind:updating={reserveUpdating} disabled={loading || applying || reviewOpen} onSaved={updated => { ++dataRevision; inventory = updated; }} />{/if}
+          {#if orderType === "sell" && inventory}<KeepCopiesControl value={inventory.keepCopies} bind:updating={reserveUpdating} disabled={loading || applying || reviewOpen || itemReserveUpdating} onSaved={reserveSaved} />{/if}
           <span class="updated">{lastUpdated ? "Обновлено " + new Date(lastUpdated).toLocaleTimeString("ru-RU", {hour:"2-digit",minute:"2-digit"}) : "Загрузка…"}</span>
         </div>
         <div class="orders-refresh">
@@ -909,6 +955,7 @@
         {:else}
           {#if !visibleRows.some(row => row.order.id === editingOrder?.id)}<p class="data-note">Открытое объявление не входит в текущий отбор. Ваши правки сохранены в форме.</p>{/if}
           <div class="detail-estimate"><div><span>Оценка продажи за штуку</span><strong>{money(editingRow.recommendation?.listPrice ?? null)}</strong></div>{#if editingOrder.type === "sell"}<div><span>Доступно к продаже</span><strong class:danger={editingRow.health === "inventory_mismatch"}>{inventory ? inventoryListingQuantity(editingRow.inventory) + " шт." : "Неизвестно"}</strong></div>{/if}</div>
+          {#if editingOrder.type === "sell" && editableReserveItem?.key && inventory}<div class="item-reserve-row"><ItemReserveControl key={editableReserveItem.key} value={editableReserveItem.keepCopiesOverride} generalReserve={inventory.keepCopies} expectedInventoryChecksum={inventory.metadata.checksumSha256} expectedReserveAccountKey={inventory.reserveAccountKey ?? null} context={priceContext + "|" + editingOrder.id} bind:updating={itemReserveUpdating} disabled={loading || applying || reserveUpdating || reviewOpen} onSaving={invalidateInventoryConfirmations} onSaved={reserveSaved} /></div>{/if}
           {#if editingRow.health === "inventory_mismatch"}<p class="stock-note">{editingRow.suggestedQuantity === 0 ? "Свободных копий нет. Скройте или удалите объявление." : "В объявлении больше копий, чем доступно в инвентаре."}</p>{/if}
           {#key priceContext + "|" + (editingRow.key ? recommendationIdentity(editingRow.key) : editingOrder.id)}<MarketOrderPrices row={editingRow} profile={account?.profile ?? null} quote={editingRow.key ? liveResults.get(recommendationIdentity(editingRow.key)) ?? null : null} revision={editingRow.key ? quoteRevisions.get(recommendationIdentity(editingRow.key)) ?? 0 : 0} failed={editingRow.priceCheckFailed ?? false} onQuote={quoteReceiver(priceContext)} onError={quoteErrorReceiver(priceContext)}/>{/key}
         {/if}
@@ -919,7 +966,7 @@
       <label class="compact-check"><input type="checkbox" bind:checked={editVisible} /> {editingOrder.type === "sell" ? "Показывать покупателям" : "Показывать продавцам"}</label>
       {#if editorDirty}<details class="edit-preview"><summary>Что изменится при сохранении</summary><dl><div><dt>Цена{(editPerTrade ?? editingOrder.perTrade ?? 1) > 1 ? " за партию" : " за штуку"}</dt><dd>{money(editingOrder.platinum)} → {money(editPlatinum ?? null)}</dd></div><div><dt>Количество</dt><dd>{editingOrder.quantity} → {editQuantity ?? "—"} шт.</dd></div>{#if editOriginalPerTrade !== null}<div><dt>В одной сделке</dt><dd>{editOriginalPerTrade} → {editPerTrade} шт.</dd></div>{/if}<div><dt>Показ на рынке</dt><dd>{editVisible ? "Включён" : "Выключен"}</dd></div></dl></details>{/if}
 
-      </fieldset><div class="confirm-actions editor-actions"><button type="submit" disabled={applying || reserveUpdating || !editorDirty || !editingRow || !account?.profile?.verification}>{applying ? "Сохраняем…" : "Сохранить изменения"}</button>{#if editorDirty}<button class="text-button" type="button" disabled={applying} onclick={resetEditor}>Сбросить изменения</button>{/if}</div>
+      </fieldset><div class="confirm-actions editor-actions"><button type="submit" disabled={applying || reserveUpdating || itemReserveUpdating || !editorDirty || !editingRow || !account?.profile?.verification}>{applying ? "Сохраняем…" : "Сохранить изменения"}</button>{#if editorDirty}<button class="text-button" type="button" disabled={applying} onclick={resetEditor}>Сбросить изменения</button>{/if}</div>
     </form>
         {#if editingRow}
           <details class="order-history"><summary>История цены и спроса</summary><div class="history-content">{#key editingOrder.id}<MarketOrderInsight row={editingRow} summary={analytics.get(editingRow.key ? marketAnalyticsKey(editingRow.key) : "") ?? null} loading={analyticsLoading} unavailable={analyticsError} showClose={false} showOffers={false} onRetry={() => void loadAnalytics()} onClose={() => {}}/>{/key}</div></details>
@@ -1034,6 +1081,7 @@
   .detail-item h3 { font-size:1.05rem; line-height:1.4; overflow-wrap:anywhere; } .detail-item p { font-size:.75rem; margin-top:.2rem; overflow-wrap:anywhere; }
   .detail-status { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:.5rem; padding:.85rem 0; margin-bottom:.85rem; border-bottom:1px solid var(--border); font-size:.75rem; color:var(--text-muted); } .detail-status .visible { color:var(--success); }
   .detail-estimate { display:flex; align-items:center; justify-content:space-between; gap:.75rem; margin-bottom:1rem; } .detail-estimate span { font-size:.75rem; color:var(--text-muted); } .detail-estimate strong { display:block; font-size:1.1rem; margin-top:.25rem; } .detail-estimate > div:first-child strong { font-size:1.6rem; } .detail-estimate > div:last-child:not(:first-child) { text-align:right; }
+  .item-reserve-row { margin:-.35rem 0 1rem; }
   .stock-note { margin-bottom:.85rem; color:var(--danger); font-size:.75rem; }
   .order-editor { border-top:1px solid var(--border); margin-top:1rem; } .order-editor fieldset { display:grid; gap:.85rem; padding:0; border:0; margin:0; min-width:0; }
   .order-editor__fields { gap:.65rem; } .order-editor__fields label { font-size:.75rem; font-weight:500; } .order-editor__fields input { min-height:2.55rem; border-radius:.5rem; font-size:.9375rem; }
