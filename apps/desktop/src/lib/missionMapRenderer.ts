@@ -1,5 +1,6 @@
 import { filterColor, objectFilterEntry, type MissionFilterIndex } from "./missionFilters";
 import { drawMissionMapMarker } from "./missionMapMarkers";
+import { missionMarkerSize, missionMarkerRadius, missionMarkerHitRadius, type MissionMapPreferences } from "./missionMapPreferences";
 import {
   distanceLabel, finitePosition, mapScale, objectKindLabel, scaledHeight, worldToCanvas, zoneInHeightSlice,
   type MapBounds, type MapCamera, type MissionObject, type MissionScene, type Position3,
@@ -17,6 +18,7 @@ export interface MissionMapDrawState {
   rotateWithView: boolean;
   pickedKeys: string[];
   customIndex: MissionFilterIndex;
+  markerPreferences: MissionMapPreferences;
   showZones: boolean;
   sliceEnabled: boolean;
   heightCenter: number;
@@ -36,7 +38,7 @@ interface PreparedGeometry {
 }
 interface SurfaceLayer { fill: Path2D; outline: Path2D; meanY: number; weight: number }
 interface SurfacePaths { fill: Path2D; layers: SurfaceLayer[] }
-interface MarkerPoint { object: MissionObject; x: number; y: number; important: boolean }
+interface MarkerPoint { object: MissionObject; x: number; y: number; size: number; radius: number; heightDirection: -1 | 0 | 1; important: boolean }
 interface LabelRect { x: number; y: number; width: number; height: number }
 
 // Общие вершины сопоставляются по точным координатам: зазоры и недостающие участки не достраиваются.
@@ -191,6 +193,30 @@ function wrapDetail(ctx: CanvasRenderingContext2D, text: string, maxWidth: numbe
   return lines.map(value => ellipsis(ctx, value, maxWidth));
 }
 
+function markerBounds(point: MarkerPoint, padding = 0): LabelRect {
+  const verticalRadius = Math.max(point.radius, point.heightDirection ? 8 : 0);
+  return {
+    x: point.x - point.radius - padding, y: point.y - verticalRadius - padding,
+    width: point.radius * 2 + (point.heightDirection ? 16 : 0) + padding * 2,
+    height: verticalRadius * 2 + padding * 2,
+  };
+}
+
+function drawHeightIndicator(ctx: CanvasRenderingContext2D, point: MarkerPoint, color: string) {
+  if (!point.heightDirection) return;
+  const x = point.x + point.radius + 9, y = point.y;
+  ctx.save();
+  // Отметка рисуется в экранных координатах и не поворачивается вместе с картой.
+  ctx.globalAlpha = 1;
+  roundedRect(ctx, { x: x - 6, y: y - 8, width: 12, height: 16 }, 4);
+  ctx.fillStyle = "#101b25"; ctx.fill();
+  ctx.strokeStyle = color; ctx.lineWidth = 1; ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(x - 3, y + point.heightDirection * 2);
+  ctx.lineTo(x, y - point.heightDirection * 2); ctx.lineTo(x + 3, y + point.heightDirection * 2);
+  ctx.lineWidth = 1.8; ctx.lineJoin = "round"; ctx.lineCap = "round"; ctx.stroke();
+  ctx.restore();
+}
+
 function drawLabel(ctx: CanvasRenderingContext2D, point: MarkerPoint, points: MarkerPoint[], state: MissionMapDrawState) {
   const { width, height } = state;
   if (width < 120 || height < 120 || point.x < 0 || point.y < 0 || point.x > width || point.y > height) return;
@@ -203,14 +229,16 @@ function drawLabel(ctx: CanvasRenderingContext2D, point: MarkerPoint, points: Ma
   const lines = wrapDetail(ctx, detail, cardWidth - 26), cardHeight = 35 + lines.length * 16;
   const topMargin = height >= 180 ? 62 : 12, bottomMargin = height >= 180 ? 96 : 48;
   if (height - topMargin - bottomMargin < cardHeight) return;
+  const extent = markerBounds(point, Math.max(4, missionMarkerHitRadius(point.size) - point.radius));
   const candidates = [
-    [point.x + 19, point.y - cardHeight - 16], [point.x - cardWidth - 19, point.y - cardHeight - 16],
-    [point.x + 19, point.y + 18], [point.x - cardWidth - 19, point.y + 18],
+    [extent.x + extent.width, extent.y - cardHeight], [extent.x - cardWidth, extent.y - cardHeight],
+    [extent.x + extent.width, extent.y + extent.height], [extent.x - cardWidth, extent.y + extent.height],
   ].map(([x, y]) => ({ x: Math.max(12, Math.min(width - cardWidth - 12, x)), y: Math.max(topMargin, Math.min(height - cardHeight - bottomMargin, y)), width: cardWidth, height: cardHeight }));
   const score = (rect: LabelRect) => {
     let value = Math.hypot(rect.x + rect.width / 2 - point.x, rect.y + rect.height / 2 - point.y) * .02;
     for (const other of points) {
-      if (other.x >= rect.x - 16 && other.x <= rect.x + rect.width + 16 && other.y >= rect.y - 16 && other.y <= rect.y + rect.height + 16) value += other.object.key === point.object.key ? 200 : other.important ? 100 : 2;
+      const occupied = markerBounds(other, 4);
+      if (occupied.x < rect.x + rect.width && occupied.x + occupied.width > rect.x && occupied.y < rect.y + rect.height && occupied.y + occupied.height > rect.y) value += other.object.key === point.object.key ? 200 : other.important ? 100 : 2;
     }
     return value;
   };
@@ -220,7 +248,11 @@ function drawLabel(ctx: CanvasRenderingContext2D, point: MarkerPoint, points: Ma
   const endX = Math.max(rect.x + 9, Math.min(rect.x + rect.width - 9, point.x));
   const endY = Math.max(rect.y + 8, Math.min(rect.y + rect.height - 8, point.y));
   const dx = endX - point.x, dy = endY - point.y, length = Math.hypot(dx, dy);
-  if (length > 18) { ctx.beginPath(); ctx.moveTo(point.x + dx / length * 14, point.y + dy / length * 14); ctx.lineTo(endX, endY); ctx.strokeStyle = border; ctx.globalAlpha = .65; ctx.lineWidth = 1; ctx.stroke(); }
+  const lineBounds = markerBounds(point, 3);
+  const exitX = dx === 0 ? Infinity : (dx > 0 ? lineBounds.x + lineBounds.width - point.x : lineBounds.x - point.x) / dx;
+  const exitY = dy === 0 ? Infinity : (dy > 0 ? lineBounds.y + lineBounds.height - point.y : lineBounds.y - point.y) / dy;
+  const exit = Math.min(exitX, exitY);
+  if (length > 0 && exit < 1 && length * (1 - exit) > 4) { ctx.beginPath(); ctx.moveTo(point.x + dx * exit, point.y + dy * exit); ctx.lineTo(endX, endY); ctx.strokeStyle = border; ctx.globalAlpha = .65; ctx.lineWidth = 1; ctx.stroke(); }
   ctx.globalAlpha = 1; roundedRect(ctx, rect, 9); ctx.fillStyle = "#101b25f2";
   ctx.shadowColor = "#00000055"; ctx.shadowBlur = 12; ctx.shadowOffsetY = 3; ctx.fill();
   ctx.shadowBlur = 0; ctx.shadowOffsetY = 0; ctx.strokeStyle = border; ctx.lineWidth = 1; ctx.stroke();
@@ -280,23 +312,32 @@ export function createMissionMapRenderer(): (node: HTMLCanvasElement, state: Mis
       const object = mine && raw.key === mine.key ? mine : raw;
       if (!finitePosition(object.position)) continue;
       const [x, y] = worldToCanvas(object.position, state.camera, scale, width, height);
-      if (x < -18 || y < -18 || x > width + 18 || y > height + 18) continue;
-      points.push({ object, x, y, important: object.key === mine?.key || object.key === state.selectedKey || object.key === state.targetKey || picked.has(object.key) });
+      const size = missionMarkerSize(object, state.customIndex, state.markerPreferences), radius = missionMarkerRadius(size);
+      const difference = mine && object.positionFresh !== false ? object.position[1] - mine.position[1] : 0;
+      const heightDirection = state.markerPreferences.showHeightIndicators !== false && !["avatar", "npc", "hostage"].includes(object.kind) && Math.abs(difference) >= 1 ? difference > 0 ? 1 : -1 : 0;
+      const point: MarkerPoint = { object, x, y, size, radius, heightDirection, important: object.key === mine?.key || object.key === state.selectedKey || object.key === state.targetKey || picked.has(object.key) };
+      const extent = markerBounds(point, object.key === state.targetKey ? 13 : object.key === mine?.key ? 11 : 4);
+      if (extent.x + extent.width < 0 || extent.y + extent.height < 0 || extent.x > width || extent.y > height) continue;
+      points.push(point);
     }
     const drawMarker = (point: MarkerPoint) => {
       const local = point.object.key === mine?.key;
       const heading = Number.isFinite(state.viewHeading) ? state.viewHeading! : state.camera.angle ?? 0;
       drawMissionMapMarker(ctx, point.object, point.x, point.y, {
+        size: point.size,
         color: local ? objectFilterEntry(point.object, state.customIndex)?.color ?? "#71e7ed" : filterColor(point.object, state.customIndex),
         selected: point.object.key === state.selectedKey || picked.has(point.object.key), target: point.object.key === state.targetKey,
         local, heading: heading - (state.camera.angle ?? 0),
-        muted: !point.important && mine !== null && Math.abs(point.object.position[1] - mine.position[1]) > 8,
       });
     };
     for (const point of points) if (point.object.key !== mine?.key) drawMarker(point);
+    const drawIndicator = (point: MarkerPoint) => drawHeightIndicator(ctx, point, point.object.key === state.targetKey ? "#edc581" : point.object.key === state.selectedKey || picked.has(point.object.key) ? "#fff6e8" : filterColor(point.object, state.customIndex));
+    for (const point of points) if (!point.important) drawIndicator(point);
     const onScreen = (point: MarkerPoint) => point.x >= 0 && point.y >= 0 && point.x <= width && point.y <= height;
     const label = points.find(point => point.object.key === state.targetKey && onScreen(point)) ?? points.find(point => point.object.key === state.selectedKey && onScreen(point));
     if (label) drawLabel(ctx, label, points, state);
+    // Выбор и цель сохраняют читаемую отметку даже рядом с подписью и другими точками.
+    for (const point of points) if (point.important) drawIndicator(point);
     // Игрок остаётся поверх поверхностей, остальных значков и подписи цели.
     for (const point of points) if (point.object.key === mine?.key) drawMarker(point);
   };

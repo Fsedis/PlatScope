@@ -1,4 +1,5 @@
 import type { MissionObject, MissionObjectKind } from "./missionResearch";
+import { missionMarkerRadius } from "./missionMapPreferences";
 
 export interface MissionMarkerGlyph {
   outline: string;
@@ -69,16 +70,15 @@ export const MISSION_MARKER_GLYPHS: Record<MissionObjectKind, MissionMarkerGlyph
 };
 
 export interface MissionMapMarkerOptions {
+  size: number;
   color: string;
   selected: boolean;
   target: boolean;
   local: boolean;
   // Радианы относительно поворота карты; ноль направлен вверх.
   heading: number;
-  muted: boolean;
 }
 
-const MARKER_SIZE = 18;
 const TARGET_COLOR = "#edc581";
 const markerPaths = new Map<MissionObjectKind, { outline: Path2D; detail: Path2D | null }>();
 
@@ -116,40 +116,41 @@ export function drawMissionMapMarker(
   ctx.save();
   try {
     ctx.translate(x, y);
-    ctx.globalAlpha *= object.availability === "opened" ? 0.35 : options.muted ? 0.42 : 1;
-    const opacity = ctx.globalAlpha;
+    ctx.globalAlpha = 1;
     const localPlayer = options.local && object.kind === "avatar";
-    if (options.target) halo(ctx, TARGET_COLOR, 23, 0.33);
-    if (localPlayer) halo(ctx, options.color, 21, 0.4);
+    const radius = missionMarkerRadius(options.size);
+    if (options.target) halo(ctx, TARGET_COLOR, radius + 13, 0.33);
+    if (localPlayer) halo(ctx, options.color, radius + 11, 0.4);
 
     ctx.fillStyle = "#121c22";
     ctx.beginPath();
-    ctx.arc(0, 0, 10, 0, Math.PI * 2);
+    ctx.arc(0, 0, radius, 0, Math.PI * 2);
     ctx.fill();
 
     if (options.target || options.selected) {
       ctx.strokeStyle = options.target ? TARGET_COLOR : "#fff6e8";
       ctx.lineWidth = options.target ? 1.7 : 1.3;
       ctx.beginPath();
-      ctx.arc(0, 0, options.selected ? 12.5 : 13, 0, Math.PI * 2);
+      ctx.arc(0, 0, radius + (options.selected ? 2.5 : 3), 0, Math.PI * 2);
       ctx.stroke();
     }
 
     if (localPlayer && Number.isFinite(options.heading)) ctx.rotate(options.heading);
-    const scale = MARKER_SIZE / 24;
+    const scale = options.size / 24;
     ctx.scale(scale, scale);
     ctx.translate(-12, -12);
     ctx.lineJoin = "round";
     ctx.lineCap = "round";
     ctx.lineWidth = localPlayer ? 1.9 : 1.8;
     ctx.strokeStyle = options.color;
-    ctx.fillStyle = options.color;
+    ctx.fillStyle = object.kind === "avatar" ? options.color : "#121c22";
     const paths = pathsFor(object.kind);
-    ctx.globalAlpha = opacity * (object.kind === "avatar" ? 0.85 : 0.12);
     ctx.fill(paths.outline);
-    ctx.globalAlpha = opacity;
     ctx.stroke(paths.outline);
-    if (paths.detail) ctx.stroke(paths.detail);
+    if (paths.detail) {
+      if (object.kind === "avatar") ctx.strokeStyle = "#121c22";
+      ctx.stroke(paths.detail);
+    }
   } finally {
     ctx.restore();
   }

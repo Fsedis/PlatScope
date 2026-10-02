@@ -21,6 +21,6 @@
   aria-hidden="true"
   focusable="false"
 >
-  <path d={glyph.outline} fill={color} fill-opacity={kind === "avatar" ? 0.18 : 0.08} />
-  {#if glyph.detail}<path d={glyph.detail} />{/if}
+  <path d={glyph.outline} fill={kind === "avatar" ? color : "#121c22"} />
+  {#if glyph.detail}<path d={glyph.detail} stroke={kind === "avatar" ? "#121c22" : color} />{/if}
 </svg>

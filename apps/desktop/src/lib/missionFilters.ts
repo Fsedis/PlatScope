@@ -44,7 +44,7 @@ export function serializeHiddenMissionNames(names: HiddenMissionName[]): string 
   parseHiddenMissionNames(raw);
   return raw;
 }
-export type MissionFilterIndex = Map<string, { visible: boolean; color: string | null; groups: string[] }>;
+export type MissionFilterIndex = Map<string, { visible: boolean; color: string | null; groups: string[]; enabledGroups?: string[] }>;
 export type FilterScope = "variant" | "model";
 const resourceName = (value: string) => value.trim().replace(/^"|"$/g, "").replaceAll("\\", "/").split("/").pop()!.toLowerCase();
 function canonicalRuleKey(key: string): string {
@@ -61,9 +61,14 @@ export function indexMissionFilters(filters: CustomMissionFilter[]): MissionFilt
   const index: MissionFilterIndex = new Map();
   for (const filter of filters) for (const rule of filter.rules) {
     const key = canonicalRuleKey(rule.key);
-    const entry = index.get(key) ?? { visible:false, color:null, groups:[] };
+    let entry = index.get(key);
+    if (!entry) entry = { visible:false, color:null, groups:[] };
     entry.visible ||= filter.enabled;
-    if (filter.enabled && !entry.color) entry.color = filter.color;
+    if (filter.enabled) {
+      if (!entry.color) entry.color = filter.color;
+      const enabledGroups = entry.enabledGroups ??= [];
+      if (!enabledGroups.includes(filter.id)) enabledGroups.push(filter.id);
+    }
     if (!entry.groups.includes(filter.id)) entry.groups.push(filter.id);
     index.set(key, entry);
   }

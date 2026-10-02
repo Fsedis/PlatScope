@@ -6,7 +6,9 @@
   import MissionFilterEditor from "./MissionFilterEditor.svelte";
   import MissionHiddenNames from "./MissionHiddenNames.svelte";
   import MissionObjectIcon from "./MissionObjectIcon.svelte";
+  import MissionMapSettings from "./MissionMapSettings.svelte";
   import { createMissionMapRenderer } from "./missionMapRenderer";
+  import { defaultMissionMapPreferences, loadMissionMapPreferences, saveMissionMapPreferences, missionMarkerSize, missionMarkerHitRadius, type MissionMapPreferences } from "./missionMapPreferences";
   import { MISSION_HIDDEN_STORAGE, hiddenMissionNameKey, hiddenMissionNameLabel, indexHiddenMissionNames, objectIsHidden, parseHiddenMissionNames, serializeHiddenMissionNames, type HiddenMissionName } from "./missionFilters";
   import { MISSION_FILTER_STORAGE, parseMissionFilters, serializeMissionFilters, missionDiscoveryKeys, groupMissionObjects, objectRule, objectFilterEntry, indexMissionFilters, countMissionFilters, filterColor, objectIsVisible, type MissionFilterIndex, type CustomMissionFilter } from "./missionFilters";
   import { MISSION_FILTERS, localAvatar, objectMatchesSearch, objectFilter, objectKindLabel, finitePosition, sceneBounds, fitCamera, followFrame, followTargetSignature, mapScale, worldToCanvas, zoomAt, panCamera, objectDistance, distanceLabel, inHeightSlice, compareScenes, missionTime, missionBytes,
@@ -68,6 +70,9 @@
   let showZones = false;
   let heightCenter = 0;
   let heightHalfWidth = 4;
+  let markerPreferences = defaultMissionMapPreferences();
+  let markerStorageError = "";
+  let markerSettings: MissionMapSettings | undefined;
   let camera: MapCamera = { x: 0, z: 0, zoom: 1 };
   let canvas: HTMLCanvasElement | undefined;
   let canvasWidth = 800;
@@ -99,7 +104,7 @@
   $: filterSelectionKey = filterSelection.map(object => object.key).join("|");
   $: if (filterRail && filterSelectionKey !== lastFilterSelection) { filterRail.scrollTop = 0; lastFilterSelection = filterSelectionKey; }
   $: difference = scene && previousScene ? compareScenes(previousScene, scene) : null;
-  $: drawState = { scene, liveAvatar: myAvatar, viewHeading, bounds, camera, objects: visibleObjects, selectedKey, targetKey, rotateWithView, pickedKeys, customIndex, showZones, sliceEnabled, heightCenter, heightHalfWidth, width: canvasWidth, height: canvasHeight };
+  $: drawState = { scene, liveAvatar: myAvatar, viewHeading, bounds, camera, objects: visibleObjects, selectedKey, targetKey, rotateWithView, pickedKeys, customIndex, showZones, sliceEnabled, heightCenter, heightHalfWidth, markerPreferences, width: canvasWidth, height: canvasHeight };
   $: if (canvas) draw(canvas, drawState);
 
   async function receive(next: MissionResearchStatus, version: number) {
@@ -220,6 +225,10 @@
     catch { filterLoadFailed = true; filterStorageError = "Не удалось загрузить свои фильтры. Сохранённые данные не изменены."; }
     void syncDiscoveryFilters();
   }
+  function saveMarkerPreferences(next: MissionMapPreferences) {
+    markerPreferences = next;
+    markerStorageError = saveMissionMapPreferences(next) ? "" : "Настройки значков действуют в этом окне, но не сохранены.";
+  }
   function loadHiddenNames() {
     try { hiddenNames = parseHiddenMissionNames(localStorage.getItem(MISSION_HIDDEN_STORAGE)); hiddenStorageError = ""; hiddenLoadFailed = false; }
     catch { hiddenLoadFailed = true; hiddenStorageError = "Не удалось загрузить скрытые названия. Сохранённый список не изменён."; }
@@ -310,8 +319,13 @@
     const click = !drag.moved; drag = null; canvas?.releasePointerCapture(event.pointerId);
     if (!click || !canvas) return;
     const rect = canvas.getBoundingClientRect(), x = event.clientX - rect.left, y = event.clientY - rect.top; const scale = mapScale(bounds, canvasWidth, canvasHeight, camera.zoom);
-    let nearest: MissionObject | null = null, distance = 14;
-    for (const raw of visibleObjects) { const object = raw.key === myAvatar?.key ? myAvatar : raw; const [px, py] = worldToCanvas(object.position, camera, scale, canvasWidth, canvasHeight); const d = Math.hypot(px - x, py - y); if (d < distance) { distance = d; nearest = object; } }
+    let nearest: MissionObject | null = null, distance = Infinity;
+    for (const raw of visibleObjects) {
+      const object = raw.key === myAvatar?.key ? myAvatar : raw;
+      const [px, py] = worldToCanvas(object.position, camera, scale, canvasWidth, canvasHeight);
+      const d = Math.hypot(px - x, py - y), hitRadius = missionMarkerHitRadius(missionMarkerSize(object, customIndex, markerPreferences));
+      if (d < hitRadius && d < distance) { distance = d; nearest = object; }
+    }
     if (nearest) { if (event.ctrlKey || event.metaKey) togglePicked(nearest.key); selectedKey = nearest.key; followKey = ""; followingMe = false; followHint = ""; }
   }
   function keyboard(event: KeyboardEvent) {
@@ -327,6 +341,7 @@
   onMount(() => {
     loadFilters();
     loadHiddenNames();
+    markerPreferences = loadMissionMapPreferences();
     void refresh(); void refreshArchives(); const timer = setInterval(() => void refresh(), 1000); const poseTimer = setInterval(() => void refreshPose(), 50); return () => { alive = false; generation++; clearInterval(timer); clearInterval(poseTimer); }; });
 </script>
 
@@ -353,6 +368,8 @@
       <section class="standard-filters" aria-label="Показать на карте"><div class="section-heading"><h2>Показать на карте</h2><button class="text-action" onclick={() => { const enabled = !Object.values(filters).every(Boolean); filters = Object.fromEntries(MISSION_FILTERS.map(filter => [filter.key, enabled])) as Record<MissionFilter, boolean>; }}>{Object.values(filters).every(Boolean) ? "Скрыть все" : "Показать все"}</button></div>
         <div class="filters">{#each MISSION_FILTERS as filter}<label><input type="checkbox" bind:checked={filters[filter.key]} /><span class="filter-icon"><MissionObjectIcon kind={filterIcons[filter.key]} color={filter.color} /></span><span>{filter.key === "npc" ? "Персонажи и враги" : filter.key === "lootspots" ? "Места находок" : filter.label}</span><b>{availableObjects.filter(o => objectFilter(o.kind) === filter.key && !objectFilterEntry(o, customIndex)).length}</b></label>{/each}</div>
       </section>
+      <MissionMapSettings bind:this={markerSettings} preferences={markerPreferences} filters={customFilters} {customIndex} {selected} heightKnown={!!myAvatar} onchange={saveMarkerPreferences} />
+      {#if markerStorageError}<p class="error" role="alert">{markerStorageError}<button onclick={() => saveMarkerPreferences(markerPreferences)}>Повторить сохранение</button></p>{/if}
       <details class="view-settings"><summary>Вид и высота</summary><div><label>Состояние тайников<select bind:value={cacheState}><option value="all">Все состояния</option><option value="available">Можно открыть</option><option value="unknown">Состояние неизвестно</option><option value="opened">Открытые</option></select></label><label class="check"><input type="checkbox" bind:checked={showZones} />Границы зон</label><label class="check"><input type="checkbox" bind:checked={sliceEnabled} />Ограничить по высоте</label>{#if sliceEnabled}<label>Высота: {heightCenter.toFixed(1)}<input type="range" min={Math.floor(bounds.minY)} max={Math.max(Math.ceil(bounds.maxY), Math.floor(bounds.minY) + 1)} step="0.5" bind:value={heightCenter} /></label><label>Диапазон<select bind:value={heightHalfWidth}><option value={2}>± 2</option><option value={4}>± 4</option><option value={8}>± 8</option><option value={16}>± 16</option></select></label><p>Срез по высоте, а не определённый этаж.</p>{/if}</div></details>
     </aside>
     <section class="map-panel" aria-label="Схема расположения объектов">
@@ -381,6 +398,7 @@
           <div class="selected-actions">
             {#if selected.kind !== "avatar" && selected.key !== targetKey}<button class="primary" onclick={() => chooseTarget(selected!)}>Выбрать целью</button>{/if}
             <button onclick={() => selectObject(selected!)}>Показать на карте</button>
+            <button onclick={() => void markerSettings?.configureSelected()}>Размер значка</button>
 
             {#if selected.kind !== "avatar"}<button disabled={hiddenLoadFailed || !hiddenMissionNameKey(selected)} title={`Скрыть все экземпляры: ${hiddenMissionNameLabel(selected)}`} onclick={() => hideByName(selected!)}>Скрыть по названию</button>{/if}
             {#if scene?.source === "live" && selected.kind === "avatar" && selected.key !== myAvatar?.key}<button disabled={!status?.tracking} onclick={() => startFollowing(selected!)}>Следовать</button>{/if}
@@ -399,7 +417,7 @@
               <li>
                 <input type="checkbox" aria-label={`Выбрать для фильтра: ${object.label} · строка ${objectIndex + 1}`} checked={pickedKeys.includes(object.key)} onchange={() => togglePicked(object.key)} />
                 <button class:selected={object.key === selectedKey} class:is-target={object.key === targetKey} onclick={() => selectObject(object)}>
-                  <span class="object-icon" class:opened={object.kind === "cache" && object.availability === "opened"}><MissionObjectIcon kind={object.kind} color={filterColor(object, customIndex)} /></span>
+                  <span class="object-icon"><MissionObjectIcon kind={object.kind} color={filterColor(object, customIndex)} /></span>
                   <span class="object-copy"><strong>{object.key === myAvatar?.key ? "Вы" : object.label || objectKindLabel(object.kind)}</strong>{#if object.nameEn && object.nameEn !== object.label}<small>{object.nameEn}</small>{/if}<small>{object.kind === "cache" ? object.availability === "available" ? "Можно открыть · " : object.availability === "opened" ? "Открыт · " : "" : ""}{myAvatar && object.key !== myAvatar.key ? distanceLabel(myAvatar, object) : objectKindLabel(object.kind)}{object.positionFresh === false ? " · прежняя позиция" : ""}</small></span>
                   {#if entry.count > 1}<b class="copy-count" title="Экземпляров этого типа на карте">×{entry.count}</b>{/if}
                 </button>
@@ -466,7 +484,6 @@
   .filters label > span:not(.filter-icon) { flex: 1; min-width: 0; line-height: 1.4; }
   .filters b { color: var(--text-muted); font-size: .69rem; font-weight: 500; }
   .filter-icon, .object-icon { display: grid; place-items: center; flex: none; width: 27px; height: 27px; border-radius: 7px; background: #1b2b33; border: 1px solid #344b53; }
-  .object-icon.opened { opacity: .4; }
   .view-settings { border-top: 1px solid var(--border); padding-top: .85rem; margin-top: .9rem; font-size: .78rem; }
   .view-settings > div { display: grid; gap: .7rem; margin-top: .75rem; }
   .view-settings label { display: grid; gap: .35rem; }
