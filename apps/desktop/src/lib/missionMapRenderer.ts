@@ -1,8 +1,8 @@
 import { filterColor, objectFilterEntry, type MissionFilterIndex } from "./missionFilters";
 import { drawMissionMapMarker } from "./missionMapMarkers";
-import { missionMarkerSize, missionMarkerRadius, missionMarkerHitRadius, type MissionMapPreferences } from "./missionMapPreferences";
+import { missionMarkerSize, missionMarkerRadius, type MissionMapPreferences } from "./missionMapPreferences";
 import {
-  distanceLabel, finitePosition, mapScale, objectKindLabel, scaledHeight, worldToCanvas, zoneInHeightSlice,
+  finitePosition, mapScale, scaledHeight, worldToCanvas, zoneInHeightSlice,
   type MapBounds, type MapCamera, type MissionObject, type MissionScene, type Position3,
 } from "./missionResearch";
 
@@ -39,7 +39,7 @@ interface PreparedGeometry {
 interface SurfaceLayer { fill: Path2D; outline: Path2D; meanY: number; weight: number }
 interface SurfacePaths { fill: Path2D; layers: SurfaceLayer[] }
 interface MarkerPoint { object: MissionObject; x: number; y: number; size: number; radius: number; heightDirection: -1 | 0 | 1; important: boolean }
-interface LabelRect { x: number; y: number; width: number; height: number }
+interface MapRect { x: number; y: number; width: number; height: number }
 
 // Общие вершины сопоставляются по точным координатам: зазоры и недостающие участки не достраиваются.
 function prepareGeometry(meshes: MissionScene["meshes"]): PreparedGeometry {
@@ -167,7 +167,7 @@ function drawBackground(ctx: CanvasRenderingContext2D, state: MissionMapDrawStat
   ctx.restore();
 }
 
-function roundedRect(ctx: CanvasRenderingContext2D, rect: LabelRect, radius: number) {
+function roundedRect(ctx: CanvasRenderingContext2D, rect: MapRect, radius: number) {
   const { x, y, width, height } = rect, r = Math.min(radius, width / 2, height / 2);
   ctx.beginPath(); ctx.moveTo(x + r, y); ctx.lineTo(x + width - r, y); ctx.quadraticCurveTo(x + width, y, x + width, y + r);
   ctx.lineTo(x + width, y + height - r); ctx.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
@@ -175,25 +175,7 @@ function roundedRect(ctx: CanvasRenderingContext2D, rect: LabelRect, radius: num
   ctx.lineTo(x, y + r); ctx.quadraticCurveTo(x, y, x + r, y); ctx.closePath();
 }
 
-function ellipsis(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string {
-  if (ctx.measureText(text).width <= maxWidth) return text;
-  let low = 0, high = text.length;
-  while (low < high) { const middle = Math.ceil((low + high) / 2); if (ctx.measureText(`${text.slice(0, middle)}…`).width <= maxWidth) low = middle; else high = middle - 1; }
-  return `${text.slice(0, low).trimEnd()}…`;
-}
-
-function wrapDetail(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string[] {
-  const lines: string[] = []; let line = "";
-  for (const word of text.split(/\s+/)) {
-    const next = line ? `${line} ${word}` : word;
-    if (line && ctx.measureText(next).width > maxWidth) { lines.push(line); line = word; } else line = next;
-  }
-  if (line) lines.push(line);
-  if (lines.length > 2) return [ellipsis(ctx, lines[0], maxWidth), ellipsis(ctx, lines.slice(1).join(" "), maxWidth)];
-  return lines.map(value => ellipsis(ctx, value, maxWidth));
-}
-
-function markerBounds(point: MarkerPoint, padding = 0): LabelRect {
+function markerBounds(point: MarkerPoint, padding = 0): MapRect {
   const verticalRadius = Math.max(point.radius, point.heightDirection ? 8 : 0);
   return {
     x: point.x - point.radius - padding, y: point.y - verticalRadius - padding,
@@ -214,51 +196,6 @@ function drawHeightIndicator(ctx: CanvasRenderingContext2D, point: MarkerPoint, 
   ctx.beginPath(); ctx.moveTo(x - 3, y + point.heightDirection * 2);
   ctx.lineTo(x, y - point.heightDirection * 2); ctx.lineTo(x + 3, y + point.heightDirection * 2);
   ctx.lineWidth = 1.8; ctx.lineJoin = "round"; ctx.lineCap = "round"; ctx.stroke();
-  ctx.restore();
-}
-
-function drawLabel(ctx: CanvasRenderingContext2D, point: MarkerPoint, points: MarkerPoint[], state: MissionMapDrawState) {
-  const { width, height } = state;
-  if (width < 120 || height < 120 || point.x < 0 || point.y < 0 || point.x > width || point.y > height) return;
-  const title = point.object.key === state.liveAvatar?.key ? "Вы" : point.object.label || objectKindLabel(point.object.kind);
-  const detail = point.object.key === state.liveAvatar?.key ? "Ваш персонаж" : distanceLabel(state.liveAvatar, point.object);
-  ctx.font = "600 13px system-ui";
-  const titleWidth = ctx.measureText(title).width;
-  ctx.font = "11.5px system-ui";
-  const cardWidth = Math.min(width - 24, 320, Math.max(174, titleWidth + 26, Math.min(ctx.measureText(detail).width + 26, 320)));
-  const lines = wrapDetail(ctx, detail, cardWidth - 26), cardHeight = 35 + lines.length * 16;
-  const topMargin = height >= 180 ? 62 : 12, bottomMargin = height >= 180 ? 96 : 48;
-  if (height - topMargin - bottomMargin < cardHeight) return;
-  const extent = markerBounds(point, Math.max(4, missionMarkerHitRadius(point.size) - point.radius));
-  const candidates = [
-    [extent.x + extent.width, extent.y - cardHeight], [extent.x - cardWidth, extent.y - cardHeight],
-    [extent.x + extent.width, extent.y + extent.height], [extent.x - cardWidth, extent.y + extent.height],
-  ].map(([x, y]) => ({ x: Math.max(12, Math.min(width - cardWidth - 12, x)), y: Math.max(topMargin, Math.min(height - cardHeight - bottomMargin, y)), width: cardWidth, height: cardHeight }));
-  const score = (rect: LabelRect) => {
-    let value = Math.hypot(rect.x + rect.width / 2 - point.x, rect.y + rect.height / 2 - point.y) * .02;
-    for (const other of points) {
-      const occupied = markerBounds(other, 4);
-      if (occupied.x < rect.x + rect.width && occupied.x + occupied.width > rect.x && occupied.y < rect.y + rect.height && occupied.y + occupied.height > rect.y) value += other.object.key === point.object.key ? 200 : other.important ? 100 : 2;
-    }
-    return value;
-  };
-  const rect = candidates.reduce((best, candidate) => score(candidate) < score(best) ? candidate : best);
-  const border = point.object.key === state.targetKey ? "#e9c57d" : filterColor(point.object, state.customIndex);
-  ctx.save();
-  const endX = Math.max(rect.x + 9, Math.min(rect.x + rect.width - 9, point.x));
-  const endY = Math.max(rect.y + 8, Math.min(rect.y + rect.height - 8, point.y));
-  const dx = endX - point.x, dy = endY - point.y, length = Math.hypot(dx, dy);
-  const lineBounds = markerBounds(point, 3);
-  const exitX = dx === 0 ? Infinity : (dx > 0 ? lineBounds.x + lineBounds.width - point.x : lineBounds.x - point.x) / dx;
-  const exitY = dy === 0 ? Infinity : (dy > 0 ? lineBounds.y + lineBounds.height - point.y : lineBounds.y - point.y) / dy;
-  const exit = Math.min(exitX, exitY);
-  if (length > 0 && exit < 1 && length * (1 - exit) > 4) { ctx.beginPath(); ctx.moveTo(point.x + dx * exit, point.y + dy * exit); ctx.lineTo(endX, endY); ctx.strokeStyle = border; ctx.globalAlpha = .65; ctx.lineWidth = 1; ctx.stroke(); }
-  ctx.globalAlpha = 1; roundedRect(ctx, rect, 9); ctx.fillStyle = "#101b25f2";
-  ctx.shadowColor = "#00000055"; ctx.shadowBlur = 12; ctx.shadowOffsetY = 3; ctx.fill();
-  ctx.shadowBlur = 0; ctx.shadowOffsetY = 0; ctx.strokeStyle = border; ctx.lineWidth = 1; ctx.stroke();
-  ctx.font = "600 13px system-ui"; ctx.fillStyle = "#edf5f5"; ctx.fillText(ellipsis(ctx, title, rect.width - 26), rect.x + 13, rect.y + 21);
-  ctx.font = "11.5px system-ui"; ctx.fillStyle = "#b7c8d0";
-  lines.forEach((line, index) => ctx.fillText(line, rect.x + 13, rect.y + 40 + index * 16));
   ctx.restore();
 }
 
@@ -333,12 +270,9 @@ export function createMissionMapRenderer(): (node: HTMLCanvasElement, state: Mis
     for (const point of points) if (point.object.key !== mine?.key) drawMarker(point);
     const drawIndicator = (point: MarkerPoint) => drawHeightIndicator(ctx, point, point.object.key === state.targetKey ? "#edc581" : point.object.key === state.selectedKey || picked.has(point.object.key) ? "#fff6e8" : filterColor(point.object, state.customIndex));
     for (const point of points) if (!point.important) drawIndicator(point);
-    const onScreen = (point: MarkerPoint) => point.x >= 0 && point.y >= 0 && point.x <= width && point.y <= height;
-    const label = points.find(point => point.object.key === state.targetKey && onScreen(point)) ?? points.find(point => point.object.key === state.selectedKey && onScreen(point));
-    if (label) drawLabel(ctx, label, points, state);
-    // Выбор и цель сохраняют читаемую отметку даже рядом с подписью и другими точками.
+    // Отметки выбранных объектов и цели остаются поверх остальных точек.
     for (const point of points) if (point.important) drawIndicator(point);
-    // Игрок остаётся поверх поверхностей, остальных значков и подписи цели.
+    // Игрок остаётся поверх поверхностей и остальных значков.
     for (const point of points) if (point.object.key === mine?.key) drawMarker(point);
   };
 }

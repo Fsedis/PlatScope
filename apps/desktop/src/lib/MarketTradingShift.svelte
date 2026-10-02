@@ -11,7 +11,7 @@
   import { onMount, tick } from "svelte";
   import { orderChange, orderUnchanged, sortSalesRows, type SalesSort, reviewedChanges, reviewedQuantitiesMatch, salesFilterRows, type SalesFilter, type ReviewedOrderChange } from "./marketSales";
   import { variantLabel } from "./market";
-  import { checkedLivePrice } from "./livePriceCheck";
+  import { acceptOrderPrice, failOrderPrice, mergeOrderPrices, orderPriceContext, orderPriceRevision, orderPriceSession, orderPricingContext, type OrderPriceSession } from "./marketOrderQuotes";
   import { revealCompactDetail } from "./detailNavigation";
 
   import {
@@ -57,8 +57,11 @@
   let events: TradeEvent[] = [];
   let tradeSales: TradeSalesSummary = { saleCount: 0, platinumReceived: 0 };
   let recommendations = new Map<string, PriceRecommendation | null>();
-  let liveCheckedAt = new Map<string, number>();
-  let quoteTtlSeconds = 90;
+  let liveResults = new Map<string, LivePricingResult>();
+  let quoteRevisions = new Map<string, number>();
+  let priceSession: OrderPriceSession | null = null;
+  let priceCrossplay = orderPricingContext.crossplay;
+  let priceContext = "";
   let loading = true;
   let refreshingLive = false;
   let stopLiveRefresh = false;
@@ -140,7 +143,7 @@
     const latest = await read<AccountView>("account_status");
     if (!latest.connected || !latest.profile?.verification) throw new Error("authorization");
     if (!before.every(order => orderUnchanged(order, latest.orders.find(candidate => candidate.id === order.id)))) {
-      account = latest;
+      setAccountView(latest);
       throw new Error("Объявления изменились. Закройте окно и проверьте новые данные перед сохранением.");
     }
     return latest;
@@ -169,6 +172,7 @@
     ? applyPriceCheckFailures(
         buildTradeShiftRows(account, inventory, recommendations, new Date(), orderType),
         failedPriceChecks,
+        new Set(liveResults.keys()),
       )
     : [];
   $: visibleRows = sortSalesRows(salesFilterRows(filterTradeShiftRows(rows, orderQuery), orderFilter), orderSort, analytics);
@@ -186,12 +190,44 @@
     else setEditor(next);
   }
 
-  function acceptQuote(row: TradeShiftRow, result: LivePricingResult): void {
-    if (!row.key || checkedLivePrice(result).state === "failed") return;
-    const key = recommendationIdentity(row.key);
-    recommendations = new Map(recommendations).set(key, result.recommendation);
-    liveCheckedAt.set(key, Date.parse(result.fetchedAt));
-    failedPriceChecks = new Set([...failedPriceChecks].filter(value => value !== key));
+  function setAccountView(next: AccountView): void {
+    const context = next.connected && next.profile ? orderPriceContext(next.profile, priceCrossplay) : "";
+    const session: OrderPriceSession | null = next.connected && next.profile
+      ? priceCrossplay !== null ? orderPriceSession(next.profile, priceCrossplay)
+        : context === priceContext ? priceSession : { quotes: new Map(), failed: new Set(), revisions: new Map() }
+      : null;
+    if (session !== priceSession) recommendations = new Map();
+    priceSession = session;
+    priceContext = context;
+    account = next;
+    syncCheckedPrices();
+  }
+
+  function syncCheckedPrices(): void {
+    liveResults = new Map(priceSession?.quotes ?? []);
+    quoteRevisions = new Map(priceSession?.revisions ?? []);
+    failedPriceChecks = new Set(priceSession?.failed ?? []);
+    recommendations = mergeOrderPrices(recommendations, liveResults, account?.profile ?? null);
+  }
+
+  function acceptQuote(row: TradeShiftRow, result: LivePricingResult, revision: number): void {
+    if (!row.key || !priceSession) return;
+    acceptOrderPrice(priceSession, row.key, result, revision);
+    syncCheckedPrices();
+  }
+
+  function quoteFailed(row: TradeShiftRow, revision: number): void {
+    if (!row.key || !priceSession) return;
+    failOrderPrice(priceSession, row.key, revision);
+    syncCheckedPrices();
+  }
+
+  function quoteReceiver(context: string): typeof acceptQuote {
+    return (row, result, revision) => { if (context === priceContext) acceptQuote(row, result, revision); };
+  }
+
+  function quoteErrorReceiver(context: string): typeof quoteFailed {
+    return (row, revision) => { if (context === priceContext) quoteFailed(row, revision); };
   }
   $: actionableRows = rows.filter((row) => row.needsAction && rowChange(row) !== null);
   $: selectedOrders = rows.filter(row => selectedIds.has(row.order.id));
@@ -202,9 +238,6 @@
   onMount(() => {
     const unlisteners: UnlistenFn[] = [];
     void loadAll();
-    void read<{ live_quote_ttl_seconds: number }>("load_settings").then(settings => {
-      if (!disposed) quoteTtlSeconds = settings.live_quote_ttl_seconds;
-    }).catch(() => { /* До загрузки настроек действует стандартный срок актуальности. */ });
     const autoRefresh = () => { if (!document.hidden && !loading && !accountBusy && !refreshingLive && !applying && !editorDirty && !reviewOpen && visibilityIntent === null && !tradeToUndo) void loadAll(true); };
     const refreshTimer = window.setInterval(autoRefresh, 60_000);
     document.addEventListener("visibilitychange", autoRefresh);
@@ -240,15 +273,21 @@
       const results = await Promise.allSettled([
         read<AccountView>("account_status"), read<InventoryView | null>("load_inventory"),
         read<TradeEvent[]>("market_trade_events"), read<TradeSalesSummary>("trade_sales_summary"),
+        read<{ crossplay: boolean }>("load_settings"),
       ]);
       if (disposed || requestedRevision !== dataRevision) return;
-      const [accountResult, inventoryResult, eventsResult, summaryResult] = results;
+      const [accountResult, inventoryResult, eventsResult, summaryResult, settingsResult] = results;
+      if (settingsResult.status === "fulfilled" && typeof settingsResult.value.crossplay === "boolean") {
+        priceCrossplay = settingsResult.value.crossplay;
+        orderPricingContext.crossplay = priceCrossplay;
+      }
       historyUnavailable = eventsResult.status === "rejected";
       summaryUnavailable = summaryResult.status === "rejected";
       if (accountResult.status === "fulfilled") {
-        account = accountResult.value;
+        setAccountView(accountResult.value);
         lastUpdated = Date.now();
       } else {
+        if (account) setAccountView(account);
         errorMessage = "Не удалось обновить объявления Warframe Market. Повторите загрузку.";
       }
       inventory = inventoryResult.status === "fulfilled" ? inventoryResult.value : null;
@@ -318,7 +357,7 @@
 
   async function loadSavedPrices(): Promise<void> {
     if (!account?.connected) return;
-    const next = new Map([...recommendations].filter(([key]) => Date.now() - (liveCheckedAt.get(key) ?? 0) < quoteTtlSeconds * 1000));
+    const next = mergeOrderPrices(new Map(), liveResults, account.profile);
     const currentRevision = dataRevision;
     for (const row of [...buildTradeShiftRows(account, inventory, next), ...buildTradeShiftRows(account, inventory, next, new Date(), "buy")]) {
       if (disposed || currentRevision !== dataRevision) return;
@@ -335,10 +374,7 @@
     }
     if (disposed || currentRevision !== dataRevision) return;
     // Проверка выбранного предмета может закончиться во время чтения сохранённых цен.
-    for (const [key, recommendation] of recommendations) {
-      if (Date.now() - (liveCheckedAt.get(key) ?? 0) < quoteTtlSeconds * 1000) next.set(key, recommendation);
-    }
-    recommendations = next;
+    recommendations = mergeOrderPrices(next, liveResults, account.profile);
 
   }
 
@@ -351,40 +387,37 @@
     const candidates = (selectedOrders.length ? selectedOrders : rows).filter((row, index, source) => row.key
       && source.findIndex((candidate) => candidate.key
         && recommendationIdentity(candidate.key) === recommendationIdentity(row.key!)) === index);
-    const next = new Map(recommendations);
-    const candidateKeys = new Set(candidates.map((row) => recommendationIdentity(row.key!)));
-    const failures = new Set([...failedPriceChecks].filter((key) => candidateKeys.has(key)));
     let checked = 0;
     let rateLimited = false;
     for (let index = 0; index < candidates.length; index += 1) {
       if (stopLiveRefresh) break;
       const row = candidates[index];
+      const revision = row.key && priceSession ? orderPriceRevision(priceSession, row.key) : 0;
       liveProgress = `${index + 1} из ${candidates.length}: ${row.item?.displayName ?? "ордер"}`;
       try {
         const result = await read<LivePricingResult | null>("live_price_current_variant", {
           key: row.key,
           itemKind: row.itemKind,
         });
-        if (checkedLivePrice(result).state === "failed") throw new Error("stale price fallback");
-        if (row.key) failures.delete(recommendationIdentity(row.key));
-        if (row.key) next.set(recommendationIdentity(row.key), result?.recommendation ?? null);
-        if (row.key) liveCheckedAt.set(recommendationIdentity(row.key), Date.parse(result!.fetchedAt));
-        checked += 1;
+        if (disposed || currentRevision !== dataRevision) { refreshingLive = false; return; }
+        if (!result) throw new Error("price unavailable");
+        acceptQuote(row, result, revision);
+        if (result.quoteState !== "stale_cache") checked += 1;
       } catch (error) {
-        if (row.key) failures.add(recommendationIdentity(row.key));
+        if (disposed || currentRevision !== dataRevision) { refreshingLive = false; return; }
+        quoteFailed(row, revision);
         const reason = String(error).toLowerCase();
         rateLimited ||= reason.includes("rate limit") || reason.includes("429");
       }
       if (disposed || currentRevision !== dataRevision) { refreshingLive = false; return; }
-      failedPriceChecks = new Set(failures);
-      recommendations = new Map(next);
     }
     if (stopLiveRefresh) {
       liveProgress = `Проверка остановлена · проверено ${checked} из ${candidates.length}`;
-    } else if (failures.size) {
+    } else if (candidates.some(row => row.key && failedPriceChecks.has(recommendationIdentity(row.key)))) {
+      const failures = candidates.filter(row => row.key && failedPriceChecks.has(recommendationIdentity(row.key))).length;
       liveProgress = rateLimited
         ? `WFM ограничил запросы · проверено ${checked} из ${candidates.length}`
-        : `Проверено: ${checked} из ${candidates.length} · не удалось: ${failures.size}`;
+        : `Проверено: ${checked} из ${candidates.length} · не удалось: ${failures}`;
     } else {
       liveProgress = `Проверено: ${checked}`;
     }
@@ -695,7 +728,7 @@
     try {
       const latest = await read<AccountView>("account_status");
       if (disposed || requestedRevision !== dataRevision) return;
-      account = latest;
+      setAccountView(latest);
       lastUpdated = Date.now();
       await loadSavedPrices();
     } catch (error) {
@@ -714,11 +747,9 @@
     errorMessage = "";
     actionMessage = "Подключаем Warframe Market…";
     try {
-      account = await invoke<AccountView>("account_connect", { email, password });
+      setAccountView(await invoke<AccountView>("account_connect", { email, password }));
       email = "";
       password = "";
-      recommendations = new Map();
-      liveCheckedAt = new Map();
       await Promise.all([loadSavedPrices(),loadAnalytics()]);
       actionMessage = "Аккаунт Warframe Market подключён.";
     } catch {
@@ -741,9 +772,7 @@
     actionMessage = "Отключаем аккаунт Warframe Market…";
     try {
       const remotelyRevoked = await invoke<boolean>("account_disconnect");
-      account = { connected: false, profile: null, orders: [], orderItems: {} };
-      recommendations = new Map();
-      liveCheckedAt = new Map();
+      setAccountView({ connected: false, profile: null, orders: [], orderItems: {} });
       selectedIds = new Set();
       accountPanelOpen = false;
       actionMessage = remotelyRevoked
@@ -817,8 +846,14 @@
 
 <section class="sales-workspace" aria-labelledby="sales-heading">
   <header class="sales-header">
-    <div><h2 id="sales-heading" class:sr-only={view === "orders"}>{view === "history" ? "История сделок" : "Мои объявления"}</h2></div>
-    {#if account?.connected}<div class="sales-header__actions"><MarketPresence disabled={accountBusy || applying} verified={account.profile?.verification ?? false} /><button class="secondary account-button" aria-expanded={accountPanelOpen} onclick={() => accountPanelOpen = !accountPanelOpen}><span translate="no">{account.profile?.ingameName ?? "Warframe Market"}</span></button>{#if view === "orders" && rows.length}<button onclick={orderType === "buy" ? onBrowseMarket : onOpenInventory}>{orderType === "buy" ? "Создать заявку на покупку" : "Выставить предмет"}</button>{/if}</div>{/if}
+    <h2 id="sales-heading" class:sr-only={view === "orders"}>{view === "history" ? "История сделок" : "Мои объявления"}</h2>
+    {#if account?.connected}
+      <div class="account-controls">
+        <div class="account-presence"><MarketPresence disabled={accountBusy || applying} verified={account.profile?.verification ?? false} /></div>
+        <button class="secondary account-button" aria-expanded={accountPanelOpen} onclick={() => accountPanelOpen = !accountPanelOpen}><span translate="no">{account.profile?.ingameName ?? "Warframe Market"}</span></button>
+        {#if view === "orders" && rows.length}<button onclick={orderType === "buy" ? onBrowseMarket : onOpenInventory}>{orderType === "buy" ? "Создать заявку на покупку" : "Выставить предмет"}</button>{/if}
+      </div>
+    {/if}
   </header>
   {#if errorMessage}<div class="inline-error" role="alert"><span>{errorMessage}</span>{#if !applying}<button class="secondary" onclick={() => loadAll()} disabled={loading}>Повторить загрузку</button>{/if}</div>{/if}
   {#if dataMessage}<p class="data-note" role="status">{dataMessage}</p>{/if}
@@ -835,7 +870,20 @@
   {:else}
     {#if !account.profile?.verification}<p class="data-note">Аккаунт не подтверждён. После подтверждения на Warframe Market обновите список.</p>{/if}
     {#if pendingEvents.length}<div class="pending-notice"><span>Не учтено продаж из игры: <strong>{pendingEvents.length}</strong></span><button class="text-button" onclick={onHistory}>Проверить сделки →</button></div>{/if}
-      <header class="orders-heading"><div class="order-type" role="group" aria-label="Тип объявлений"><button aria-pressed={orderType === "sell"} disabled={applying || editorDirty || reviewOpen} onclick={() => switchType("sell")}>Продажа <b>{account.orders.filter(o => o.type === "sell").length}</b></button><button aria-pressed={orderType === "buy"} disabled={applying || editorDirty || reviewOpen} onclick={() => switchType("buy")}>Покупка <b>{account.orders.filter(o => o.type === "buy").length}</b></button></div><h3 class="sr-only" id="orders-heading">{orderType === "sell" ? "Объявления на продажу" : "Заявки на покупку"}</h3><div class="sales-header__actions">{#if orderType === "sell" && inventory}<KeepCopiesControl value={inventory.keepCopies} bind:updating={reserveUpdating} disabled={loading || applying || reviewOpen} onSaved={updated => { ++dataRevision; inventory = updated; }} />{/if}<span class="updated">{lastUpdated ? "Обновлено " + new Date(lastUpdated).toLocaleTimeString("ru-RU", {hour:"2-digit",minute:"2-digit"}) : "Загрузка…"}</span><button class="text-button" disabled={loading || applying || refreshingLive || editorDirty} onclick={() => loadAll()}>{loading ? "Обновляем…" : "Обновить список"}</button>{#if refreshingLive}<button class="secondary" onclick={() => stopLiveRefresh = true}>Остановить проверку</button>{:else}<button class="secondary" disabled={!rows.length || loading || applying} onclick={refreshCurrentPrices}>{selectedOrders.length ? "Проверить выбранные · " + selectedOrders.length : "Проверить цены"}</button>{/if}</div></header>
+    <header class="orders-heading">
+      <div class="order-type" role="group" aria-label="Тип объявлений"><button aria-pressed={orderType === "sell"} disabled={applying || editorDirty || reviewOpen} onclick={() => switchType("sell")}>Продажа <b>{account.orders.filter(o => o.type === "sell").length}</b></button><button aria-pressed={orderType === "buy"} disabled={applying || editorDirty || reviewOpen} onclick={() => switchType("buy")}>Покупка <b>{account.orders.filter(o => o.type === "buy").length}</b></button></div>
+      <h3 class="sr-only" id="orders-heading">{orderType === "sell" ? "Объявления на продажу" : "Заявки на покупку"}</h3>
+      <div class="orders-controls">
+        <div class="orders-meta">
+          {#if orderType === "sell" && inventory}<KeepCopiesControl value={inventory.keepCopies} bind:updating={reserveUpdating} disabled={loading || applying || reviewOpen} onSaved={updated => { ++dataRevision; inventory = updated; }} />{/if}
+          <span class="updated">{lastUpdated ? "Обновлено " + new Date(lastUpdated).toLocaleTimeString("ru-RU", {hour:"2-digit",minute:"2-digit"}) : "Загрузка…"}</span>
+        </div>
+        <div class="orders-refresh">
+          <button class="text-button" disabled={loading || applying || refreshingLive || editorDirty} onclick={() => loadAll()}>{loading ? "Обновляем…" : "Обновить список"}</button>
+          {#if refreshingLive}<button class="secondary" onclick={() => stopLiveRefresh = true}>Остановить проверку</button>{:else}<button class="secondary" disabled={!rows.length || loading || applying} onclick={refreshCurrentPrices}>{selectedOrders.length ? "Проверить выбранные · " + selectedOrders.length : "Проверить цены"}</button>{/if}
+        </div>
+      </div>
+    </header>
     {#if actionMessage}<p class="status-line action-line" role="status">{actionMessage}</p>{/if}
     <div class="orders-layout" class:detail-open={detailOpen} class:without-detail={!editingOrder}>
     <section class="orders-panel" aria-labelledby="orders-heading">
@@ -862,7 +910,7 @@
           {#if !visibleRows.some(row => row.order.id === editingOrder?.id)}<p class="data-note">Открытое объявление не входит в текущий отбор. Ваши правки сохранены в форме.</p>{/if}
           <div class="detail-estimate"><div><span>Оценка продажи за штуку</span><strong>{money(editingRow.recommendation?.listPrice ?? null)}</strong></div>{#if editingOrder.type === "sell"}<div><span>Доступно к продаже</span><strong class:danger={editingRow.health === "inventory_mismatch"}>{inventory ? inventoryListingQuantity(editingRow.inventory) + " шт." : "Неизвестно"}</strong></div>{/if}</div>
           {#if editingRow.health === "inventory_mismatch"}<p class="stock-note">{editingRow.suggestedQuantity === 0 ? "Свободных копий нет. Скройте или удалите объявление." : "В объявлении больше копий, чем доступно в инвентаре."}</p>{/if}
-          {#key editingOrder.id}<MarketOrderPrices row={editingRow} profile={account?.profile ?? null} onQuote={acceptQuote}/>{/key}
+          {#key priceContext + "|" + (editingRow.key ? recommendationIdentity(editingRow.key) : editingOrder.id)}<MarketOrderPrices row={editingRow} profile={account?.profile ?? null} quote={editingRow.key ? liveResults.get(recommendationIdentity(editingRow.key)) ?? null : null} revision={editingRow.key ? quoteRevisions.get(recommendationIdentity(editingRow.key)) ?? 0 : 0} failed={editingRow.priceCheckFailed ?? false} onQuote={quoteReceiver(priceContext)} onError={quoteErrorReceiver(priceContext)}/>{/key}
         {/if}
         {#if editError}<p class="inline-error" role="alert">{editError}</p>{/if}
         <form class="order-editor" onsubmit={reviewManualEdit}>
@@ -918,6 +966,15 @@
   .sales-header,.sales-header__actions,.account-panel,.orders-heading,.orders-toolbar,.batch-bar,.confirm-actions,.dialog-heading,.pending-notice { display:flex; align-items:center; justify-content:space-between; gap:.6rem; }
    .sales-header__actions,.confirm-actions { justify-content:flex-start; flex-wrap:wrap; }
   .account-button { display:flex; align-items:center; gap:.45rem; }
+  .sales-header { justify-content:flex-end; flex-wrap:wrap; }
+  .sales-header h2:not(.sr-only) { margin-right:auto; }
+  .account-controls { display:flex; align-items:flex-start; justify-content:flex-end; flex-wrap:wrap; gap:.6rem; min-width:0; }
+  .account-controls > button,.orders-controls button,.order-type button { min-height:2.25rem; }
+  .account-presence { min-width:0; }
+  .account-presence :global(.market-presence) { max-width:23rem; }
+  .account-presence :global(label) { flex-wrap:nowrap; min-height:2.25rem; }
+  .account-presence :global(label > span) { white-space:nowrap; }
+  .account-presence :global(select) { min-height:2.25rem; width:10rem; min-width:0; }
   .account-panel { padding:.75rem; border:1px solid var(--border); border-radius:.5rem; background:var(--surface-1); } .account-panel strong { font-size:.875rem; }
   .inline-error,.data-note { margin:0; border:1px solid var(--border); border-radius:.5rem; padding:.6rem .8rem; font-size:.8125rem; line-height:1.5; }
   .inline-error { display:flex; align-items:center; justify-content:space-between; gap:1rem; background:var(--danger-soft); color:var(--danger); border-color:var(--danger); } .data-note { background:var(--surface-2); }
@@ -932,7 +989,12 @@
   input::placeholder { color:var(--text-subtle); font-weight:400; } input[type=checkbox] { accent-color:var(--accent); width:1rem; height:1rem; flex:none; }
   .security-details { font-size:.75rem; color:var(--text-muted); } .security-details summary { cursor:pointer; } .security-details p { margin-top:.5rem; }
   .orders-panel { min-width:0; border:1px solid var(--border); border-radius:.6rem; background:var(--surface-1); box-shadow:var(--shadow-sm); }
-  .orders-heading { padding:.5rem 0 .85rem; flex-wrap:wrap; border-bottom:1px solid var(--border); margin-bottom:.5rem; } .updated { font-size:.75rem; color:var(--text-muted); }
+  .orders-heading { display:grid; grid-template-columns:auto minmax(0,1fr); align-items:start; gap:.75rem 1rem; padding:.5rem 0 .85rem; border-bottom:1px solid var(--border); margin-bottom:.5rem; }
+  .orders-controls,.orders-meta,.orders-refresh { display:flex; align-items:center; flex-wrap:wrap; gap:.6rem; min-width:0; }
+  .orders-controls { justify-content:flex-end; }
+  .orders-meta { min-height:2.25rem; gap:.75rem; }
+  .orders-meta :global(.keep-copies > summary) { display:flex; align-items:center; min-height:2.25rem; box-sizing:border-box; }
+  .updated { font-size:.75rem; color:var(--text-muted); white-space:nowrap; }
   .order-type { display:flex; gap:.3rem; } .order-type button { padding:.4rem .7rem; border:1px solid transparent; background:transparent; color:var(--text-muted); box-shadow:none; } .order-type button[aria-pressed=true] { border-color:var(--border-strong); background:var(--accent-soft); color:var(--text); } .order-type b { margin-left:.4rem; font-weight:500; }
   .orders-toolbar { display:grid; grid-template-columns:minmax(0,1.5fr) minmax(0,1fr) minmax(0,1fr); gap:.75rem; padding:1rem; align-items:end; }
   .orders-toolbar label { display:grid; gap:.4rem; min-width:0; color:var(--text-muted); font-size:.75rem; font-weight:500; }
@@ -982,5 +1044,6 @@
   @media(max-width:1350px) { .orders-layout { grid-template-columns:minmax(0,1fr) 21.5rem; gap:1rem; } .orders-toolbar { grid-template-columns:1fr 1fr; } .order-search { grid-column:1/-1; } }
   @media(max-width:1100px) { .welcome { grid-template-columns:1fr; gap:1rem; } .orders-layout { grid-template-columns:minmax(0,1fr); } .order-detail { display:none; position:static; max-height:none; overflow:visible; } .detail-open .order-detail { display:block; } .detail-open .orders-panel { display:none; } .detail-back { display:block; margin-bottom:1rem; } }
 
-  @media(max-width:750px) { .sales-header,.workspace-footnote { flex-wrap:wrap; }  .sales-header__actions { flex-wrap:wrap; } }
+  @media(max-width:750px) { .workspace-footnote { flex-wrap:wrap; } .sales-header,.account-controls { justify-content:flex-start; } .orders-heading { grid-template-columns:minmax(0,1fr); } .orders-controls { justify-content:flex-start; } }
+  @media(max-width:450px) { .account-presence { flex-basis:100%; } .account-presence :global(label) { justify-content:space-between; } .orders-refresh { width:100%; } }
 </style>

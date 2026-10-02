@@ -1,10 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { validateListingNumbers, type AccountOrder, type AccountView } from "./account";
 import { inventoryListingQuantity, listingReserveWarning, type InventoryView } from "./inventory";
 import type { PriceRecommendation } from "./market";
 import { competingOffers, orderChange, orderMarketPrice, reviewedChanges, reviewedQuantitiesMatch, salesFilterRows, sortSalesRows } from "./marketSales";
-import type { LiveOrderView } from "./market";
+import type { LiveOrderView, LivePricingResult } from "./market";
 import { applyPriceCheckFailures, buildTradeShiftRows, recommendationIdentity, updateInput } from "./tradeShift";
+import { acceptOrderPrice, failOrderPrice, mergeOrderPrices, orderPriceRevision, orderPriceSession } from "./marketOrderQuotes";
 
 const key = {
   slug: "primary_deadhead", platform: "pc", rank: 0, charges: null,
@@ -55,6 +56,87 @@ function quotes(price = 10): Map<string, PriceRecommendation> {
 }
 
 describe("управление продажами и заявками на покупку", () => {
+  it("после срока кеша и повторного открытия не заменяет проверенную цену снимком, старым ответом или сетевой ошибкой", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-10-03T03:00:00Z"));
+      const source = account([order("sale", "sell")]);
+      source.profile = { ...source.profile!, id: "quote-regression" };
+      const profile = source.profile!;
+      const session = orderPriceSession(profile, true);
+      const recommendation = quotes(15).get(recommendationIdentity(key))!;
+      const fresh: LivePricingResult = {
+        recommendation, fetchedAt: "2026-10-03T03:00:00Z", quoteState: "network",
+        sellOrderCount: 3, buyOrderCount: 0, warning: null,
+        orders: [15, 16, 17].map((platinum, index) => ({
+          side: "sell", platinum, quantity: 12, perTrade: 1, userStatus: "in_game", userIngameName: `Продавец ${index}`,
+        })),
+      };
+      expect(acceptOrderPrice(session, key, fresh)).toBe(true);
+      vi.setSystemTime(new Date("2026-10-03T04:00:00Z"));
+      const reopened = orderPriceSession({ ...profile }, true);
+      const prices = mergeOrderPrices(quotes(40), reopened.quotes, profile);
+      const [row] = buildTradeShiftRows(source, inventory(12), prices);
+      expect(row).toMatchObject({ health: "healthy", suggestedPrice: null, needsAction: false });
+      expect(row.recommendation?.listPrice).toBe(15);
+      const pendingRevision = orderPriceRevision(reopened, key);
+      expect(acceptOrderPrice(reopened, key, { ...fresh, quoteState: "cache", recommendation: { ...recommendation, listPrice: 40 } })).toBe(true);
+      expect(reopened.quotes.get(recommendationIdentity(key))).toBe(fresh);
+      expect(failOrderPrice(reopened, key, pendingRevision)).toBe(false);
+      expect(acceptOrderPrice(reopened, key, { ...fresh, recommendation: { ...recommendation, listPrice: 40 }, fetchedAt: "2026-10-03T02:59:00Z" })).toBe(false);
+      expect(acceptOrderPrice(reopened, key, { ...fresh, quoteState: "stale_cache", fetchedAt: "2026-10-03T02:59:00Z" })).toBe(false);
+      expect(reopened.failed.size).toBe(0);
+      expect(acceptOrderPrice(reopened, key, { ...fresh, quoteState: "stale_cache" })).toBe(false);
+      const failedRows = applyPriceCheckFailures(
+        buildTradeShiftRows(source, inventory(12), mergeOrderPrices(quotes(40), reopened.quotes, profile)),
+        reopened.failed, new Set(reopened.quotes.keys()),
+      );
+      expect(failedRows[0]).toMatchObject({ health: "price_check_failed", priceCheckFailed: true, suggestedPrice: null });
+      expect(failedRows[0].recommendation?.listPrice).toBe(15);
+      expect(reviewedChanges(failedRows)).toEqual([]);
+      expect(acceptOrderPrice(reopened, key, { ...fresh, quoteState: "cache", recommendation: { ...recommendation, listPrice: 40 } })).toBe(true);
+      expect(reopened.failed.size).toBe(0);
+      expect(reopened.quotes.get(recommendationIdentity(key))).toBe(fresh);
+      expect(orderPriceSession(profile, false).quotes.size).toBe(0);
+      expect(orderPriceSession({ ...profile, platform: "ps4" }, true).quotes.size).toBe(0);
+      expect(orderPriceSession({ ...profile, id: "other-account" }, true).quotes.size).toBe(0);
+      expect(mergeOrderPrices(quotes(40), reopened.quotes, profile).get(recommendationIdentity({ ...key, rank: 1 }))).toBeUndefined();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("пустая или недостаточная текущая книга не выдаёт цену снимка за свежую и сохраняет проверку остатков", () => {
+    const source = account([order("sale", "sell")]);
+    source.profile = { ...source.profile!, id: "empty-quote-regression" };
+    const profile = source.profile!;
+    const session = orderPriceSession(profile, true);
+    const recommendation = quotes(40).get(recommendationIdentity(key))!;
+    const result: LivePricingResult = {
+      recommendation, fetchedAt: "2026-10-03T03:00:00Z", quoteState: "network",
+      sellOrderCount: 3, buyOrderCount: 0, warning: null,
+      orders: ["Tenno", "Продавец А", "Продавец Б"].map(userIngameName => ({
+        side: "sell", platinum: 15, quantity: 12, perTrade: 1, userStatus: "in_game", userIngameName,
+      })),
+    };
+    acceptOrderPrice(session, key, result);
+    const prices = mergeOrderPrices(quotes(40), session.quotes, profile);
+    const [thin] = buildTradeShiftRows(source, inventory(12), prices);
+    expect(thin).toMatchObject({ health: "unknown", suggestedPrice: null, needsAction: false });
+    expect(thin.recommendation).toMatchObject({ listPrice: null, fairPrice: null });
+    const [shortage] = buildTradeShiftRows(source, inventory(10), prices);
+    expect(shortage).toMatchObject({ health: "inventory_mismatch", suggestedQuantity: 9, suggestedPrice: null });
+    const liquid = {
+      ...result, fetchedAt: "2026-10-03T03:00:30Z", recommendation: { ...recommendation, listPrice: 15 },
+      orders: result.orders.map((offer, index) => ({ ...offer, userIngameName: `Другой продавец ${index}` })),
+    };
+    acceptOrderPrice(session, key, liquid);
+    expect(mergeOrderPrices(quotes(40), session.quotes, profile).get(recommendationIdentity(key))?.listPrice).toBe(15);
+    acceptOrderPrice(session, key, { ...result, fetchedAt: "2026-10-03T03:01:00Z", orders: [], sellOrderCount: 0 });
+    const [empty] = buildTradeShiftRows(source, inventory(12), mergeOrderPrices(quotes(40), session.quotes, profile));
+    expect(empty).toMatchObject({ health: "unknown", suggestedPrice: null });
+    expect(empty.recommendation?.listPrice).toBeNull();
+    expect(reviewedChanges([empty])).toEqual([]);
+  });
+
   it("разрешает выставить последнюю копию после предупреждения вместо запрета", () => {
     const stock = inventory(1);
     stock.keepCopies = 1;

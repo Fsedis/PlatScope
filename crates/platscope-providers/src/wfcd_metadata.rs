@@ -462,7 +462,7 @@ fn normalize_wfcd_metadata(
         metadata: GameMetadataSnapshotMetadata {
             source: GameMetadataSource::WfcdWarframeItems,
             fetched_at: dump.fetched_at,
-            schema_version: 12,
+            schema_version: 14,
             set_count: u64::try_from(prime_sets.len()).unwrap_or(u64::MAX),
             relic_count: u64::try_from(relics.len()).unwrap_or(u64::MAX),
             prime_part_count: u64::try_from(prime_parts.len()).unwrap_or(u64::MAX),
@@ -490,8 +490,13 @@ fn normalize_mastery_items(
     localizations: &BTreeMap<String, GameItemLocalization>,
 ) -> Result<Vec<MasteryItemDefinition>, ProviderError> {
     let mut definitions = BTreeMap::new();
+    let mut images = BTreeMap::new();
     for document in &dump.documents {
-        parse_mastery_items(&document.body, &document.name, &mut definitions)?;
+        images.extend(parse_mastery_items(
+            &document.body,
+            &document.name,
+            &mut definitions,
+        )?);
     }
     if dump
         .documents
@@ -501,6 +506,9 @@ fn normalize_mastery_items(
         add_missing_mastery_definitions(&mut definitions);
     }
     for definition in definitions.values_mut() {
+        if definition.image_url.is_none() {
+            definition.image_url = images.get(&definition.game_ref).cloned();
+        }
         definition.display_name_ru = localizations
             .get(&definition.game_ref)
             .map(|localization| localization.display_name_ru.clone())
@@ -601,17 +609,26 @@ fn parse_mastery_items(
     body: &[u8],
     document_name: &str,
     definitions: &mut BTreeMap<String, MasteryItemDefinition>,
-) -> Result<(), ProviderError> {
+) -> Result<BTreeMap<String, String>, ProviderError> {
     let Some(category) = mastery_document_category(document_name) else {
-        return Ok(());
+        return Ok(BTreeMap::new());
     };
     let items: Vec<WfcdMasteryItem> = serde_json::from_slice(body).map_err(|error| {
         ProviderError::schema_changed(format!("invalid WFCD mastery JSON: {error}"))
     })?;
-    for item in items
-        .into_iter()
-        .filter(|item| item.masterable || is_mastery_override(&item.unique_name))
-    {
+    let mut images = BTreeMap::new();
+    for item in items {
+        // Призмы присутствуют в Misc.json с masterable=false. Изображения
+        // сохраняем по точному пути, не превращая оправы и каркасы в освоение.
+        if item.unique_name.starts_with("/Lotus/")
+            && item.unique_name.len() <= 256
+            && let Some(image) = wfcd_component_image_url(item.image_name.as_deref())
+        {
+            images.insert(item.unique_name.clone(), image);
+        }
+        if !item.masterable && !is_mastery_override(&item.unique_name) {
+            continue;
+        }
         if !item.unique_name.starts_with("/Lotus/")
             || item.unique_name.len() > 256
             || item.name.trim().is_empty()
@@ -640,7 +657,7 @@ fn parse_mastery_items(
             definitions.insert(item.unique_name, definition);
         }
     }
-    Ok(())
+    Ok(images)
 }
 
 fn is_missing_kitgun(game_ref: &str) -> bool {
@@ -660,8 +677,9 @@ fn is_mastery_override(game_ref: &str) -> bool {
         )
 }
 
-// WFCD не экспортирует усилители. Точные определения и имена проверены по
-// ExportWeapons + dict.en/dict.ru публичного экспорта DE (05.09.2026).
+// WFCD не считает призмы осваиваемыми и не экспортирует Сирокко. Определения
+// и имена проверены по ExportWeapons + dict.en/dict.ru публичного экспорта DE
+// (05.09.2026).
 // Дополняем только отсутствующие записи: будущий полноценный каталог приоритетен.
 fn add_missing_mastery_definitions(definitions: &mut BTreeMap<String, MasteryItemDefinition>) {
     for (game_ref, en, ru, category) in [
@@ -733,7 +751,13 @@ fn add_missing_mastery_definitions(definitions: &mut BTreeMap<String, MasteryIte
                 display_name_en: en.into(),
                 display_name_ru: Some(ru.into()),
                 category: category.into(),
-                image_url: None,
+                // У призм берём imageName из Misc.json; отсутствующий в WFCD
+                // Сирокко использует точную текстуру из публичного экспорта DE.
+                image_url: if en == "Sirocco" {
+                    wfcd_component_image_url(Some("DrifterPistol.png"))
+                } else {
+                    None
+                },
                 max_rank: Some(30),
             });
     }
@@ -1360,7 +1384,7 @@ mod tests {
         validate_metadata_dump(&dump).expect("production metadata stays within aggregate limit");
         let snapshot = normalize_wfcd_metadata(&dump, &catalog)
             .expect("production metadata normalizes against the current catalog");
-        assert_eq!(snapshot.metadata.schema_version, 12);
+        assert_eq!(snapshot.metadata.schema_version, 14);
         assert!(snapshot.crafting_recipes.iter().any(|recipe| {
             recipe.result_game_ref == "/Lotus/Weapons/Tenno/Rifle/BoltoRifle"
                 && recipe.blueprint_source == platscope_domain::BlueprintSource::Market
@@ -1796,8 +1820,29 @@ mod tests {
 
     #[test]
     fn mastery_catalog_fills_exact_export_gaps_without_gilding_other_parts() {
-        let mut definitions = BTreeMap::new();
-        add_missing_mastery_definitions(&mut definitions);
+        let dump = RawGameMetadataDump {
+            fetched_at: Utc::now(),
+            documents: vec![RawGameMetadataDocument {
+                name: "Misc.json".into(),
+                body: br#"[
+                    {"uniqueName":"/Lotus/Weapons/Sentients/OperatorAmplifiers/SentTrainingAmplifier/SentAmpTrainingBarrel","name":"Mote Prism","type":"Amp","masterable":false,"imageName":"SentTrainingAmpBarrel.png"},
+                    {"uniqueName":"/Lotus/Weapons/Sentients/OperatorAmplifiers/SentTrainingAmplifier/SentAmpTrainingGrip","name":"Mote Brace","type":"Amp","masterable":false,"imageName":"SentTrainingAmpGrip.png"}
+                ]"#.to_vec(),
+            }],
+        };
+        let mut definitions = normalize_mastery_items(&dump, &BTreeMap::new())
+            .expect("manual mastery definitions retain images of non-masterable export entries")
+            .into_iter()
+            .map(|item| (item.game_ref.clone(), item))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            definitions["/Lotus/Weapons/Sentients/OperatorAmplifiers/SentTrainingAmplifier/SentAmpTrainingBarrel"]
+                .image_url.as_deref(),
+            Some("https://cdn.warframestat.us/img/SentTrainingAmpBarrel.png")
+        );
+        assert!(!definitions.contains_key(
+            "/Lotus/Weapons/Sentients/OperatorAmplifiers/SentTrainingAmplifier/SentAmpTrainingGrip"
+        ));
         assert_eq!(
             definitions
                 .values()

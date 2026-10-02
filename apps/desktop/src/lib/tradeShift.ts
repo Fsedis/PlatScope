@@ -187,13 +187,14 @@ export function buildTradeShiftRows(
 export function applyPriceCheckFailures(
   rows: readonly TradeShiftRow[],
   failedIdentities: ReadonlySet<string>,
+  checkedIdentities: ReadonlySet<string> = new Set(),
 ): TradeShiftRow[] {
   return rows.map<TradeShiftRow>((row) => row.key && failedIdentities.has(recommendationIdentity(row.key))
     ? {
         ...row,
         health: row.health === "inventory_mismatch" ? row.health : "price_check_failed",
         priceCheckFailed: true,
-        recommendation: null,
+        recommendation: checkedIdentities.has(recommendationIdentity(row.key)) ? row.recommendation : null,
         suggestedPrice: null,
         suggestedQuantity: row.suggestedQuantity,
         needsAction: true,
