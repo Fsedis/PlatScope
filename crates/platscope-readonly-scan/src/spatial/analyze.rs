@@ -964,24 +964,7 @@ pub fn refresh_live_filtered(
     if let Some(profile) = &scene.discovery_profile {
         super::context::update(&mut m, &mut result, profile, cancel)?;
     }
-    let root = local_mission_root(&mut m, &result);
-    let mut removed = HashSet::new();
-    result.objects.retain(|object| {
-        let keep = object.kind != "decree_fragment"
-            || root.is_some_and(|root| {
-                u64::from_str_radix(object.key.trim_start_matches("0x"), 16)
-                    .ok()
-                    .and_then(|a| q(&mut m, a + 0x1e0).ok())
-                    == Some(root)
-            });
-        if !keep {
-            removed.insert(object.key.clone());
-        }
-        keep
-    });
-    result
-        .identities
-        .retain(|id| !removed.contains(&format!("0x{:x}", id.address)));
+    remove_previous_mission_fragments(&mut m, &mut result);
     if !super::registry_discovery::discover(&mut m, &mut result, rules, cancel)? {
         super::filter_discovery::discover(&mut m, &mut result, rules, cancel)?;
         discover(&mut m, &mut result, cancel)?;
@@ -992,6 +975,30 @@ pub fn refresh_live_filtered(
         return Err("Игра завершилась".into());
     }
     Ok(result)
+}
+
+fn remove_previous_mission_fragments(m: &mut dyn Memory, scene: &mut Scene) {
+    let Some(root) = local_mission_root(m, scene) else {
+        // Временная потеря позиции игрока или связи мини-карты не доказывает
+        // смену миссии. Здесь остаются только уже подтверждённые observe объекты;
+        // полный поиск и добавление новых фрагментов требуют текущий корень.
+        return;
+    };
+    let mut removed = HashSet::new();
+    scene.objects.retain(|object| {
+        let previous_mission = object.kind == "decree_fragment"
+            && u64::from_str_radix(object.key.trim_start_matches("0x"), 16)
+                .ok()
+                .and_then(|address| q(m, address + 0x1e0).ok())
+                .is_some_and(|object_root| object_root != root);
+        if previous_mission {
+            removed.insert(object.key.clone());
+        }
+        !previous_mission
+    });
+    scene
+        .identities
+        .retain(|id| !removed.contains(&format!("0x{:x}", id.address)));
 }
 
 // Читаем уже найденный объект по его идентичности. Переход игрока в другую Zone
@@ -1351,6 +1358,42 @@ mod tests {
                 .objects
                 .is_empty()
         );
+
+        let (mut m, mut fragment_scene) = fixture();
+        fragment_scene.objects[0].kind = "decree_fragment".into();
+        fragment_scene.identities[0].moving = false;
+        fragment_scene.identities[0].decree_fragment = true;
+        fragment_scene.identities[0].action = Some(0x2000);
+        for (address, value) in [
+            (0x100 + 0x488, 0x3000),
+            (0x3000, 0x2000),
+            (0x2000 + 16, 0x3000),
+            (0x100 + 0x1e0, 0x3800),
+            (0x2000 + 0x1e0, 0x3800),
+        ] {
+            put_q(&mut m, address, value);
+        }
+        for i in 0..4 {
+            put_f(&mut m, 0x2000 + 0xa0 + i * 20, 1.);
+        }
+        for (i, value) in [1., 2., 3.].into_iter().enumerate() {
+            put_f(&mut m, 0x2000 + 0x70 + i * 4, value);
+            put_f(&mut m, 0x2000 + 0xd0 + i * 4, value);
+        }
+        // В живой игре смещение Y выросло с 9.37 до 9.81 м за две секунды,
+        // а transform и действие подбора остались в одной точке.
+        for height in [2.5, 9.37, 9.48, 9.59, 9.70, 9.81, 100.] {
+            put_f(&mut m, 0x100 + 0x74, 2. - height);
+            fragment_scene =
+                refresh_objects(&mut m, &fragment_scene, &AtomicBool::new(false)).unwrap();
+            assert_eq!(fragment_scene.objects.len(), 1);
+            assert_eq!(fragment_scene.objects[0].position, [1., 2., 3.]);
+            assert!(fragment_scene.objects[0].position_fresh);
+        }
+        // Сверка самого действия остаётся обязательной.
+        put_f(&mut m, 0x2000 + 0x70, 5.);
+        put_f(&mut m, 0x2000 + 0xd0, 5.);
+        assert!(observe(&mut m, &fragment_scene.identities[0]).is_err());
     }
     #[test]
     fn short_read_failure_does_not_remove_player_but_repeated_failures_do() {
@@ -1374,6 +1417,46 @@ mod tests {
                 .objects
                 .is_empty()
         );
+    }
+    #[test]
+    fn decree_fragments_survive_unknown_context_but_not_confirmed_mission_change() {
+        let (mut m, mut scene) = fixture();
+        let mut fragment = scene.objects[0].clone();
+        fragment.key = "0x200".into();
+        fragment.kind = "decree_fragment".into();
+        scene.objects.push(fragment);
+        let mut id = scene.identities[0].clone();
+        id.address = 0x200;
+        scene.identities.push(id);
+        put_q(&mut m, 0x200 + 0x1e0, 0x3000);
+
+        // Один непрочитанный кадр игрока оставляет players без local.
+        remove_previous_mission_fragments(&mut m, &mut scene);
+        assert_eq!(scene.objects.len(), 2);
+        assert_eq!(scene.identities.len(), 2);
+        scene.players.push(ScenePlayer {
+            key: "0x300".into(),
+            avatar_key: "0x100".into(),
+            operator_key: None,
+            local: true,
+        });
+        // Неизвестный корень и ошибка чтения не равны смене миссии.
+        remove_previous_mission_fragments(&mut m, &mut scene);
+        assert_eq!(scene.objects.len(), 2);
+        m.fail = true;
+        remove_previous_mission_fragments(&mut m, &mut scene);
+        assert_eq!(scene.objects.len(), 2);
+        m.fail = false;
+        put_q(&mut m, 0x100 + 0x1e0, 0x3000);
+        remove_previous_mission_fragments(&mut m, &mut scene);
+        assert_eq!(scene.objects.len(), 2);
+
+        put_q(&mut m, 0x100 + 0x1e0, 0x3100);
+        remove_previous_mission_fragments(&mut m, &mut scene);
+        assert_eq!(scene.objects.len(), 1);
+        assert_eq!(scene.objects[0].kind, "avatar");
+        assert_eq!(scene.identities.len(), 1);
+        assert_eq!(scene.identities[0].address, 0x100);
     }
     #[test]
     #[ignore = "Ручная проверка на локальном архиве: PLATSCOPE_DECREE_ARCHIVE"]

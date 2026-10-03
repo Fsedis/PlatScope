@@ -373,7 +373,16 @@
       <details class="view-settings"><summary>Вид и высота</summary><div><label>Состояние тайников<select bind:value={cacheState}><option value="all">Все состояния</option><option value="available">Можно открыть</option><option value="unknown">Состояние неизвестно</option><option value="opened">Открытые</option></select></label><label class="check"><input type="checkbox" bind:checked={showZones} />Границы зон</label><label class="check"><input type="checkbox" bind:checked={sliceEnabled} />Ограничить по высоте</label>{#if sliceEnabled}<label>Высота: {heightCenter.toFixed(1)}<input type="range" min={Math.floor(bounds.minY)} max={Math.max(Math.ceil(bounds.maxY), Math.floor(bounds.minY) + 1)} step="0.5" bind:value={heightCenter} /></label><label>Диапазон<select bind:value={heightHalfWidth}><option value={2}>± 2</option><option value={4}>± 4</option><option value={8}>± 8</option><option value={16}>± 16</option></select></label><p>Срез по высоте, а не определённый этаж.</p>{/if}</div></details>
     </aside>
     <section class="map-panel" aria-label="Схема расположения объектов">
-      <div class="map-tools"><div class="map-title"><strong>Карта миссии</strong><span>{scene ? `${visibleObjects.length} объектов показано` : "Положение предметов и игроков"}</span></div><div class="map-actions"><button disabled={!myAvatar} onclick={focusMe}><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="6" /><path d="M12 2v4m0 12v4M2 12h4m12 0h4" /></svg>{status?.tracking ? "Следовать за мной" : "Показать меня"}</button><button aria-pressed={rotateWithView} disabled={!rotateWithView && (!myAvatar || !Number.isFinite(viewHeading))} onclick={toggleHeading}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z" /><circle cx="12" cy="12" r="3" /></svg>По взгляду</button><button disabled={!scene} onclick={resetMap}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 5 6-2 6 2 6-2v16l-6 2-6-2-6 2ZM9 3v16M15 5v16" /></svg>Вся карта</button></div></div>
+      <div class="map-tools">
+        <div class="map-title"><strong>Карта миссии</strong><span>{scene ? `${visibleObjects.length} объектов показано` : "Положение предметов и игроков"}</span></div>
+        <div class="map-actions">
+          <button aria-pressed={markerPreferences.heightArrowsOnly} title="Заменить значки объектов стрелками высоты" onclick={() => saveMarkerPreferences({ ...markerPreferences, heightArrowsOnly: !markerPreferences.heightArrowsOnly })}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 19V5m-4 4 4-4 4 4m6-4v14m-4-4 4 4 4-4" /></svg>Только стрелки</button>
+          <button disabled={!myAvatar} onclick={focusMe}><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="6" /><path d="M12 2v4m0 12v4M2 12h4m12 0h4" /></svg>{status?.tracking ? "Следовать за мной" : "Показать меня"}</button>
+          <button aria-pressed={rotateWithView} disabled={!rotateWithView && (!myAvatar || !Number.isFinite(viewHeading))} onclick={toggleHeading}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z" /><circle cx="12" cy="12" r="3" /></svg>По взгляду</button>
+          <button disabled={!scene} onclick={resetMap}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 5 6-2 6 2 6-2v16l-6 2-6-2-6 2ZM9 3v16M15 5v16" /></svg>Вся карта</button>
+        </div>
+      </div>
+      {#if markerPreferences.heightArrowsOnly}<div class="marker-mode-note">↑ выше вас · ↓ ниже вас · • на вашей высоте · ? высота неизвестна</div>{/if}
       {#if scene}
         <div class="canvas-wrap"><canvas bind:this={canvas} use:resizeCanvas tabindex="0" aria-label="Карта объектов. Стрелки перемещают вид, плюс и минус меняют масштаб. Ctrl и щелчок выделяют несколько точек." onwheel={wheel} onpointerdown={pointerDown} onpointermove={pointerMove} onpointerup={pointerUp} onpointercancel={() => drag = null} onkeydown={keyboard}></canvas><div class="zoom-controls"><button aria-label="Увеличить карту" onclick={() => zoom(1.4)}>+</button><button aria-label="Уменьшить карту" onclick={() => zoom(1 / 1.4)}>−</button></div>
           {#if !scene.meshes.length}<p class="map-overlay-note">Показаны точки. Геометрия карты пока не найдена.</p>{/if}
@@ -502,6 +511,7 @@
   .map-panel button[aria-pressed="true"] { background: #30584f; border-color: #71b49b; }
   .map-actions button { display: inline-flex; align-items: center; justify-content: center; gap: .35rem; padding: .4rem .55rem; }
   .map-actions svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linejoin: round; flex: none; }
+  .marker-mode-note { padding: .4rem .8rem; background: #16252e; border-bottom: 1px solid #31454c; color: #b7cfcb; font-size: .68rem; line-height: 1.5; overflow-wrap: anywhere; }
   .canvas-wrap { flex: 1; position: relative; min-height: 0; overflow: hidden; }
   canvas { position: absolute; inset: 0; display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; }
   canvas:active { cursor: grabbing; }

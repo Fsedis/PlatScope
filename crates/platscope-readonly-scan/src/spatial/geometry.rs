@@ -57,8 +57,8 @@ pub(super) fn position(m: &mut dyn Memory, a: u64, moving: bool) -> Result<[f32;
     }
     Ok(p)
 }
-/// У фрагмента декрета игровой transform поднят над опорной координатой предмета.
-/// Проверяем обе координаты и возвращаем точку действия, не меняя общий допуск предметов.
+/// Высота опорной координаты фрагмента меняется со временем независимо от точки подбора.
+/// Проверяем горизонтальную привязку и матрицу; analyze отдельно сверяет точку действия.
 pub(super) fn decree_fragment_position(m: &mut dyn Memory, a: u64) -> Result<[f32; 3]> {
     let b = m.read(a + 0x70, 12)?;
     let base = [float(&b, 0)?, float(&b, 4)?, float(&b, 8)?];
@@ -67,11 +67,7 @@ pub(super) fn decree_fragment_position(m: &mut dyn Memory, a: u64) -> Result<[f3
     }
     let matrix = matrix_impl(m, a, true)?;
     let marker = [matrix[3][0], matrix[3][1], matrix[3][2]];
-    let height = marker[1] - base[1];
-    if (base[0] - marker[0]).abs() > 0.02
-        || (base[2] - marker[2]).abs() > 0.02
-        || !(0.0..=4.0).contains(&height)
-    {
+    if (base[0] - marker[0]).abs() > 0.02 || (base[2] - marker[2]).abs() > 0.02 {
         return Err("Смещение фрагмента не подтверждено".into());
     }
     Ok(marker)

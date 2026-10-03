@@ -12,6 +12,7 @@ export interface MissionMapPreferences {
   groupSizes: Record<string, number>;
   typeSizes: Record<string, number>;
   showHeightIndicators: boolean;
+  heightArrowsOnly: boolean;
 }
 
 const STORAGE_KEY = "platscope.mission-map-view.v1";
@@ -28,6 +29,7 @@ export function defaultMissionMapPreferences(): MissionMapPreferences {
     groupSizes: Object.create(null),
     typeSizes: Object.create(null),
     showHeightIndicators: true,
+    heightArrowsOnly: false,
   };
 }
 
@@ -98,6 +100,8 @@ function normalizePreferences(value: unknown): MissionMapPreferences {
     typeSizes: sizeOverrides(value.typeSizes, validTypeKey),
     showHeightIndicators: typeof value.showHeightIndicators === "boolean"
       ? value.showHeightIndicators : defaults.showHeightIndicators,
+    heightArrowsOnly: typeof value.heightArrowsOnly === "boolean"
+      ? value.heightArrowsOnly : defaults.heightArrowsOnly,
   };
 }
 

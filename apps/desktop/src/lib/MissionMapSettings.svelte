@@ -75,9 +75,10 @@
     <div class="size-preview" aria-hidden="true"><MissionObjectIcon kind={previewKind} size={size} color="#abe9ce" /></div>
     <label class="size-control"><span>Размер на карте <output>{size} пикс.</output></span><input type="range" min={MIN_MISSION_MARKER_SIZE} max={MAX_MISSION_MARKER_SIZE} step="1" value={size} oninput={event => changeSize(Number(event.currentTarget.value))} /></label>
     <button class="reset-size" disabled={!separateSize} onclick={() => changeSize(null)}>Сбросить размер</button>
-    <label class="height-toggle"><input type="checkbox" checked={preferences.showHeightIndicators} onchange={event => onchange({ ...preferences, showHeightIndicators: event.currentTarget.checked })} />Показывать выше / ниже</label>
+    <label class="height-toggle"><input type="checkbox" checked={preferences.heightArrowsOnly || preferences.showHeightIndicators} disabled={preferences.heightArrowsOnly} onchange={event => onchange({ ...preferences, showHeightIndicators: event.currentTarget.checked })} />Показывать выше / ниже</label>
     <p>↑ выше вас · ↓ ниже вас. Только у объектов, кроме персонажей; разница от 1 м.</p>
-    {#if preferences.showHeightIndicators && !heightKnown}<p>Отметки появятся, когда будет известно ваше положение.</p>{/if}
+    {#if preferences.heightArrowsOnly}<p>В режиме «Только стрелки» отметки высоты всегда включены.</p>{/if}
+    {#if (preferences.showHeightIndicators || preferences.heightArrowsOnly) && !heightKnown}<p>Направление появится, когда будет известно ваше положение.</p>{/if}
   </div>
 </details>
 

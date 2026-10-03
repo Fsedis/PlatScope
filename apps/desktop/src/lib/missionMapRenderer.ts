@@ -38,7 +38,7 @@ interface PreparedGeometry {
 }
 interface SurfaceLayer { fill: Path2D; outline: Path2D; meanY: number; weight: number }
 interface SurfacePaths { fill: Path2D; layers: SurfaceLayer[] }
-interface MarkerPoint { object: MissionObject; x: number; y: number; size: number; radius: number; heightDirection: -1 | 0 | 1; important: boolean }
+interface MarkerPoint { object: MissionObject; x: number; y: number; size: number; radius: number; heightDirection: -1 | 0 | 1; heightKnown: boolean; arrowsOnly: boolean; important: boolean }
 interface MapRect { x: number; y: number; width: number; height: number }
 
 // Общие вершины сопоставляются по точным координатам: зазоры и недостающие участки не достраиваются.
@@ -176,12 +176,40 @@ function roundedRect(ctx: CanvasRenderingContext2D, rect: MapRect, radius: numbe
 }
 
 function markerBounds(point: MarkerPoint, padding = 0): MapRect {
-  const verticalRadius = Math.max(point.radius, point.heightDirection ? 8 : 0);
+  const sideIndicator = !point.arrowsOnly && point.heightDirection !== 0;
+  const verticalRadius = Math.max(point.radius, sideIndicator ? 8 : 0);
   return {
     x: point.x - point.radius - padding, y: point.y - verticalRadius - padding,
-    width: point.radius * 2 + (point.heightDirection ? 16 : 0) + padding * 2,
+    width: point.radius * 2 + (sideIndicator ? 16 : 0) + padding * 2,
     height: verticalRadius * 2 + padding * 2,
   };
+}
+
+function drawHeightOnlyMarker(ctx: CanvasRenderingContext2D, point: MarkerPoint, color: string, selected: boolean, target: boolean) {
+  const { x, y, radius, heightDirection } = point;
+  ctx.save(); ctx.globalAlpha = 1;
+  ctx.lineJoin = "round"; ctx.lineCap = "round";
+  if (selected || target) {
+    ctx.beginPath(); ctx.arc(x, y, radius + (target ? 3 : 2.5), 0, Math.PI * 2);
+    ctx.strokeStyle = target ? "#edc581" : "#fff6e8"; ctx.lineWidth = target ? 1.7 : 1.3; ctx.stroke();
+  }
+  if (!point.heightKnown) {
+    // Неизвестная высота не должна выглядеть как предмет на той же высоте.
+    ctx.font = `600 ${point.size}px system-ui`; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.strokeStyle = "#101b25"; ctx.lineWidth = 3; ctx.strokeText("?", x, y);
+    ctx.fillStyle = color; ctx.fillText("?", x, y);
+  } else if (!heightDirection) {
+    ctx.beginPath(); ctx.arc(x, y, Math.max(2, radius * .23), 0, Math.PI * 2);
+    ctx.fillStyle = color; ctx.fill(); ctx.strokeStyle = "#101b25"; ctx.lineWidth = 1.5; ctx.stroke();
+  } else {
+    // Символ находится в самой точке объекта и не поворачивается вместе с картой.
+    const tip = y - heightDirection * radius * .7, tail = y + heightDirection * radius * .7;
+    ctx.beginPath(); ctx.moveTo(x, tail); ctx.lineTo(x, tip);
+    ctx.moveTo(x - radius * .5, y); ctx.lineTo(x, tip); ctx.lineTo(x + radius * .5, y);
+    ctx.strokeStyle = "#101b25"; ctx.lineWidth = Math.max(4, point.size / 7); ctx.stroke();
+    ctx.strokeStyle = color; ctx.lineWidth = Math.max(1.8, point.size / 10); ctx.stroke();
+  }
+  ctx.restore();
 }
 
 function drawHeightIndicator(ctx: CanvasRenderingContext2D, point: MarkerPoint, color: string) {
@@ -250,14 +278,18 @@ export function createMissionMapRenderer(): (node: HTMLCanvasElement, state: Mis
       if (!finitePosition(object.position)) continue;
       const [x, y] = worldToCanvas(object.position, state.camera, scale, width, height);
       const size = missionMarkerSize(object, state.customIndex, state.markerPreferences), radius = missionMarkerRadius(size);
-      const difference = mine && object.positionFresh !== false ? object.position[1] - mine.position[1] : 0;
-      const heightDirection = state.markerPreferences.showHeightIndicators !== false && !["avatar", "npc", "hostage"].includes(object.kind) && Math.abs(difference) >= 1 ? difference > 0 ? 1 : -1 : 0;
-      const point: MarkerPoint = { object, x, y, size, radius, heightDirection, important: object.key === mine?.key || object.key === state.selectedKey || object.key === state.targetKey || picked.has(object.key) };
+      const character = ["avatar", "npc", "hostage"].includes(object.kind);
+      const heightKnown = !!mine && object.positionFresh !== false;
+      const arrowsOnly = state.markerPreferences.heightArrowsOnly && !character;
+      const difference = heightKnown ? object.position[1] - mine!.position[1] : 0;
+      const heightDirection = (arrowsOnly || state.markerPreferences.showHeightIndicators !== false) && !character && Math.abs(difference) >= 1 ? difference > 0 ? 1 : -1 : 0;
+      const point: MarkerPoint = { object, x, y, size, radius, heightDirection, heightKnown, arrowsOnly, important: object.key === mine?.key || object.key === state.selectedKey || object.key === state.targetKey || picked.has(object.key) };
       const extent = markerBounds(point, object.key === state.targetKey ? 13 : object.key === mine?.key ? 11 : 4);
       if (extent.x + extent.width < 0 || extent.y + extent.height < 0 || extent.x > width || extent.y > height) continue;
       points.push(point);
     }
     const drawMarker = (point: MarkerPoint) => {
+      if (point.arrowsOnly) return;
       const local = point.object.key === mine?.key;
       const heading = Number.isFinite(state.viewHeading) ? state.viewHeading! : state.camera.angle ?? 0;
       drawMissionMapMarker(ctx, point.object, point.x, point.y, {
@@ -268,7 +300,12 @@ export function createMissionMapRenderer(): (node: HTMLCanvasElement, state: Mis
       });
     };
     for (const point of points) if (point.object.key !== mine?.key) drawMarker(point);
-    const drawIndicator = (point: MarkerPoint) => drawHeightIndicator(ctx, point, point.object.key === state.targetKey ? "#edc581" : point.object.key === state.selectedKey || picked.has(point.object.key) ? "#fff6e8" : filterColor(point.object, state.customIndex));
+    const drawIndicator = (point: MarkerPoint) => {
+      const selected = point.object.key === state.selectedKey || picked.has(point.object.key), target = point.object.key === state.targetKey;
+      const color = target ? "#edc581" : selected ? "#fff6e8" : filterColor(point.object, state.customIndex);
+      if (point.arrowsOnly) drawHeightOnlyMarker(ctx, point, color, selected, target);
+      else drawHeightIndicator(ctx, point, color);
+    };
     for (const point of points) if (!point.important) drawIndicator(point);
     // Отметки выбранных объектов и цели остаются поверх остальных точек.
     for (const point of points) if (point.important) drawIndicator(point);
