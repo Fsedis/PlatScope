@@ -38,12 +38,35 @@ struct AccountHistory {
     owned_equipment: Option<BTreeMap<String, u32>>,
     #[serde(default)]
     account_rank: Option<u8>,
+    /// Кузница относится только к последнему снимку, а не к накопленной истории.
+    #[serde(default)]
+    foundry: FoundrySnapshot,
 }
 
 pub(crate) struct PlannerAccount {
     pub key: String,
     pub owned_equipment: BTreeMap<String, u32>,
     pub rank: Option<u8>,
+    pub foundry_available: bool,
+    pub foundry_issue: bool,
+    pub foundry_jobs: Vec<FoundryJob>,
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FoundrySnapshot {
+    available: bool,
+    issue: bool,
+    jobs: Vec<FoundryJob>,
+}
+
+/// Один подтверждённый запуск рецепта; количество результата задают метаданные.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct FoundryJob {
+    pub recipe_game_ref: String,
+    /// Неизвестная дата не отменяет уже оплаченное изготовление.
+    pub completion_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -118,6 +141,9 @@ impl MasteryService {
             let (owned, rank) = parse_current_equipment(raw);
             history.owned_equipment = Some(owned);
             history.account_rank = rank;
+            // В отличие от освоения, исчезнувшая запись кузницы не сохраняется.
+            // Даже отсутствующее поле сбрасывает задания прошлого снимка.
+            history.foundry = parse_foundry(raw);
             if !equipment.is_empty() {
                 history.equipment_observed_at = Some(Utc::now());
             }
@@ -174,7 +200,11 @@ impl MasteryService {
             .filter(|snapshot| snapshot.metadata.checksum_sha256 == cache.inventory_checksum)
             .and_then(|_| cache.accounts.get(&cache.active_account));
         let account = history
-            .filter(|history| history.observed_at.is_some() || history.owned_equipment.is_some())
+            .filter(|history| {
+                history.observed_at.is_some()
+                    || history.owned_equipment.is_some()
+                    || history.foundry.available
+            })
             .map(|history| PlannerAccount {
                 key: cache.active_account.clone(),
                 owned_equipment: history
@@ -182,9 +212,80 @@ impl MasteryService {
                     .clone()
                     .unwrap_or_else(|| legacy_owned_equipment(metadata.as_ref(), current.as_ref())),
                 rank: history.account_rank,
+                foundry_available: history.foundry.available,
+                foundry_issue: history.foundry.issue,
+                foundry_jobs: history.foundry.jobs.clone(),
             });
         Ok((build_view(metadata.as_ref(), history), account))
     }
+}
+
+fn parse_foundry(raw: &str) -> FoundrySnapshot {
+    let invalid = || FoundrySnapshot {
+        issue: true,
+        ..Default::default()
+    };
+    if raw.len() > MAX_RESPONSE_BYTES {
+        return invalid();
+    }
+    let Ok(value) = serde_json::from_str::<Value>(raw) else {
+        return invalid();
+    };
+    let root = value.get("Inventory").unwrap_or(&value);
+    if !root.is_object() {
+        return invalid();
+    }
+    let Some(pending) = root.get("PendingRecipes") else {
+        return FoundrySnapshot::default();
+    };
+    let Some(entries) = pending
+        .as_array()
+        .filter(|entries| entries.len() <= MAX_ENTRIES)
+    else {
+        return invalid();
+    };
+    let mut snapshot = FoundrySnapshot {
+        available: true,
+        ..Default::default()
+    };
+    for entry in entries {
+        let Some(recipe_game_ref) = entry
+            .get("ItemType")
+            .and_then(Value::as_str)
+            .filter(|value| value.starts_with("/Lotus/") && value.len() <= 256)
+        else {
+            snapshot.issue = true;
+            continue;
+        };
+        let completion_at = entry.get("CompletionDate").and_then(parse_foundry_date);
+        snapshot.issue |= completion_at.is_none();
+        snapshot.jobs.push(FoundryJob {
+            recipe_game_ref: recipe_game_ref.into(),
+            completion_at,
+        });
+    }
+    snapshot
+}
+
+fn parse_foundry_date(value: &Value) -> Option<DateTime<Utc>> {
+    // Свежий inventory.php подтвердил canonical Mongo Extended JSON:
+    // {"$date":{"$numberLong":"..."}}. Единица этой формы — миллисекунды
+    // по https://www.mongodb.com/docs/manual/reference/mongodb-extended-json/ .
+    // Прямое число/числовую строку не принимаем и единицы по размеру не угадываем.
+    let date = if let Some(iso) = value.as_str() {
+        DateTime::parse_from_rfc3339(iso).ok()?.with_timezone(&Utc)
+    } else {
+        let tagged = value.get("$date")?;
+        if let Some(iso) = tagged.as_str() {
+            DateTime::parse_from_rfc3339(iso).ok()?.with_timezone(&Utc)
+        } else {
+            let millis = tagged.get("$numberLong")?.as_str()?.parse::<i64>().ok()?;
+            DateTime::from_timestamp_millis(millis)?
+        }
+    };
+    // Нулевая дата и ошибочная секундная величина внутри millis не должны
+    // превращать изготовление в готовый предмет до появления игры.
+    (date.timestamp_millis() >= 1_356_998_400_000).then_some(date)
 }
 
 /// Старый кэш не содержал текущие копии. Берём их из согласованного снимка,
@@ -574,6 +675,46 @@ mod tests {
     }
 
     #[test]
+    fn foundry_preserves_paid_jobs_without_guessing_dates_or_missing_source() {
+        let parsed = parse_foundry(
+            r#"{"Inventory":{"PendingRecipes":[
+            {"ItemType":"/Lotus/Recipe/A","CompletionDate":{"$date":{"$numberLong":"1800000000000"}}},
+            {"ItemType":"/Lotus/Recipe/B","CompletionDate":{"$date":"2027-01-15T08:00:00Z"}},
+            {"ItemType":"/Lotus/Recipe/C","CompletionDate":1800000000},
+            {"ItemType":"/Lotus/Recipe/D","CompletionDate":{"$date":{"$numberLong":"1800000000"}}},
+            {"ItemType":"/Lotus/Recipe/E","CompletionDate":{"$date":{"$numberLong":"9223372036854775807"}}},
+            {"ItemType":"","CompletionDate":{"$date":{"$numberLong":"1800000000000"}}}
+        ]}}"#,
+        );
+        assert!(parsed.available);
+        assert!(parsed.issue);
+        assert_eq!(parsed.jobs.len(), 5);
+        for job in &parsed.jobs[..2] {
+            assert_eq!(
+                job.completion_at.unwrap().timestamp_millis(),
+                1_800_000_000_000
+            );
+        }
+        assert!(
+            parsed.jobs[2..]
+                .iter()
+                .all(|job| job.completion_at.is_none())
+        );
+        let missing = parse_foundry("{}");
+        assert!(!missing.available && !missing.issue && missing.jobs.is_empty());
+        let empty = parse_foundry(r#"{"PendingRecipes":[]}"#);
+        assert!(empty.available && !empty.issue && empty.jobs.is_empty());
+        for raw in [
+            r#"{"PendingRecipes":null}"#,
+            r#"{"PendingRecipes":{}}"#,
+            "{",
+        ] {
+            let invalid = parse_foundry(raw);
+            assert!(!invalid.available && invalid.issue && invalid.jobs.is_empty());
+        }
+    }
+
+    #[test]
     fn historical_plexus_alias_is_normalized_without_summing() {
         let parsed = parse_history(r#"{"XPInfo":[{"ItemType":"/Lotus/Types/Game/CrewShip/RailJack/DefaultHarness","XP":3730342},{"ItemType":"/Lotus/Types/Game/CrewShip/RailjackHarness","XP":1}]}"#).unwrap();
         assert_eq!(parsed.len(), 1);
@@ -834,7 +975,10 @@ mod tests {
             .unwrap()
             .promote_game_metadata(&metadata)
             .unwrap();
-        let raw = serde_json::json!({"XPInfo":[
+        let raw = serde_json::json!({"PendingRecipes":[{
+            "ItemType":"/Lotus/Recipe/Paid",
+            "CompletionDate":{"$date":{"$numberLong":"1800000000000"}}
+        }], "XPInfo":[
             {"ItemType":detron,"XP":450000},
             {"ItemType":prism,"XP":0},
             {"ItemType":"/Lotus/Sold","XP":450000}
@@ -842,6 +986,13 @@ mod tests {
         .to_string();
         publish_empty_inventory(&database, "a");
         MasteryService::capture(&database, &raw, "account-a", "a").unwrap();
+        {
+            let guard = database.lock().unwrap();
+            let (_, account) = MasteryService::planner_context(&guard).unwrap();
+            let account = account.unwrap();
+            assert!(account.foundry_available && !account.foundry_issue);
+            assert_eq!(account.foundry_jobs.len(), 1);
+        }
         {
             let mut guard = database.lock().unwrap();
             let mut snapshot = guard.current_inventory_snapshot().unwrap().unwrap();
@@ -888,8 +1039,14 @@ mod tests {
             let mut legacy = guard.get_setting::<Value>(CACHE_KEY).unwrap().unwrap();
             for account in legacy["accounts"].as_object_mut().unwrap().values_mut() {
                 account.as_object_mut().unwrap().remove("ownedEquipment");
+                account.as_object_mut().unwrap().remove("foundry");
             }
             guard.set_setting(CACHE_KEY, &legacy).unwrap();
+            // Старый кэш без кузницы остаётся читаемым, её отсутствие не означает [].
+            let (_, account) = MasteryService::planner_context(&guard).unwrap();
+            let account = account.unwrap();
+            assert!(!account.foundry_available && !account.foundry_issue);
+            assert!(account.foundry_jobs.is_empty());
         }
         let migrated =
             crate::MasteryPlanService::view(&database, &crate::AppSettings::default()).unwrap();
@@ -932,6 +1089,41 @@ mod tests {
                 .iter()
                 .all(|item| item.owned_quantity == 0)
         );
+        {
+            let guard = database.lock().unwrap();
+            let (_, account) = MasteryService::planner_context(&guard).unwrap();
+            assert!(account.is_none());
+        }
+        let no_foundry = r#"{"XPInfo":[{"ItemType":"/Lotus/Other","XP":1}]}"#;
+        // Переключение аккаунта не переносит задания даже при том же checksum.
+        MasteryService::capture(&database, no_foundry, "account-b", "b").unwrap();
+        {
+            let guard = database.lock().unwrap();
+            let (_, account) = MasteryService::planner_context(&guard).unwrap();
+            let account = account.unwrap();
+            assert!(!account.foundry_available && account.foundry_jobs.is_empty());
+        }
+        // Повторное обновление прежнего аккаунта без поля тоже удаляет старые задания.
+        MasteryService::capture(&database, &raw, "account-a", "b").unwrap();
+        MasteryService::capture(&database, no_foundry, "account-a", "b").unwrap();
+        {
+            let guard = database.lock().unwrap();
+            let (_, account) = MasteryService::planner_context(&guard).unwrap();
+            let account = account.unwrap();
+            assert!(!account.foundry_available && account.foundry_jobs.is_empty());
+        }
+        MasteryService::capture(
+            &database,
+            r#"{"PendingRecipes":[{"ItemType":"/Lotus/Recipe/Paid","CompletionDate":{"$date":{"$numberLong":"1800000000000"}}}]}"#,
+            "account-c",
+            "b",
+        ).unwrap();
+        let guard = database.lock().unwrap();
+        let (mastery, account) = MasteryService::planner_context(&guard).unwrap();
+        assert!(mastery.observed_at.is_none());
+        let account = account.unwrap();
+        assert!(account.foundry_available && !account.foundry_issue);
+        assert_eq!(account.foundry_jobs.len(), 1);
     }
 
     #[test]

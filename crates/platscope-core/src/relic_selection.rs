@@ -4,8 +4,8 @@ use std::sync::Mutex;
 
 use chrono::{DateTime, Utc};
 use platscope_domain::{
-    GameMetadataSnapshot, MarketVariantKey, Platform, PriceConfidence, PriceFreshness,
-    RelicRefinement,
+    CraftingRecipeDefinition, GameMetadataSnapshot, MarketVariantKey, Platform, PriceConfidence,
+    PriceFreshness, RelicRefinement,
 };
 use platscope_insights::{RelicPricingCoverage, RelicRewardInput, calculate_relic_ev};
 use platscope_storage::Database;
@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     AppSettings, CoreError, InventoryService, InventoryView, MasteryPlanService, MasteryService,
     PersonalGoalsService, PriceRecommendation, RelicInsightRow, build_relic_insights,
-    lock_database,
+    lock_database, mastery::PlannerAccount, mastery_plan::MasteryPlanItem,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -216,13 +216,7 @@ impl RelicSelectionService {
         let mastery_available =
             account.is_some() && mastery.observed_at.is_some() && !mastery.refresh_failed;
         if let Some(account) = account.as_ref().filter(|_| mastery_available) {
-            collect_mastery_needs(
-                &mut needs.mastery,
-                &metadata,
-                &inventory,
-                &mastery,
-                &account.owned_equipment,
-            );
+            collect_mastery_needs(&mut needs.mastery, &metadata, &inventory, &mastery, account);
             // Только явная очередь изготовления, без приписывания всего каталога планам игрока.
             let plan = MasteryPlanService::view(database, settings)?;
             if plan.inventory_checksum.as_deref()
@@ -232,29 +226,7 @@ impl RelicSelectionService {
                     "inventory changed during relic selection".into(),
                 ));
             }
-            for item in &plan.queue {
-                if item.owned_quantity > 0 {
-                    continue;
-                }
-                if let Some(recipe) = item.recipe.as_ref() {
-                    if item.blueprint_owned == 0 {
-                        add_need(
-                            &mut needs.crafting,
-                            &recipe.blueprint_game_ref,
-                            1,
-                            &item.display_name,
-                        );
-                    }
-                }
-                for material in &item.materials {
-                    add_need(
-                        &mut needs.crafting,
-                        &material.definition.game_ref,
-                        material.missing_quantity,
-                        &item.display_name,
-                    );
-                }
-            }
+            collect_plan_needs(&mut needs.crafting, &plan.queue);
         }
         let relics = build_relic_insights(
             database,
@@ -349,18 +321,128 @@ fn add_need(needs: &mut Needs, identity: &str, quantity: u32, name: &str) {
     need.names.insert(name.into());
 }
 
+/// Шаги явной очереди используют общий бюджет, поэтому их дефициты складываются.
+fn add_plan_need(needs: &mut Needs, identity: &str, quantity: u32, name: &str) {
+    if quantity == 0 {
+        return;
+    }
+    let total = needs
+        .get(identity)
+        .map_or(quantity, |need| need.quantity.saturating_add(quantity));
+    add_need(needs, identity, total, name);
+}
+
+fn add_plan_blueprint(
+    needs: &mut Needs,
+    recipe: &CraftingRecipeDefinition,
+    batches: u32,
+    owned: u32,
+    planned: bool,
+    name: &str,
+) {
+    if planned {
+        return;
+    }
+    let needed = if recipe.blueprint_consumed {
+        batches
+    } else {
+        1
+    };
+    add_plan_need(
+        needs,
+        &recipe.blueprint_game_ref,
+        needed.saturating_sub(owned),
+        name,
+    );
+}
+
+fn collect_plan_needs(needs: &mut Needs, queue: &[MasteryPlanItem]) {
+    for item in queue {
+        if item.owned_quantity > 0 || item.foundry.is_some() || item.state == "mastered" {
+            continue;
+        }
+        if let Some(recipe) = &item.recipe {
+            add_plan_blueprint(
+                needs,
+                recipe,
+                1,
+                item.blueprint_owned,
+                item.blueprint_planned,
+                &item.display_name,
+            );
+        }
+        for material in &item.materials {
+            if let Some(component) = &material.component {
+                add_plan_blueprint(
+                    needs,
+                    &component.recipe,
+                    component.batches,
+                    component.blueprint_owned,
+                    component.blueprint_planned,
+                    &item.display_name,
+                );
+                for raw in &component.materials {
+                    add_plan_need(
+                        needs,
+                        &raw.definition.game_ref,
+                        raw.missing_quantity,
+                        &item.display_name,
+                    );
+                }
+            } else {
+                add_plan_need(
+                    needs,
+                    &material.definition.game_ref,
+                    material.missing_quantity,
+                    &item.display_name,
+                );
+            }
+        }
+    }
+}
+
+fn confirmed_foundry_outputs(
+    metadata: &GameMetadataSnapshot,
+    account: &PlannerAccount,
+) -> BTreeMap<String, u32> {
+    let mut pending = BTreeMap::<String, u32>::new();
+    for job in &account.foundry_jobs {
+        let mut matches = metadata
+            .crafting_recipes
+            .iter()
+            .filter(|recipe| recipe.blueprint_game_ref == job.recipe_game_ref);
+        let Some(recipe) = matches.next() else {
+            continue;
+        };
+        // Неизвестный или неоднозначный рецепт не подтверждает ни результат, ни количество.
+        if matches.next().is_some() || recipe.result_quantity == 0 {
+            continue;
+        }
+        let quantity = pending.entry(recipe.result_game_ref.clone()).or_default();
+        *quantity = quantity.saturating_add(recipe.result_quantity);
+    }
+    pending
+}
+
 fn collect_mastery_needs(
     needs: &mut Needs,
     metadata: &GameMetadataSnapshot,
     inventory: &InventoryView,
     mastery: &crate::MasteryView,
-    owned_equipment: &BTreeMap<String, u32>,
+    account: &PlannerAccount,
 ) {
     let physical = physical_quantities(inventory);
+    let pending = confirmed_foundry_outputs(metadata, account);
     for item in &mastery.items {
         // Уже имеющийся предмет нужно прокачать, а неизвестный статус нельзя считать неосвоенным.
         if item.status != "progress"
-            || owned_equipment.get(&item.game_ref).copied().unwrap_or(0) > 0
+            || account
+                .owned_equipment
+                .get(&item.game_ref)
+                .copied()
+                .unwrap_or(0)
+                > 0
+            || pending.get(&item.game_ref).copied().unwrap_or(0) > 0
         {
             continue;
         }
@@ -380,10 +462,15 @@ fn collect_mastery_needs(
                             .get(recipe.result_game_ref.as_str())
                             .copied()
                             .unwrap_or(0)
+                            .saturating_add(
+                                pending.get(&recipe.result_game_ref).copied().unwrap_or(0),
+                            )
                     })
                     .max()
                     .unwrap_or(0);
-                let owned = blueprint_owned.saturating_add(completed_owned);
+                let owned = blueprint_owned
+                    .saturating_add(pending.get(&part.game_ref).copied().unwrap_or(0))
+                    .saturating_add(completed_owned);
                 add_need(
                     needs,
                     &part.slug,
@@ -1024,33 +1111,166 @@ mod tests {
                 set_slugs: vec!["unmastered_set".into()],
             }],
         };
+        let mut account = PlannerAccount {
+            key: "account-a".into(),
+            owned_equipment: BTreeMap::new(),
+            rank: Some(30),
+            foundry_available: true,
+            foundry_issue: false,
+            foundry_jobs: vec![],
+        };
         let mut needs = Needs::new();
-        collect_mastery_needs(
-            &mut needs,
-            &metadata,
-            &inventory(),
-            &mastery,
-            &BTreeMap::new(),
-        );
+        collect_mastery_needs(&mut needs, &metadata, &inventory(), &mastery, &account);
         assert!(needs.is_empty());
         mastery.items[0].status = "progress";
-        collect_mastery_needs(
-            &mut needs,
-            &metadata,
-            &inventory(),
-            &mastery,
-            &BTreeMap::new(),
-        );
+        collect_mastery_needs(&mut needs, &metadata, &inventory(), &mastery, &account);
         assert_eq!(needs["part_5"].quantity, 1);
         needs.clear();
-        collect_mastery_needs(
-            &mut needs,
-            &metadata,
-            &inventory(),
-            &mastery,
-            &BTreeMap::from([("/Lotus/Equipment".into(), 1)]),
-        );
+        account.owned_equipment.insert("/Lotus/Equipment".into(), 1);
+        collect_mastery_needs(&mut needs, &metadata, &inventory(), &mastery, &account);
         assert!(needs.is_empty());
+        account.owned_equipment.clear();
+
+        let ingredient =
+            |game_ref: &str, quantity| platscope_domain::CraftingIngredientDefinition {
+                game_ref: game_ref.into(),
+                display_name_en: game_ref.into(),
+                display_name_ru: None,
+                image_url: None,
+                quantity,
+                equipment: false,
+                drops: vec![],
+            };
+        let recipe = |blueprint: &str, result: &str, quantity| CraftingRecipeDefinition {
+            result_game_ref: result.into(),
+            result_quantity: quantity,
+            blueprint_game_ref: blueprint.into(),
+            blueprint_consumed: true,
+            blueprint_source: platscope_domain::BlueprintSource::Unknown,
+            blueprint_price: None,
+            mastery_requirement: Some(0),
+            build_price: 100,
+            build_time_seconds: 60,
+            ingredients: vec![ingredient("/Lotus/Raw", 3)],
+            blueprint_drops: vec![],
+        };
+        let parent = recipe("/Lotus/ParentBlueprint", "/Lotus/Equipment", 1);
+        let component_recipe = recipe("/Lotus/Part5", "/Lotus/CraftedPart5", 3);
+        metadata.crafting_recipes = vec![parent.clone(), component_recipe.clone()];
+
+        // Неизвестная дата не отменяет оплаченные три результата одной партии.
+        metadata.prime_sets[0].components[0].required_quantity = 4;
+        account.foundry_jobs = vec![crate::mastery::FoundryJob {
+            recipe_game_ref: "/Lotus/Part5".into(),
+            completion_at: None,
+        }];
+        collect_mastery_needs(&mut needs, &metadata, &inventory(), &mastery, &account);
+        assert_eq!(needs["part_5"].quantity, 1);
+        needs.clear();
+
+        // Уже изготавливаемый итоговый предмет не требует повторного поиска его деталей.
+        account.foundry_jobs.push(crate::mastery::FoundryJob {
+            recipe_game_ref: "/Lotus/ParentBlueprint".into(),
+            completion_at: Some(Utc::now() + chrono::Duration::hours(1)),
+        });
+        collect_mastery_needs(&mut needs, &metadata, &inventory(), &mastery, &account);
+        assert!(needs.is_empty());
+        // Ссылка результата не подменяет ссылку рецепта, даже если название похоже.
+        account.foundry_jobs = vec![crate::mastery::FoundryJob {
+            recipe_game_ref: "/Lotus/Equipment".into(),
+            completion_at: None,
+        }];
+        collect_mastery_needs(&mut needs, &metadata, &inventory(), &mastery, &account);
+        assert_eq!(needs["part_5"].quantity, 4);
+
+        let raw = crate::mastery_plan::MasteryPlanMaterial {
+            definition: ingredient("/Lotus/Raw", 3),
+            owned_quantity: 0,
+            available_quantity: 0,
+            protected_quantity: 0,
+            missing_quantity: 3,
+            pending_quantity: 0,
+            planned_quantity: 0,
+            foundry: None,
+            component: None,
+            component_issue: None,
+        };
+        let component = crate::mastery_plan::MasteryPlanComponent {
+            recipe: component_recipe,
+            batches: 3,
+            required_quantity: 7,
+            produced_quantity: 9,
+            blueprint_owned: 1,
+            blueprint_planned: false,
+            materials: vec![raw],
+            missing_types: 1,
+            known_credits: 300,
+            total_credits: None,
+            missing_credits: None,
+            state: "gather",
+            rank_blocked: false,
+        };
+        let material = crate::mastery_plan::MasteryPlanMaterial {
+            definition: ingredient("/Lotus/CraftedPart5", 7),
+            owned_quantity: 0,
+            available_quantity: 0,
+            protected_quantity: 0,
+            missing_quantity: 7,
+            pending_quantity: 0,
+            planned_quantity: 0,
+            foundry: None,
+            component: Some(component),
+            component_issue: None,
+        };
+        let planned = MasteryPlanItem {
+            game_ref: "/Lotus/Equipment".into(),
+            display_name: "План".into(),
+            display_name_en: "Plan".into(),
+            image_url: None,
+            category: "primary".into(),
+            owned_quantity: 0,
+            mastery_rank: None,
+            max_rank: Some(30),
+            remaining_mastery_points: Some(3000),
+            state: "gather",
+            recipe: Some(parent),
+            blueprint_owned: 0,
+            blueprint_planned: true,
+            materials: vec![material],
+            missing_types: 1,
+            total_credits: None,
+            missing_credits: None,
+            rank_blocked: false,
+            foundry: None,
+            known_credits: 400,
+        };
+        let mut next = planned.clone();
+        let component = next.materials[0].component.as_mut().unwrap();
+        component.recipe.blueprint_consumed = false;
+        component.blueprint_owned = 0;
+        component.blueprint_planned = true;
+        let mut paid = planned.clone();
+        paid.state = "crafting";
+        paid.blueprint_planned = false;
+        paid.foundry = Some(crate::mastery_plan::MasteryPlanFoundry {
+            quantity: 1,
+            ready_quantity: 0,
+            unknown_completion_quantity: 1,
+            completes_at: None,
+        });
+        let mut queue_needs = Needs::new();
+        collect_plan_needs(&mut queue_needs, &[planned.clone(), next, paid]);
+        assert!(!queue_needs.contains_key("/Lotus/ParentBlueprint"));
+        assert!(!queue_needs.contains_key("/Lotus/CraftedPart5"));
+        assert_eq!(queue_needs["/Lotus/Part5"].quantity, 2);
+        assert_eq!(queue_needs["/Lotus/Raw"].quantity, 6);
+
+        // Неучтённый чертёж первого шага сохраняет реальную потребность.
+        let mut first = planned;
+        first.blueprint_planned = false;
+        queue_needs.clear();
+        collect_plan_needs(&mut queue_needs, &[first]);
+        assert_eq!(queue_needs["/Lotus/ParentBlueprint"].quantity, 1);
         metadata
             .prime_parts
             .push(platscope_domain::PrimePartMetadata {

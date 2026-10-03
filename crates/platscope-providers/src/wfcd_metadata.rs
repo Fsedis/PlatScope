@@ -462,7 +462,7 @@ fn normalize_wfcd_metadata(
         metadata: GameMetadataSnapshotMetadata {
             source: GameMetadataSource::WfcdWarframeItems,
             fetched_at: dump.fetched_at,
-            schema_version: 14,
+            schema_version: 15,
             set_count: u64::try_from(prime_sets.len()).unwrap_or(u64::MAX),
             relic_count: u64::try_from(relics.len()).unwrap_or(u64::MAX),
             prime_part_count: u64::try_from(prime_parts.len()).unwrap_or(u64::MAX),
@@ -1384,7 +1384,7 @@ mod tests {
         validate_metadata_dump(&dump).expect("production metadata stays within aggregate limit");
         let snapshot = normalize_wfcd_metadata(&dump, &catalog)
             .expect("production metadata normalizes against the current catalog");
-        assert_eq!(snapshot.metadata.schema_version, 14);
+        assert_eq!(snapshot.metadata.schema_version, 15);
         assert!(snapshot.crafting_recipes.iter().any(|recipe| {
             recipe.result_game_ref == "/Lotus/Weapons/Tenno/Rifle/BoltoRifle"
                 && recipe.blueprint_source == platscope_domain::BlueprintSource::Market
@@ -1393,6 +1393,17 @@ mod tests {
         assert!(snapshot.crafting_recipes.iter().any(|recipe| {
             recipe.result_game_ref == "/Lotus/Weapons/ClanTech/Chemical/FlameThrower"
                 && recipe.blueprint_source == platscope_domain::BlueprintSource::Dojo
+        }));
+        assert!(snapshot.crafting_recipes.iter().any(|recipe| {
+            recipe.result_game_ref == "/Lotus/Types/Recipes/WarframeRecipes/AshChassisComponent"
+                && recipe.mastery_requirement == Some(0)
+                && recipe.result_quantity == 1
+                && !recipe.ingredients.is_empty()
+        }));
+        assert!(snapshot.crafting_recipes.iter().any(|recipe| {
+            recipe.result_game_ref == "/Lotus/Types/Items/Gems/Eidolon/CommonOreAAlloyAItem"
+                && recipe.result_quantity == 20
+                && recipe.mastery_requirement == Some(0)
         }));
         assert!(snapshot.mastery_items.len() > 500);
         assert!(

@@ -358,6 +358,9 @@ pub struct MasteryItemDefinition {
 #[serde(rename_all = "camelCase")]
 pub struct CraftingRecipeDefinition {
     pub result_game_ref: String,
+    /// Количество результата за один запуск; цена и ингредиенты относятся ко всему запуску.
+    #[serde(default = "default_crafting_result_quantity")]
+    pub result_quantity: u32,
     pub blueprint_game_ref: String,
     pub blueprint_consumed: bool,
     pub blueprint_source: BlueprintSource,
@@ -367,6 +370,10 @@ pub struct CraftingRecipeDefinition {
     pub build_time_seconds: u64,
     pub ingredients: Vec<CraftingIngredientDefinition>,
     pub blueprint_drops: Vec<CraftingDropSource>,
+}
+
+const fn default_crafting_result_quantity() -> u32 {
+    1
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
